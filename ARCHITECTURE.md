@@ -106,15 +106,34 @@ The mock headset (`hub/mockclient`) replaces the left column for testing without
 - **Labels:** AST (AudioSet, 527 classes) labels each stream, mapped to speech / music /
   alarm / siren / other and smoothed across hops.
 - **Results:**
-  - **+18.1 / +16.8 / +17.8 dB** on a simulated 2 talkers + music scene; the target was +8 dB.
+  - **+17.8 / +17.1 / +17.5 dB** on a simulated 2 talkers + music scene; the target was +8 dB.
   - Labels correct.
   - A listening check confirmed the voices are well separated.
 - **Why MossFormer2:** best measured quality of the candidates. Waveformer has no speech or
   general music class; GTCRN only enhances speech. It's fast enough for 1 s hops on this GPU.
+- **One talker, or none:** MossFormer2 always outputs two voices, so with a single talker it
+  splits that person across both voice streams. Two gates fix this (PR #26):
+  - **Direction gate:** if the two voice streams arrive from the same direction (their
+    left/right level differences, 1–8 kHz, differ by less than 4.5 dB), they're one source.
+    The voice is merged into the slot it already occupied.
+  - **Speech gate:** a voice stream that doesn't sound like speech moves into the residual.
+- **Why direction:** level correlation and voice fingerprints (WavLM speaker embeddings) were
+  measured first and couldn't tell one split talker from two real ones, including a
+  same-gender pair.
+- **The separator does not decide identity across pauses.** It keeps a voice in its stream
+  while it continues; whether the next voice after a pause is the same person is tracking's
+  job (D1), using world bearing (D8). Head-relative directions drift as the head turns, so a
+  direction memory inside the separator made single talkers hop between streams.
+- **Scenario suite** (`python -m separate.suite`, 11 simulated scenes):
+  - two talkers, including two men and music louder than the speech: +17 to +22 dB;
+  - one talker: +9 to +16 dB in a single stream;
+  - three voices: the third ends up in the residual.
 - **Limits:**
   - About 1–2 s of delay: fine for labeling and locating, too slow for live listening.
-  - A fixed 2 voices plus 1 residual.
-  - Clean read speech in the test, so expect lower scores on real room audio.
+  - At most 2 voices, plus 1 residual.
+  - Two talkers standing in the same direction get merged.
+  - The 4.5 dB threshold is tuned for ear-level mics and needs re-tuning on the 3S.
+  - Clean read speech in the tests, so expect lower scores on real room audio.
 
 ### D8. Locating: bearing from natural head movement, using per-mic levels of each stream
 **Proposed** (PR #11 A8 estimator, by Lalitha; PR #21 C4 wiring, simulated).
