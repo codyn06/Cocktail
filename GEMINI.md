@@ -113,8 +113,10 @@ rebuilt per checkout). Skill: `.agents/skills/graphify/SKILL.md`.
   (nodes, paths, file:line locations) into each assignment, so subagents start from
   the same map instead of re-exploring. Tell subagents to query the graph too.
 - After changing code, run `graphify update .` to keep the graph current.
-- Claude Code: `.claude/hooks/graphify-guard.mjs` nudges toward graph queries before
-  search/read tools, and does nothing when the graph or CLI is missing.
+- Claude Code: `.claude/hooks/graphify-guard.mjs` blocks a subagent's Bash/Grep/Glob/Read
+  calls until that subagent has run a `graphify` command (reads inside `graphify-out/`
+  are allowed); in the main session it only nudges toward graph queries. It does
+  nothing when the graph or CLI is missing.
 
 ## Shared rules
 
