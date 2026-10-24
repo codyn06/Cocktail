@@ -2,23 +2,25 @@
   "schemaVersion": 1,
   "components": [
     {
-      "name": "gemini-api-dev",
+      "name": "gemma-dev",
       "type": "skill",
-      "repository": "https://github.com/google-gemini/gemini-skills",
-      "url": "https://github.com/google-gemini/gemini-skills/tree/ee9da52195752ca83c2fca701d96bcb5a9c08d2d/skills/gemini-api-dev",
-      "commit": "ee9da52195752ca83c2fca701d96bcb5a9c08d2d",
-      "sourcePath": "skills/gemini-api-dev",
+      "repository": "https://github.com/google-gemma/gemma-skills",
+      "url": "https://github.com/google-gemma/gemma-skills/tree/b10b80b3f36d532b4b12ddc4f37aa344a08d3930/skills/gemma-dev",
+      "commit": "b10b80b3f36d532b4b12ddc4f37aa344a08d3930",
+      "sourcePath": "skills/gemma-dev",
       "license": "Apache-2.0",
       "licenseFiles": [
-        "LICENSE"
+        "LICENSE.txt"
       ],
-      "destination": ".agents/skills/gemini-api-dev",
+      "destination": ".agents/skills/gemma-dev",
       "localModifications": [],
       "dependencies": [
-        "Gemini SDKs (google-genai for Python, @google/genai for TypeScript) when writing code that uses the skill"
+        "Depends on the chosen runtime (transformers, @huggingface/transformers, google-cloud-aiplatform, mlx-lm, Ollama); none installed"
       ],
-      "unresolvedReferences": [],
-      "notes": "Local reference references/migration.md included. Other *.md references are remote ai.google.dev doc URLs (fetched at use time)."
+      "unresolvedReferences": [
+        "Google MCP search_documentation tool (not installed; skill falls back to fetching https://gemma.ai/llms.txt)"
+      ],
+      "notes": "Linked from https://gemma.ai/resources/gemma-skills/. Upstream says it is not an officially supported Google product. LICENSE.txt copied from the repo root. Sibling gemma-trainer skill not vendored."
     },
     {
       "name": "systematic-debugging",
