@@ -1,0 +1,56 @@
+{
+  "description": "Binary on /ingest/audio. Payload: interleaved PCM.",
+  "properties": {
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "device_ts_us": {
+      "description": "Headset monotonic clock, microseconds",
+      "title": "Device Ts Us",
+      "type": "integer"
+    },
+    "epoch": {
+      "description": "Increments on every reconnect",
+      "minimum": 0,
+      "title": "Epoch",
+      "type": "integer"
+    },
+    "sample_rate": {
+      "description": "Hub resamples to 16 kHz at ingest",
+      "title": "Sample Rate",
+      "type": "integer"
+    },
+    "channels": {
+      "minimum": 1,
+      "title": "Channels",
+      "type": "integer"
+    },
+    "sample_format": {
+      "default": "s16le",
+      "enum": [
+        "s16le",
+        "f32le"
+      ],
+      "title": "Sample Format",
+      "type": "string"
+    },
+    "frames": {
+      "description": "Samples per channel",
+      "minimum": 1,
+      "title": "Frames",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "seq",
+    "device_ts_us",
+    "epoch",
+    "sample_rate",
+    "channels",
+    "frames"
+  ],
+  "title": "AudioChunk",
+  "type": "object"
+}

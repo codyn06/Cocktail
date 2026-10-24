@@ -1,0 +1,29 @@
+{
+  "properties": {
+    "type": {
+      "const": "replay.ready",
+      "default": "replay.ready",
+      "title": "Type",
+      "type": "string"
+    },
+    "target_id": {
+      "title": "Target Id",
+      "type": "string"
+    },
+    "selection_version": {
+      "title": "Selection Version",
+      "type": "integer"
+    },
+    "duration_s": {
+      "title": "Duration S",
+      "type": "number"
+    }
+  },
+  "required": [
+    "target_id",
+    "selection_version",
+    "duration_s"
+  ],
+  "title": "ReplayReady",
+  "type": "object"
+}

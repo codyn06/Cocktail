@@ -1,0 +1,73 @@
+{
+  "description": "Head pose in Unity tracking space: +x right, +y up, +z forward (left-handed).\n\nHub derives yaw (deg, + = right turn) from rot.",
+  "properties": {
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "device_ts_us": {
+      "description": "Headset monotonic clock, microseconds",
+      "title": "Device Ts Us",
+      "type": "integer"
+    },
+    "epoch": {
+      "description": "Increments on every reconnect",
+      "minimum": 0,
+      "title": "Epoch",
+      "type": "integer"
+    },
+    "type": {
+      "const": "pose",
+      "default": "pose",
+      "title": "Type",
+      "type": "string"
+    },
+    "pos": {
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Pos",
+      "type": "array"
+    },
+    "rot_xyzw": {
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Rot Xyzw",
+      "type": "array"
+    }
+  },
+  "required": [
+    "seq",
+    "device_ts_us",
+    "epoch",
+    "pos",
+    "rot_xyzw"
+  ],
+  "title": "PoseSample",
+  "type": "object"
+}

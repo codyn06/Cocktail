@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "Action": {
+      "enum": [
+        "select",
+        "stop",
+        "replay",
+        "next",
+        "prev"
+      ],
+      "title": "Action",
+      "type": "string"
+    }
+  },
+  "description": "A user action. For select, give a ray (head gaze or hand/controller) in\ntracking space, and/or a source_id if the user picked a labeled source.",
+  "properties": {
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "device_ts_us": {
+      "description": "Headset monotonic clock, microseconds",
+      "title": "Device Ts Us",
+      "type": "integer"
+    },
+    "epoch": {
+      "description": "Increments on every reconnect",
+      "minimum": 0,
+      "title": "Epoch",
+      "type": "integer"
+    },
+    "type": {
+      "const": "input",
+      "default": "input",
+      "title": "Type",
+      "type": "string"
+    },
+    "action": {
+      "$ref": "#/$defs/Action"
+    },
+    "source_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Id"
+    },
+    "ray_origin": {
+      "anyOf": [
+        {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ray Origin"
+    },
+    "ray_dir": {
+      "anyOf": [
+        {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ray Dir"
+    },
+    "modality": {
+      "default": "ui",
+      "enum": [
+        "head",
+        "hand",
+        "controller",
+        "ui"
+      ],
+      "title": "Modality",
+      "type": "string"
+    }
+  },
+  "required": [
+    "seq",
+    "device_ts_us",
+    "epoch",
+    "action"
+  ],
+  "title": "InputEvent",
+  "type": "object"
+}
