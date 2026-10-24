@@ -85,3 +85,15 @@ Demo work (A9 pitch, H1 filming, G4 README) starts only after the product is fin
 
   SAM Audio is batch-only (no streaming), so it cannot do C3. Base/large and bf16 Gemma do not fit
   beside other models.
+
+  C3 candidate benchmark (hardware-tested on the 5070 Ti, 2026-10-24, torch 2.11+cu128, fp32,
+  **synthetic input: speed/VRAM only, separation quality not measured yet**):
+
+  | Model | Task | Peak VRAM | Latency (p50) | RTF |
+  |---|---|---|---|---|
+  | GTCRN (MIT) | speech enhancement, 16 kHz | 30 MiB | ~7 ms per call (64 ms - 2 s windows) | 0.003-0.13 |
+  | Waveformer (MIT) | streaming target-sound extraction, 44.1 kHz, 41 classes | 66 MiB | 6.5 ms per 9.4 ms hop | 0.69 |
+  | MossFormer2_SS_16K (Apache-2.0) | 2-speaker separation, 16 kHz, non-streaming | 714 MiB | 141 ms / 1 s window, 266 ms / 2 s | ~0.13 |
+
+  Waveformer's classes include instruments but no speech or generic "music" class, so it is a
+  weak fit for the 2 talkers + music test. MossFormer2 latency = window length + compute.
