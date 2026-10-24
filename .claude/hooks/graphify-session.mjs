@@ -28,13 +28,25 @@ const head = () => spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding
 const builtFrom = () => {
   try { return /Built from commit: `([0-9a-f]+)`/.exec(fs.readFileSync(report, "utf8"))?.[1] || ""; } catch { return ""; }
 };
-const fresh = () => { const b = builtFrom(); return !!b && head().startsWith(b); };
+// `graphify update .` leaves the report's commit unchanged when no code changed, so a
+// successful update also stamps HEAD here; either match counts as fresh.
+const stamp = path.join(out, ".updated-at-head");
+const fresh = () => {
+  const h = head(), b = builtFrom();
+  let s = "";
+  try { s = fs.readFileSync(stamp, "utf8").trim(); } catch {}
+  return !!h && ((!!b && h.startsWith(b)) || s === h);
+};
 
 let note = "";
 if (event === "SessionStart" && input.source !== "compact" && bin && !fresh()) {
   const r = spawnSync(bin, ["update", "."], { cwd: root, encoding: "utf8", timeout: 90000 });
-  note = r.status === 0 ? "Graph rebuilt at session start (code-only, local)."
-    : "Graph rebuild at session start failed; run `" + cli + " update .` and check the error.";
+  if (r.status === 0 && fs.existsSync(path.join(out, "graph.json"))) {
+    try { fs.writeFileSync(stamp, head() + "\n"); } catch {}
+    note = "Graph updated for HEAD at session start (code-only, local).";
+  } else {
+    note = "Graph update at session start failed; run `" + cli + " update .` and check the error.";
+  }
 }
 
 const section = (md, title) => {
