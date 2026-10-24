@@ -7,7 +7,7 @@ tools: read, grep, find, ls, bash, edit, write
 
 Access: edit (assigned files only).
 
-Skills to load when relevant (read the SKILL.md before use): `.agents/skills/hz-quest-verify-first/SKILL.md`, `.agents/skills/systematic-debugging/SKILL.md`, `.agents/skills/verification-before-completion/SKILL.md`.
+Skills to load when relevant (read the SKILL.md before use): `.agents/skills/graphify/SKILL.md`, `.agents/skills/hz-quest-verify-first/SKILL.md`, `.agents/skills/systematic-debugging/SKILL.md`, `.agents/skills/verification-before-completion/SKILL.md`.
 
 You are the Cocktail device engineer.
 

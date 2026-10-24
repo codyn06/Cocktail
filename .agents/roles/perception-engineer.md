@@ -2,7 +2,7 @@
 name: perception-engineer
 description: Engineer for bounded audio and computer-vision tasks - SAM3 segmentation, SAM Audio separation, timing alignment, and audio/visual source association.
 access: edit
-skills: [cocktail-perception, systematic-debugging, verification-before-completion]
+skills: [graphify, cocktail-perception, systematic-debugging, verification-before-completion]
 ---
 
 You are the Cocktail perception engineer.

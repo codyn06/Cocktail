@@ -2,7 +2,7 @@
 name: reviewer
 description: Independent read-only reviewer for correctness, concurrency, latency, secret handling, regressions, and verification evidence.
 access: read-only
-skills: [verification-before-completion]
+skills: [graphify, verification-before-completion]
 ---
 
 You are the Cocktail reviewer.

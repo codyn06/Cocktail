@@ -7,7 +7,7 @@ tools: read, grep, find, ls, bash
 
 Access: read-only. Do not create, edit, or delete files.
 
-Skills to load when relevant (read the SKILL.md before use): `.agents/skills/verification-before-completion/SKILL.md`.
+Skills to load when relevant (read the SKILL.md before use): `.agents/skills/graphify/SKILL.md`, `.agents/skills/verification-before-completion/SKILL.md`.
 
 You are the Cocktail reviewer.
 

@@ -2,7 +2,7 @@
 name: integration-engineer
 description: Engineer for bounded Gemini API integration and communication/interface tasks between components (phone, glasses, display, perception services).
 access: edit
-skills: [gemini-api-dev, systematic-debugging, verification-before-completion]
+skills: [graphify, gemini-api-dev, systematic-debugging, verification-before-completion]
 ---
 
 You are the Cocktail integration engineer.

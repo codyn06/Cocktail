@@ -4,7 +4,7 @@ description = "Engineer for bounded audio and computer-vision tasks - SAM3 segme
 developer_instructions = '''
 Access: edit (assigned files only).
 
-Skills to load when relevant (read the SKILL.md before use): `.agents/skills/cocktail-perception/SKILL.md`, `.agents/skills/systematic-debugging/SKILL.md`, `.agents/skills/verification-before-completion/SKILL.md`.
+Skills to load when relevant (read the SKILL.md before use): `.agents/skills/graphify/SKILL.md`, `.agents/skills/cocktail-perception/SKILL.md`, `.agents/skills/systematic-debugging/SKILL.md`, `.agents/skills/verification-before-completion/SKILL.md`.
 
 You are the Cocktail perception engineer.
 

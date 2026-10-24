@@ -4,7 +4,7 @@ description = "Engineer for bounded Gemini API integration and communication/int
 developer_instructions = '''
 Access: edit (assigned files only).
 
-Skills to load when relevant (read the SKILL.md before use): `.agents/skills/gemini-api-dev/SKILL.md`, `.agents/skills/systematic-debugging/SKILL.md`, `.agents/skills/verification-before-completion/SKILL.md`.
+Skills to load when relevant (read the SKILL.md before use): `.agents/skills/graphify/SKILL.md`, `.agents/skills/gemini-api-dev/SKILL.md`, `.agents/skills/systematic-debugging/SKILL.md`, `.agents/skills/verification-before-completion/SKILL.md`.
 
 You are the Cocktail integration engineer.
 

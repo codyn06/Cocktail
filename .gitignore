@@ -1,0 +1,5 @@
+# Repo-local tool environments (e.g. graphify venv)
+.tools/
+
+# graphify output: rebuilt locally per checkout (see AGENTS.md "Codebase context")
+graphify-out/
