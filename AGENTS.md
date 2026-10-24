@@ -49,6 +49,10 @@ Trivial tasks: write a brief plan and do them directly.
 - Each feature has one orchestrator. Before parallel work, agree on a team integration
   owner for shared interfaces and `.agents/decisions.md`; only that owner approves
   changes to them. Subagents return handoff notes to their orchestrator.
+- Shared devices are not isolated by worktrees. Before running commands that change or
+  occupy a physical device (install, uninstall, reboot, clear data, settings changes)
+  or a long GPU job on a shared machine, ask the user to confirm it's free. Note in
+  results if measurements may have run alongside other work.
 - Read-only roles may run bounded inspection commands (`rg`, file reads, `git status`,
   `git diff`, `git show`) and retrieve public official documentation without saving it.
   They must not mutate files, install software, execute repository code, or run tests
