@@ -140,18 +140,45 @@ namespace Cocktail.Editor
 
         static void CreateScene()
         {
-            if (File.Exists(ScenePath)) return;
-            Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
+            UnityEngine.SceneManagement.Scene scene;
+            if (File.Exists(ScenePath))
+            {
+                scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            }
+            else
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
+                scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                var rigPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(CameraRigPath);
+                PrefabUtility.InstantiatePrefab(rigPrefab);
+                var light = new GameObject("Directional Light").AddComponent<Light>();
+                light.type = LightType.Directional;
+            }
 
-            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-            var rigPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(CameraRigPath);
-            var rig = (GameObject)PrefabUtility.InstantiatePrefab(rigPrefab);
-            var manager = rig.GetComponent<OVRManager>() ?? rig.AddComponent<OVRManager>();
-            manager.isInsightPassthroughEnabled = true;
+            // Visible marker so an empty passthrough scene is distinguishable from the home view.
+            if (GameObject.Find("Marker Cube") == null)
+            {
+                var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                cube.name = "Marker Cube";
+                cube.transform.position = new Vector3(0f, 1.2f, 1f);
+                cube.transform.localScale = Vector3.one * 0.2f;
+            }
 
-            var light = new GameObject("Directional Light").AddComponent<Light>();
-            light.type = LightType.Directional;
+            var manager = Object.FindFirstObjectByType<OVRCameraRig>().gameObject;
+            var ovr = manager.GetComponent<OVRManager>() ?? manager.AddComponent<OVRManager>();
+            ovr.isInsightPassthroughEnabled = true;
 
+            // Passthrough renders as an underlay, so the eye camera must clear to transparent
+            // black instead of drawing the skybox over it.
+            if (manager.GetComponent<OVRPassthroughLayer>() == null)
+                manager.AddComponent<OVRPassthroughLayer>();
+            foreach (var cam in manager.GetComponentsInChildren<Camera>(true))
+            {
+                cam.clearFlags = CameraClearFlags.SolidColor;
+                cam.backgroundColor = new Color(0, 0, 0, 0);
+            }
+
+            EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
         }

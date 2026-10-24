@@ -52,7 +52,7 @@ It does the following:
 - Enables the OpenXR loader and the Meta XR feature group for Android and Standalone.
 - Restricts the Meta Quest feature and `OVRProjectConfig` to **Quest 2** and **Quest 3S**,
   and sets Passthrough support to Supported.
-- Creates `Assets/Scenes/Main.unity`: an `OVRCameraRig` with passthrough on, plus a light.
+- Creates `Assets/Scenes/Main.unity`: an `OVRCameraRig` with an `OVRPassthroughLayer` underlay, eye cameras that clear to transparent black, a light, and a marker cube.
 - Applies every Meta Project Setup Tool fix for Android: min API 32, target API 34,
   GameActivity, ASTC, the manifest and the controller profile, among others.
 
@@ -72,5 +72,5 @@ adb install -r quest/Builds/cocktail-quest.apk
 
 - Configuration and APK build: done in batch mode, and the build succeeded (mocked: no
   device). The generated manifest has `com.oculus.supportedDevices = quest2|quest3s`.
-- Quest 3S: installed and running, color passthrough confirmed (hardware-tested, 2026-10-24).
+- Quest 3S: installed and running; the runtime reports one passthrough layer on, and the user sees the marker cube in the headset (hardware-tested, 2026-10-24). The cube sits 1.2 m above eye level, because the rig uses the eye-level tracking origin.
 - Quest 2: untested.
