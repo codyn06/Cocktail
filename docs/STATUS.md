@@ -19,7 +19,7 @@ replayed, untested.
 ## Machines
 | Machine | Person | Hardware / notes |
 |---|---|---|
-| Cody's | Cody (codyn06) | RTX 5070 Ti, 16 GB (Blackwell: use PyTorch cu128). Live-run GPU machine (hub + models) |
+| Cody's | Cody (codyn06) | RTX 5070 Ti Laptop, 12 GB (Blackwell: use PyTorch cu128). Live-run GPU machine (hub + models) |
 | Lalitha's | Lalitha | RTX 4060 8 GB, Unity installed, Claude $100 plan |
 | Third | unassigned | |
 
@@ -115,4 +115,46 @@ alert messages, Meta glasses version, search and rescue.
 - Unity: repo pins 6000.0.80f1; this machine has 6000.6.7f1.
 - A8 needs per-microphone levels for each separated sound. Confirm the Quest mic count
   (task B1) and that separation (C3) can provide per-mic levels.
-- GPU: do separation, SAM 3, enhancement and SAM Audio fit together on 16 GB (task A3)?
+- GPU: the live-run machine is an RTX 5070 Ti **Laptop** GPU with **12 GB** VRAM
+  (11.9 GiB usable, `nvidia-smi` 2026-10-24; not 16 GB). Blackwell (sm_120): install with
+  `cd hub && uv sync --group gpu` (torch 2.11.0+cu128, CUDA available, ~14.5 TFLOPS fp16
+  matmul). Hub laptop (RTX 4060, 8 GB) is for development. Still to measure:
+  do separation, SAM 3, enhancement and SAM Audio fit together on 12 GB (A3)?
+
+  Draft 12 GB budget (docs research 2026-10-24, **not yet measured on device**):
+
+  | Component | Residency | Est. VRAM | Basis |
+  |---|---|---|---|
+  | OS / compositor / CUDA contexts | always | ~1-1.5 GB | assumption |
+  | Live separation (C3) + enhancement | resident | ~1-2 GB | small models |
+  | SAM 3 (C5) | resident | ~4-6 GB | extrapolated from 848M params |
+  | SAM Audio small(-tv), bf16 (D3) | on demand; unload SAM 3 | ~7.4 GB | third-party, RTX 5090 |
+  | Gemma 4 E2B Q4_0 | on demand | 2.9 GB + KV | gemma.ai Table 1 |
+
+  SAM Audio is batch-only (no streaming), so it cannot do C3. Base/large and bf16 Gemma do not fit
+  beside other models.
+
+  C3 candidate benchmark (hardware-tested on the 5070 Ti, 2026-10-24, torch 2.11+cu128, fp32,
+  **synthetic input: speed/VRAM only, separation quality not measured yet**):
+
+  | Model | Task | Peak VRAM | Latency (p50) | RTF |
+  |---|---|---|---|---|
+  | GTCRN (MIT) | speech enhancement, 16 kHz | 30 MiB | ~7 ms per call (64 ms - 2 s windows) | 0.003-0.13 |
+  | Waveformer (MIT) | streaming target-sound extraction, 44.1 kHz, 41 classes | 66 MiB | 6.5 ms per 9.4 ms hop | 0.69 |
+  | MossFormer2_SS_16K (Apache-2.0) | 2-speaker separation, 16 kHz, non-streaming | 714 MiB | 141 ms / 1 s window, 266 ms / 2 s | ~0.13 |
+
+  Waveformer's classes include instruments but no speech or generic "music" class, so it is a
+  weak fit for the 2 talkers + music test. MossFormer2 latency = window length + compute.
+
+  C3 quality on a synthetic mix (replayed: librosa examples libri2 + libri3 + Brahms at -5 dB,
+  12 s, 16 kHz mono, no reverb; 2026-10-24). MossFormer2_SS_16K in 2 s windows / 1 s hop,
+  speaker order kept via the overlap; music = mix minus gain-fitted voices:
+
+  | Stream | SI-SDR | Improvement over mix |
+  |---|---|---|
+  | voice 1 | 16.8 dB | +18.0 dB |
+  | voice 2 | 15.2 dB | +16.3 dB |
+  | music (residual) | 8.9 dB | +17.0 dB |
+
+  Offline 12 s gives the same numbers. Caveat: clean read speech from LibriSpeech, which may overlap
+  the model's training data; expect lower on the real 3S recording (reverb, mic noise, crosstalk).
