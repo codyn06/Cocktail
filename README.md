@@ -1,17 +1,15 @@
 # Cocktail
 
-An audio-first assistive experience built at a hackathon by a team of four. It uses
-Ray-Ban Meta glasses, a phone, and possibly a Meta Quest headset as a display.
+An audio-first assistive experience built at a hackathon by a team of four. A Meta Quest 3S
+headset streams its microphones, camera and head pose to a laptop "hub", which splits the
+room's sound into separate labeled sources, works out where each one is, and sends the
+chosen sound back to the headset in 3D. Plan: [`docs/QUEST_PRD.txt`](docs/QUEST_PRD.txt).
+Live progress: [`docs/STATUS.md`](docs/STATUS.md).
 
-Planned building blocks:
-
-- **Gemma**: open-weight language models, run directly. Variant and runtime are not chosen yet.
-- **SAM3**: promptable visual segmentation.
-- **SAM Audio** (possibly): prompted audio source separation.
-
-> **Status:** early setup. No app stack, language, or build system has been chosen yet.
-> The repo currently holds shared agent configuration and team conventions. See
-> [`.agents/decisions.md`](.agents/decisions.md) for decisions made so far and open items.
+> **Status (2026-10-24):** the hub runs end to end on simulated data: ingest, a mock
+> headset, and live separation with labels. Direction finding is in review (PR #21).
+> The Quest app doesn't stream to the hub yet (task B1), and nothing has been tested
+> on the headset yet.
 
 ## Repository layout
 
@@ -23,6 +21,25 @@ Planned building blocks:
 | `.agents/` | Canonical roles, skills, sync script, decisions, and branch handoffs |
 | `.claude/`, `.codex/`, `.pi/`, `.agent/` | Per-tool copies generated from `.agents/` |
 | `graphify-out/` | Local code knowledge graph (gitignored, rebuilt per clone) |
+| `hub/` | Laptop hub (Python 3.12): `protocol/` wire format, `ingest/` server, `mockclient/` fake headset, `separate/` live separation |
+| `quest/` | Unity project for the Quest headset ([setup](quest/README.md)) |
+| `docs/` | Plan (`QUEST_PRD.txt`) and status board (`STATUS.md`) |
+
+## Requirements at a glance
+
+What you need depends on what you work on. All setup steps are below or linked.
+
+| For | Hardware | Software | Accounts | Disk |
+|---|---|---|---|---|
+| Everyone (repo, agents) | any | Git, GitHub CLI, Node.js 18+, uv, a coding agent | GitHub | small |
+| Hub on recorded/simulated data | any laptop, Windows/macOS/Linux | uv (installs Python 3.12 itself) | none | ~200 MB |
+| Live separation and labels | NVIDIA GPU, ~2 GB free VRAM; driver with CUDA 12.8+ (RTX 50-series needs it) | the hub's `gpu` dependency group | none (models are public) | ~5 GB (PyTorch ~3 GB, models ~1 GB) |
+| SAM 3 / SAM Audio (A3, C5, D3; experimental) | NVIDIA GPU; 12 GB is tight (see STATUS budget) | separate environment, not in the hub yet | Hugging Face account approved for the `facebook/sam3*` and `facebook/sam-audio-*` repos | ~18 GB of weights |
+| Quest app | Quest 3S (camera, main) or Quest 2 (display only); USB-C data cable | Unity 6000.0.80f1 with Android Build Support, Meta XR packages | Meta developer organization, Developer Mode on the headset | Unity install + project |
+| Headset to hub | laptop and headset on the same private network, or USB | Windows Firewall allows TCP 8765, or `adb reverse` | none | none |
+
+Tested so far on Windows 11 with an RTX 5070 Ti Laptop GPU (12 GB). Use Git Bash or
+PowerShell. In Git Bash, give Windows Python programs paths like `C:/...` (not `/c/...`).
 
 ## Setup
 
@@ -88,6 +105,7 @@ the headset (or the mock client) and runs all processing. Run every command from
   don't have it, so your system Python version doesn't matter.
 - For GPU work only: an NVIDIA GPU and a driver that supports CUDA 12.8 or newer
   (check with `nvidia-smi`). RTX 50-series (Blackwell) cards need CUDA 12.8+ builds of PyTorch.
+- Port 8765 free on the laptop (the hub's default; change it with `--port`).
 
 ### Install and test
 
@@ -97,7 +115,7 @@ uv sync             # creates hub/.venv with the hub dependencies
 uv run pytest       # all tests should pass
 ```
 
-### GPU environment (PR #13)
+### GPU environment
 
 ```sh
 uv sync --group gpu   # adds PyTorch + torchaudio built for CUDA 12.8 (~3 GB download)
@@ -108,7 +126,8 @@ This should print `True` and your GPU name. Measured results and the VRAM budget
 [`docs/STATUS.md`](docs/STATUS.md).
 
 SAM 3 and SAM Audio weights are gated on Hugging Face. Each person who downloads them
-needs their own approved account; don't share tokens.
+needs their own approved account; don't share tokens. They aren't wired into the hub yet;
+the measurements are tracked under A3 in STATUS.
 
 1. Request access on the model pages: `facebook/sam3`, `facebook/sam3.1`,
    `facebook/sam-audio-small`, `facebook/sam-audio-small-tv` (optionally `-base-tv`).
@@ -118,18 +137,22 @@ needs their own approved account; don't share tokens.
 
 ### Run the hub with the mock headset
 
-No headset needed. Terminal 1 starts the hub (port 8765):
+No headset needed. First make test audio and a simulated session (once). `demo_stems`
+downloads two openly licensed LibriSpeech readers and a Brahms recording and writes
+12 s clips. Any mono WAV files work instead. Each `--stem` is a WAV file and a direction
+in degrees (0 = ahead, + = right, 180 = behind):
+
+```sh
+uv run --with librosa python -m mockclient.demo_stems sessions/stems
+uv run python -m mockclient.simulate --out sessions/demo \
+    --stem sessions/stems/voice1.wav:-50 --stem sessions/stems/voice2.wav:40 \
+    --stem sessions/stems/music.wav:150
+```
+
+Terminal 1 starts the hub (port 8765). Terminal 2 streams the session into it in real time:
 
 ```sh
 uv run python -m ingest
-```
-
-Terminal 2 makes a simulated session and streams it in real time. Each `--stem` is a
-WAV file and a direction in degrees (0 = ahead, + = right, 180 = behind):
-
-```sh
-uv run python -m mockclient.simulate --out sessions/demo \
-    --stem voice1.wav:-50 --stem voice2.wav:40 --stem music.wav:150
 uv run python -m mockclient.replay sessions/demo --fake-video-fps 15
 ```
 
@@ -155,11 +178,19 @@ and compute time per 1 s hop.
 
 Score separation on a simulated session (it needs ground truth, so only `mockclient.simulate`
 sessions work). It prints the SI-SDR improvement per source, which needs to be at least +8 dB,
-and the label for each:
+and the label for each. On the demo session, expect about +18, +17 and +18 dB, labeled
+speech, speech and music:
 
 ```sh
 uv run --group gpu python -m separate.score sessions/demo
 ```
+
+Add `--no-labels` to either command to skip the labeling model.
+
+### Quest app
+
+Unity, headset and developer-account setup are in [`quest/README.md`](quest/README.md).
+The app doesn't stream to the hub yet (task B1).
 
 ### Reaching the hub from the Quest
 
