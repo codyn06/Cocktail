@@ -6,6 +6,14 @@ Every hop (default 1 s) the separator sees the last `win` seconds (default 2 s) 
   stream 0, 1: the two voices from the voice separator (order kept by matching the overlap)
   stream 2:    the residual (mix minus the gain-fitted voices): music and other sounds
 
+The voice separator always outputs two voices. With one talker it splits that person across
+both, so two gates run on every window:
+  merge:  if the two voice streams arrive from the same direction (their left/right level
+          difference, 1-8 kHz, differs by less than merge_ild_db) they are one source: summed
+          into the louder slot, the other slot goes silent. Needs >= 2 mics.
+  speech: a voice stream the labeler does not hear as speech (music only, birds) moves into
+          the residual. Needs a labeler.
+
 For each stream it also gives the stream as heard at each mic (ratio masks applied to every
 mic's spectrogram) and per-mic band levels at 20 Hz for hub/locate (A8, PR #11).
 Output latency: a hop is final one hop after it ends (window end), plus compute time.
@@ -54,7 +62,7 @@ def band_levels(x: np.ndarray) -> np.ndarray:
 class LiveSeparator:
     def __init__(self, separator, labeler=None, win_s: float = 2.0, hop_s: float = 1.0,
                  label_every: int = 1, label_smooth: float = 0.6, swap_margin: float = 0.1,
-                 floor_db: float = -60.0):
+                 floor_db: float = -60.0, merge_ild_db: float = 4.5, speech_min: float = 0.2):
         self.sep, self.labeler = separator, labeler
         self.W, self.H = int(win_s * SR), int(hop_s * SR)
         assert self.W == 2 * self.H, "overlap-add assumes 50 % overlap"
@@ -63,6 +71,8 @@ class LiveSeparator:
         self.ids = [f"s{i + 1}" for i in range(self.n_streams)]
         self.label_every, self.label_smooth = label_every, label_smooth
         self.swap_margin, self.floor_db = swap_margin, floor_db
+        self.merge_ild_db, self.speech_min = merge_ild_db, speech_min
+        self.last_gates: dict = {}  # what the gates did on the latest window (for status pages)
         self.reset()
 
     def reset(self):
@@ -70,6 +80,8 @@ class LiveSeparator:
         self._prev_mono = None   # (voices, H) unfaded tail, for order matching
         self._scores: list[dict[str, float]] = [{} for _ in range(self.n_streams)]
         self._steps = 0
+        self.last_gates = {}
+        self._voice_slot = None  # voice slot that last held a merged single source
 
     def _separate_window(self, x: np.ndarray) -> np.ndarray:
         """x: (W, mics) -> (streams, 1 + mics, W): mono estimate then per-mic images."""
@@ -93,20 +105,54 @@ class LiveSeparator:
         self._prev_mono = v[:, self.H :].copy()
 
         # Ratio masks from the mono estimates, applied to every mic.
-        _, _, S = signal.stft(est, SR, nperseg=N_FFT, noverlap=N_FFT - HOP_FFT)
+        f, _, S = signal.stft(est, SR, nperseg=N_FFT, noverlap=N_FFT - HOP_FFT)
         P = np.abs(S) ** 2
         M = P / (P.sum(0, keepdims=True) + 1e-10)
         _, _, X = signal.stft(x.T, SR, nperseg=N_FFT, noverlap=N_FFT - HOP_FFT)  # (mics, F, T)
-        _, imgs = signal.istft(M[:, None] * X[None], SR, nperseg=N_FFT, noverlap=N_FFT - HOP_FFT)
-        imgs = imgs[..., : self.W]
-        return np.concatenate([est[:, None], imgs], axis=1)
+        TF = M[:, None] * X[None]                                                # (streams, mics, F, T)
+        gates = {"ild_diff_db": None, "merged": False, "to_residual": []}
+        if x.shape[1] >= 2 and self.merge_ild_db > 0:
+            d = self._ild_diff(np.abs(TF[:2, :2]) ** 2, f)
+            gates["ild_diff_db"] = round(d, 2)
+            if d < self.merge_ild_db:  # same direction: one source split across both voice slots
+                # Continuity, not identity: stay in the slot the voice was in. Whether a voice after
+                # a pause is the same person is the tracker's job (D1: world bearing, voice).
+                if self._voice_slot is None:
+                    self._voice_slot = int(np.sum(est[1] ** 2) > np.sum(est[0] ** 2))
+                keep = self._voice_slot
+                self._prev_mono[keep], self._prev_mono[1 - keep] = self._prev_mono.sum(0), 0.0
+                est[keep], est[1 - keep] = est[0] + est[1], 0.0
+                TF[keep], TF[1 - keep] = TF[0] + TF[1], 0.0
+                gates["merged"] = True
+        _, imgs = signal.istft(TF, SR, nperseg=N_FFT, noverlap=N_FFT - HOP_FFT)
+        out = np.concatenate([est[:, None], imgs[..., : self.W]], axis=1)
+        self.last_gates = gates
+        return out
 
-    def _update_labels(self, out: np.ndarray):
+    @staticmethod
+    def _ild_diff(E: np.ndarray, f: np.ndarray) -> float:
+        """E: (2 voices, 2 mics, F, T) power. Mean |ILD(v1) - ILD(v2)| in dB over 1-8 kHz,
+        weighted toward STFT frames where both voices are present."""
+        band = (f >= 1000) & (f <= 8000)
+        e = E[:, :, band].sum(2)                                   # (2, mics, T)
+        ild = 10 * np.log10((e[:, 1] + 1e-10) / (e[:, 0] + 1e-10))
+        w = np.minimum(e[0].sum(0), e[1].sum(0))
+        return float(np.sum(w * np.abs(ild[0] - ild[1])) / (w.sum() + 1e-12))
+
+    def _speech_gate(self, out: np.ndarray, p: np.ndarray) -> None:
+        """Move voice streams that don't sound like speech into the residual (in place)."""
+        for k in range(self.n_streams - 1):
+            sc = self.labeler.coarse(p[k])
+            if np.sum(out[k, 0] ** 2) > 0 and sc.get("speech", 0.0) < self.speech_min                     and max(sc.values()) > sc.get("speech", 0.0):
+                out[-1] += out[k]
+                out[k] = 0.0
+                p[-1] = np.maximum(p[-1], p[k])
+                self._prev_mono[k] = 0.0
+                self.last_gates.setdefault("to_residual", []).append(self.ids[k])
+
+    def _update_labels(self, p: np.ndarray):
         # Labels look at the whole 2 s window and are smoothed across hops, so they describe the
         # recent past of the stream rather than exactly the emitted hop.
-        if self.labeler is None:
-            return
-        p = self.labeler.probs([out[k, 0].astype(np.float32) for k in range(self.n_streams)])
         a = self.label_smooth
         for k in range(self.n_streams):
             new = self.labeler.coarse(p[k])
@@ -119,8 +165,12 @@ class LiveSeparator:
         (the very first window's first hop is emitted unblended)."""
         assert x.shape[0] == self.W
         out = self._separate_window(x)
-        if self._steps % self.label_every == 0:
-            self._update_labels(out)
+        if self.labeler is not None:
+            p = self.labeler.probs([out[k, 0].astype(np.float32) for k in range(self.n_streams)])
+            if self.speech_min > 0:
+                self._speech_gate(out, p)
+            if self._steps % self.label_every == 0:
+                self._update_labels(p)
         self._steps += 1
         faded = out * self.fade
         head = faded[..., : self.H] + self._prev if self._prev is not None else out[..., : self.H]
