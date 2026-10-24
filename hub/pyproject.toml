@@ -21,7 +21,7 @@ build-backend = "hatchling.build"
 
 # One package per owned folder (PRD section 14). Add yours here when you create it.
 [tool.hatch.build.targets.wheel]
-packages = ["protocol"]
+packages = ["protocol", "ingest", "mockclient"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

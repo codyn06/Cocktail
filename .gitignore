@@ -12,3 +12,6 @@ hub/.venv/
 __pycache__/
 .pytest_cache/
 
+
+# mock headset sessions (recorded or simulated audio; never commit)
+hub/sessions/
