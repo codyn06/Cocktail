@@ -33,6 +33,7 @@ app = FastAPI(title="Cocktail session recorder")
 S = {
     "audio": [], "audio_rate": None, "audio_ch": None, "first_audio_ts_us": None,
     "audio_frames": 0, "pose": [], "hello": None, "video_frames": 0, "last_audio_ts_us": None,
+    "t_first_wall": None, "cue": None,
 }
 
 
@@ -58,6 +59,7 @@ async def ws_audio(ws: WebSocket) -> None:
                 continue
             if S["audio_rate"] is None:
                 S["audio_rate"], S["audio_ch"], S["first_audio_ts_us"] = hdr.sample_rate, hdr.channels, hdr.device_ts_us
+                S["t_first_wall"] = time.monotonic()
                 print(f"[audio] first chunk: {hdr.sample_rate} Hz, {hdr.channels} ch, ts={hdr.device_ts_us}")
             S["audio"].append(pcm)
             S["audio_frames"] += hdr.frames
@@ -109,12 +111,24 @@ async def ws_events(ws: WebSocket) -> None:
 
 @app.websocket(p.WS_AUDIO_OUT)
 async def ws_audio_out(ws: WebSocket) -> None:
+    """Silence, plus cue beeps in the headset: 2 beeps = start turning, 3 beeps = stop."""
     await ws.accept()
-    silence = bytes(960 * 2 * 2)
+    import numpy as np
+
+    n0 = 0
     try:
         seq, nxt = 0, time.monotonic()
         while True:
-            await ws.send_bytes(p.pack(p.AudioOut(seq=seq, device_ts_us=0), silence))
+            pcm = np.zeros((960, 2), dtype="<i2")
+            cue, t0w = S["cue"], S["t_first_wall"]
+            if cue and t0w is not None:
+                el = time.monotonic() - t0w
+                beeps = [(cue["go"] + 0.3 * i, 0.15) for i in range(2)] + [(cue["stop"] + 0.3 * i, 0.15) for i in range(3)]
+                if any(b <= el < b + d for b, d in beeps):
+                    tone = 0.3 * np.sin(2 * np.pi * 1000 * (n0 + np.arange(960)) / 48000)
+                    pcm[:] = (tone * 32767).astype("<i2")[:, None]
+            n0 += 960
+            await ws.send_bytes(p.pack(p.AudioOut(seq=seq, device_ts_us=0, layout="stereo"), pcm.tobytes()))
             seq += 1
             nxt += 0.02
             await asyncio.sleep(max(0, nxt - time.monotonic()))
@@ -138,7 +152,7 @@ def save(out: Path, truth: float | None, note: str) -> None:
         "truth_deg": truth, "note": note, "sample_rate": S["audio_rate"], "channels": S["audio_ch"],
         "first_audio_ts_us": S["first_audio_ts_us"], "audio_frames": S["audio_frames"],
         "seconds": S["audio_frames"] / S["audio_rate"], "pose_samples": len(S["pose"]),
-        "video_frames": S["video_frames"], "hello": S["hello"], "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "video_frames": S["video_frames"], "hello": S["hello"], "cue": S["cue"], "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     (out / "meta.json").write_text(json.dumps(meta, indent=2))
     print(f"saved {meta['seconds']:.1f} s of audio ({S['audio_ch']} ch @ {S['audio_rate']} Hz), "
@@ -168,9 +182,15 @@ if __name__ == "__main__":
     ap.add_argument("--out", required=True)
     ap.add_argument("--truth", type=float, default=None, help="source angle in degrees from initial facing (+ right)")
     ap.add_argument("--seconds", type=float, default=0, help="auto-stop after this many seconds of audio")
+    ap.add_argument("--noise-until", type=float, default=0, help="seconds of ambient-only audio at the start (source off)")
+    ap.add_argument("--go-at", type=float, default=0, help="second to start turning the head (2 beeps)")
+    ap.add_argument("--stop-at", type=float, default=0, help="second to stop (3 beeps); recording ends 1.5 s later")
     ap.add_argument("--note", default="")
     ap.add_argument("--port", type=int, default=p.DEFAULT_PORT)
     args = ap.parse_args()
+    if args.stop_at:
+        S["cue"] = {"noise_until": args.noise_until, "go": args.go_at, "stop": args.stop_at}
+        args.seconds = args.stop_at + 1.5
     try:
         asyncio.run(main_async(args))
     except KeyboardInterrupt:
