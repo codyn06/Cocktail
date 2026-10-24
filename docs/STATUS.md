@@ -72,3 +72,16 @@ Demo work (A9 pitch, H1 filming, G4 README) starts only after the product is fin
   `cd hub && uv sync --group gpu` (torch 2.11.0+cu128, CUDA available, ~14.5 TFLOPS fp16
   matmul). Hub laptop (RTX 4060, 8 GB) is for development. Still to measure:
   do separation, SAM 3, enhancement and SAM Audio fit together on 12 GB (A3)?
+
+  Draft 12 GB budget (docs research 2026-10-24, **not yet measured on device**):
+
+  | Component | Residency | Est. VRAM | Basis |
+  |---|---|---|---|
+  | OS / compositor / CUDA contexts | always | ~1-1.5 GB | assumption |
+  | Live separation (C3) + enhancement | resident | ~1-2 GB | small models |
+  | SAM 3 (C5) | resident | ~4-6 GB | extrapolated from 848M params |
+  | SAM Audio small(-tv), bf16 (D3) | on demand; unload SAM 3 | ~7.4 GB | third-party, RTX 5090 |
+  | Gemma 4 E2B Q4_0 | on demand | 2.9 GB + KV | gemma.ai Table 1 |
+
+  SAM Audio is batch-only (no streaming), so it cannot do C3. Base/large and bf16 Gemma do not fit
+  beside other models.
