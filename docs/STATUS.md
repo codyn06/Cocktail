@@ -50,7 +50,7 @@ the earlier tasks that must be usable first; mocks and recordings let you start 
 |---|---|---|---|---|---|---|---|
 | A1 | Repo and run scripts | Public repo with MIT license, README skeleton, one-command scripts: run the hub, replay a recorded session, deploy to the headset, run the evaluation. | repo root, `scripts/` | | | todo | |
 | A2 | Message format between headset and laptop | The frozen set of messages (audio, video, head pose, button actions, events back) with generated Python and C# code. | `hub/protocol` | | feat/a1-a2-repo-protocol | done | merged in PR #10; mocked (5 tests) |
-| A3 | Check all the AI models fit on one GPU | Run separation, speech enhancement, SAM 3 (object outlines), depth and SAM Audio together on the RTX 5070 Ti. Done when we know which ones fit, how fast, and how much memory. | `eval/` | Cody | chore/gpu-env | doing | PR #13 merged: cu128 env, 12 GB budget, C3 candidates benchmarked (hardware-tested). Left: measure SAM 3 / SAM Audio (waiting on Hugging Face access) |
+| A3 | Check all the AI models fit on one GPU | Run separation, speech enhancement, SAM 3 (object outlines), depth and SAM Audio together on the RTX 5070 Ti. Done when we know which ones fit, how fast, and how much memory. | `eval/` | Cody | chore/gpu-env | doing | PR #13 merged: cu128 env, 12 GB budget, C3 candidates benchmarked (hardware-tested). SAM 3 image measured (see Open decisions). Left: SAM 3.1 tracker, SAM Audio small/small-tv |
 | A4 | Unity and headset ready | Unity with the Meta XR and Meta XR Audio SDKs builds and runs hello-world on the Quest 2 and Quest 3S. Confirm the 3S software version supports the camera API (v74+). | `quest/` | | | todo | repo pins Unity 6000.0.80f1 |
 | A5 | Headset screen design with fake data | Labels and outlines on each sound in view, edge arrows and clock positions (like "4 o'clock") for sounds out of view, state banners, a small glasses-style view. Runs on the Quest 2 with made-up sources. | `quest/ui` | | | todo | |
 | A6 | ★ Choose the audio AI models and build the scoring test | Pick the model that splits mixed audio into voices, the sound labeler, the voice-ID model and the speech enhancer. Build a test that mixes known clean recordings and scores the result. | `hub/separate`, `eval/` | Cody | feat/c3-live-separation | done (simulated) | PR #19 merged. MossFormer2 (voices) + residual + AST labels; scoring test `python -m separate.score` |
@@ -133,6 +133,31 @@ alert messages, Meta glasses version, search and rescue.
 
   SAM Audio is batch-only (no streaming), so it cannot do C3. Base/large and bf16 Gemma do not fit
   beside other models.
+
+  SAM 3 image model (hardware-tested on the 5070 Ti Laptop, Windows 11, 2026-10-24; separate
+  environment, not in the hub yet):
+
+  | | |
+  |---|---|
+  | VRAM | 3.5 GB weights, ~4.0 GB peak |
+  | Load | ~13 s |
+  | Per frame | ~320 ms image encode + ~80 ms per text prompt (~2.5 fps with one prompt) |
+  | Precision | fp32 weights under bf16 autocast (as upstream). Converting weights to bf16 breaks it |
+
+  - Windows needs the community `triton-windows` package (no official Triton for Windows), plus
+    `pycocotools`, `psutil` and `opencv-python-headless` that the image path imports.
+  - Prompt wording matters a lot: on a photo of six children, "child" scored 0.96 but "person"
+    only 0.27 (below the default 0.5 threshold, so 0 detections). C5 should try several prompts or
+    lower the threshold.
+  - SAM 3.1 video tracker on Windows: needs `use_fa3=False` (no FlashAttention 3), a workaround
+    for an upstream bug (`start_session` passes `offload_state_to_cpu`, which the 3.1 tracker
+    rejects), and allowing non-flash attention in `sam3/model/decoder.py` (it forces the flash
+    kernel, which Windows PyTorch lacks). Not measured yet.
+  - SAM Audio small: first load also downloads ~16 GB of companion models (`sam-audio-judge`
+    12.3 GB, CLAP 1.8 GB, T5/RoBERTa/BART/BERT ~2.3 GB) on top of the 5.1 GB checkpoint. Needs
+    `transformers` 4.x (>=4.54) with `huggingface_hub` < 1.0. VRAM not measured yet. If the 6.1 GB
+    judge stays resident, D3 cannot fit in 12 GB with it.
+  - All SAM weights together use ~35 GB of disk in the Hugging Face cache.
 
   C3 candidate benchmark (hardware-tested on the 5070 Ti, 2026-10-24, torch 2.11+cu128, fp32,
   **synthetic input: speed/VRAM only, separation quality not measured yet**):
