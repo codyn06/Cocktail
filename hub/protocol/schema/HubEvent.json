@@ -1,0 +1,467 @@
+{
+  "$defs": {
+    "AlertFired": {
+      "properties": {
+        "type": {
+          "const": "alert.fired",
+          "default": "alert.fired",
+          "title": "Type",
+          "type": "string"
+        },
+        "alert_id": {
+          "title": "Alert Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "critical": {
+          "title": "Critical",
+          "type": "boolean"
+        },
+        "spoken_text": {
+          "title": "Spoken Text",
+          "type": "string"
+        },
+        "bearing_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bearing Deg"
+        }
+      },
+      "required": [
+        "alert_id",
+        "label",
+        "critical",
+        "spoken_text"
+      ],
+      "title": "AlertFired",
+      "type": "object"
+    },
+    "BearingSource": {
+      "enum": [
+        "head_motion",
+        "mics",
+        "camera",
+        "fused"
+      ],
+      "title": "BearingSource",
+      "type": "string"
+    },
+    "HubState": {
+      "enum": [
+        "listening",
+        "selected",
+        "playing",
+        "target_lost",
+        "replay_processing",
+        "replay_playing"
+      ],
+      "title": "HubState",
+      "type": "string"
+    },
+    "Metrics": {
+      "description": "Per-stage latency for the live dashboard, ~1 Hz.",
+      "properties": {
+        "type": {
+          "const": "metrics",
+          "default": "metrics",
+          "title": "Type",
+          "type": "string"
+        },
+        "stage_ms": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Stage Ms",
+          "type": "object"
+        },
+        "gpu_util": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Util"
+        }
+      },
+      "required": [
+        "stage_ms"
+      ],
+      "title": "Metrics",
+      "type": "object"
+    },
+    "Mode": {
+      "enum": [
+        "fast",
+        "balanced",
+        "accurate"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "ReplayReady": {
+      "properties": {
+        "type": {
+          "const": "replay.ready",
+          "default": "replay.ready",
+          "title": "Type",
+          "type": "string"
+        },
+        "target_id": {
+          "title": "Target Id",
+          "type": "string"
+        },
+        "selection_version": {
+          "title": "Selection Version",
+          "type": "integer"
+        },
+        "duration_s": {
+          "title": "Duration S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "target_id",
+        "selection_version",
+        "duration_s"
+      ],
+      "title": "ReplayReady",
+      "type": "object"
+    },
+    "Source": {
+      "description": "One separated, tracked sound source (also the public part of the target record).",
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "label": {
+          "description": "\"speech\", \"music\", \"alarm\", ...",
+          "title": "Label",
+          "type": "string"
+        },
+        "label_conf": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Label Conf",
+          "type": "number"
+        },
+        "bearing_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "World yaw, 0 = initial forward, + = right",
+          "title": "Bearing Deg"
+        },
+        "bearing_conf": {
+          "default": 0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Bearing Conf",
+          "type": "number"
+        },
+        "bearing_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BearingSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "elevation_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Elevation Deg"
+        },
+        "distance_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance M"
+        },
+        "state": {
+          "$ref": "#/$defs/TrackState",
+          "default": "tracking"
+        },
+        "level_db": {
+          "description": "Current loudness of the separated source",
+          "title": "Level Db",
+          "type": "number"
+        },
+        "in_view": {
+          "default": false,
+          "title": "In View",
+          "type": "boolean"
+        },
+        "bbox": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Normalized x0,y0,x1,y1 in the latest camera frame",
+          "title": "Bbox"
+        },
+        "mask_rle": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mask Rle"
+        },
+        "last_observed_us": {
+          "title": "Last Observed Us",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source_id",
+        "label",
+        "label_conf",
+        "level_db",
+        "last_observed_us"
+      ],
+      "title": "Source",
+      "type": "object"
+    },
+    "SourcesUpdated": {
+      "description": "Sent at ~10 Hz. Stable source_ids; clients must not re-announce on every update.",
+      "properties": {
+        "type": {
+          "const": "sources.updated",
+          "default": "sources.updated",
+          "title": "Type",
+          "type": "string"
+        },
+        "device_ts_us": {
+          "title": "Device Ts Us",
+          "type": "integer"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/Source"
+          },
+          "title": "Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "device_ts_us",
+        "sources"
+      ],
+      "title": "SourcesUpdated",
+      "type": "object"
+    },
+    "StateChanged": {
+      "properties": {
+        "type": {
+          "const": "state.changed",
+          "default": "state.changed",
+          "title": "Type",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/HubState"
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Id"
+        },
+        "selection_version": {
+          "default": 0,
+          "title": "Selection Version",
+          "type": "integer"
+        },
+        "mode": {
+          "$ref": "#/$defs/Mode",
+          "default": "balanced"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "title": "StateChanged",
+      "type": "object"
+    },
+    "TargetUpdated": {
+      "description": "Target record as sent to clients.",
+      "properties": {
+        "type": {
+          "const": "target.updated",
+          "default": "target.updated",
+          "title": "Type",
+          "type": "string"
+        },
+        "target_id": {
+          "title": "Target Id",
+          "type": "string"
+        },
+        "selection_version": {
+          "title": "Selection Version",
+          "type": "integer"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "kind": {
+          "description": "\"person\" or a sound label",
+          "title": "Kind",
+          "type": "string"
+        },
+        "voice_lock_conf": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Voice Lock Conf"
+        },
+        "assoc_conf": {
+          "description": "How sure we are this object makes this sound",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Assoc Conf",
+          "type": "number"
+        },
+        "state": {
+          "$ref": "#/$defs/TrackState"
+        },
+        "bearing_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bearing Deg"
+        }
+      },
+      "required": [
+        "target_id",
+        "selection_version",
+        "source_id",
+        "kind",
+        "assoc_conf",
+        "state"
+      ],
+      "title": "TargetUpdated",
+      "type": "object"
+    },
+    "TrackState": {
+      "enum": [
+        "tracking",
+        "last_seen",
+        "lost"
+      ],
+      "title": "TrackState",
+      "type": "string"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "alert.fired": "#/$defs/AlertFired",
+      "metrics": "#/$defs/Metrics",
+      "replay.ready": "#/$defs/ReplayReady",
+      "sources.updated": "#/$defs/SourcesUpdated",
+      "state.changed": "#/$defs/StateChanged",
+      "target.updated": "#/$defs/TargetUpdated"
+    },
+    "propertyName": "type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/SourcesUpdated"
+    },
+    {
+      "$ref": "#/$defs/StateChanged"
+    },
+    {
+      "$ref": "#/$defs/TargetUpdated"
+    },
+    {
+      "$ref": "#/$defs/AlertFired"
+    },
+    {
+      "$ref": "#/$defs/ReplayReady"
+    },
+    {
+      "$ref": "#/$defs/Metrics"
+    }
+  ]
+}

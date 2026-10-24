@@ -1,0 +1,112 @@
+{
+  "description": "Binary on /ingest/video. Payload: JPEG. Hub keeps only the newest frame.\n\ncam_pose is the camera pose in the tracking space at capture time.",
+  "properties": {
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "device_ts_us": {
+      "description": "Headset monotonic clock, microseconds",
+      "title": "Device Ts Us",
+      "type": "integer"
+    },
+    "epoch": {
+      "description": "Increments on every reconnect",
+      "minimum": 0,
+      "title": "Epoch",
+      "type": "integer"
+    },
+    "width": {
+      "title": "Width",
+      "type": "integer"
+    },
+    "height": {
+      "title": "Height",
+      "type": "integer"
+    },
+    "codec": {
+      "default": "jpeg",
+      "enum": [
+        "jpeg",
+        "h264"
+      ],
+      "title": "Codec",
+      "type": "string"
+    },
+    "cam_pos": {
+      "anyOf": [
+        {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cam Pos"
+    },
+    "cam_rot_xyzw": {
+      "anyOf": [
+        {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cam Rot Xyzw"
+    },
+    "hfov_deg": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hfov Deg"
+    }
+  },
+  "required": [
+    "seq",
+    "device_ts_us",
+    "epoch",
+    "width",
+    "height"
+  ],
+  "title": "VideoFrame",
+  "type": "object"
+}

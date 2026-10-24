@@ -1,0 +1,22 @@
+{
+  "properties": {
+    "type": {
+      "const": "cmd.volumes",
+      "default": "cmd.volumes",
+      "title": "Type",
+      "type": "string"
+    },
+    "inner_db": {
+      "default": 0.0,
+      "title": "Inner Db",
+      "type": "number"
+    },
+    "outer_db": {
+      "default": -12.0,
+      "title": "Outer Db",
+      "type": "number"
+    }
+  },
+  "title": "SetVolumes",
+  "type": "object"
+}

@@ -1,0 +1,19 @@
+{
+  "properties": {
+    "type": {
+      "const": "cmd.ack_alert",
+      "default": "cmd.ack_alert",
+      "title": "Type",
+      "type": "string"
+    },
+    "alert_id": {
+      "title": "Alert Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "alert_id"
+  ],
+  "title": "AckAlert",
+  "type": "object"
+}

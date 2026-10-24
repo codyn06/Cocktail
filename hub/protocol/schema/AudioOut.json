@@ -1,0 +1,58 @@
+{
+  "description": "Binary on /audio/out. Payload: s16le, 48 kHz, 20 ms (960 frames).\n\nlayout \"layers\": channel 0 = inner layer (mono), channel 1 = outer layer (mono);\nthe Quest spatializes the inner layer at target_bearing_deg (Meta XR Audio).\nlayout \"stereo\": already-panned stereo (glasses / simple clients).",
+  "properties": {
+    "seq": {
+      "title": "Seq",
+      "type": "integer"
+    },
+    "device_ts_us": {
+      "description": "Capture time of the newest input sample used",
+      "title": "Device Ts Us",
+      "type": "integer"
+    },
+    "layout": {
+      "default": "layers",
+      "enum": [
+        "layers",
+        "stereo"
+      ],
+      "title": "Layout",
+      "type": "string"
+    },
+    "sample_rate": {
+      "const": 48000,
+      "default": 48000,
+      "title": "Sample Rate",
+      "type": "integer"
+    },
+    "channels": {
+      "const": 2,
+      "default": 2,
+      "title": "Channels",
+      "type": "integer"
+    },
+    "frames": {
+      "default": 960,
+      "title": "Frames",
+      "type": "integer"
+    },
+    "target_bearing_deg": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Bearing Deg"
+    }
+  },
+  "required": [
+    "seq",
+    "device_ts_us"
+  ],
+  "title": "AudioOut",
+  "type": "object"
+}

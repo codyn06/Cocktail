@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "TrackState": {
+      "enum": [
+        "tracking",
+        "last_seen",
+        "lost"
+      ],
+      "title": "TrackState",
+      "type": "string"
+    }
+  },
+  "description": "Target record as sent to clients.",
+  "properties": {
+    "type": {
+      "const": "target.updated",
+      "default": "target.updated",
+      "title": "Type",
+      "type": "string"
+    },
+    "target_id": {
+      "title": "Target Id",
+      "type": "string"
+    },
+    "selection_version": {
+      "title": "Selection Version",
+      "type": "integer"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "kind": {
+      "description": "\"person\" or a sound label",
+      "title": "Kind",
+      "type": "string"
+    },
+    "voice_lock_conf": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Voice Lock Conf"
+    },
+    "assoc_conf": {
+      "description": "How sure we are this object makes this sound",
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Assoc Conf",
+      "type": "number"
+    },
+    "state": {
+      "$ref": "#/$defs/TrackState"
+    },
+    "bearing_deg": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Bearing Deg"
+    }
+  },
+  "required": [
+    "target_id",
+    "selection_version",
+    "source_id",
+    "kind",
+    "assoc_conf",
+    "state"
+  ],
+  "title": "TargetUpdated",
+  "type": "object"
+}
