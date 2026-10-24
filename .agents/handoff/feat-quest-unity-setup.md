@@ -14,8 +14,9 @@ Owner: codyn06 / Claude Code   PR: not opened
 ## Verification
 - Batch-mode `-createProject` and package import on 6000.0.80f1 -> packages resolved, 0 `error CS` (mocked, editor only).
 - `ConfigureBatch` + `BuildBatch` -> 20 Project Setup fixes applied, APK built, manifest targets quest2|quest3s (mocked, no device).
-- Headset run -> untested (no headset connected).
+- Quest 3S (build 4069240017700610): APK installed via adb, OpenXR session reached FOCUSED, no crashes, user confirmed color passthrough (hardware-tested, 2026-10-24).
+- Quest 2 -> untested.
 
 ## Next steps
-- Install the APK on Quest 3S and Quest 2 and confirm passthrough (color on 3S, grayscale on 2).
+- Install the APK on Quest 2 and confirm grayscale passthrough.
 - Then add a hub `/events` WebSocket client.

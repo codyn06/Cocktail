@@ -72,4 +72,5 @@ adb install -r quest/Builds/cocktail-quest.apk
 
 - Configuration and APK build: done in batch mode, and the build succeeded (mocked: no
   device). The generated manifest has `com.oculus.supportedDevices = quest2|quest3s`.
-- On a headset: untested. No headset was connected.
+- Quest 3S: installed and running, color passthrough confirmed (hardware-tested, 2026-10-24).
+- Quest 2: untested.
