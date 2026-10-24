@@ -136,12 +136,16 @@ class LiveSeparator:
         voices[:2] = v
         residual = mono - v.sum(0)
 
-        probs = None
+        # Label scores per voice slot, computed once and reused (AST pads every clip to ~10 s,
+        # so each call is expensive). The residual is re-scored only if it changes.
+        vp = [None] * self.n_voices
+        rp = None
         if self.labeler is not None:
-            probs = self.labeler.probs([voices[0].astype(np.float32), voices[1].astype(np.float32),
-                                        residual.astype(np.float32)])
+            p1 = self.labeler.probs([voices[0].astype(np.float32), voices[1].astype(np.float32),
+                                     residual.astype(np.float32)])
+            vp[0], vp[1], rp = p1[0], p1[1], p1[2]
         run2 = self.second_pass == "always" or (
-            self.second_pass == "auto" and self._is_speech(probs[2], self.residual_speech_min))
+            self.second_pass == "auto" and self._is_speech(rp, self.residual_speech_min))
         if run2:  # the residual still holds a voice: separate it again
             gates["second_pass"] = True
             w = self._fit(self.sep(residual), residual)
@@ -160,14 +164,19 @@ class LiveSeparator:
             for k in keep:  # only voices leave the residual; music etc. stays in it
                 voices[2 + k] = w[k]
                 residual = residual - w[k]
+                if self.labeler is not None:
+                    vp[2 + k] = pw[k]
+            if keep:
+                rp = None  # residual changed
 
         # Speech gate: a voice slot that doesn't sound like speech belongs to the residual.
         if self.labeler is not None and self.speech_min > 0:
-            pv = self.labeler.probs([voices[k].astype(np.float32) for k in range(self.n_voices)])
             for k in range(self.n_voices):
-                if np.any(voices[k]) and not self._is_speech(pv[k], self.speech_min):
+                if np.any(voices[k]) and vp[k] is not None and not self._is_speech(vp[k], self.speech_min):
                     residual = residual + voices[k]
                     voices[k] = 0.0
+                    vp[k] = None
+                    rp = None
                     gates["to_residual"].append(k)
 
         est = np.concatenate([voices, residual[None]])
@@ -177,7 +186,11 @@ class LiveSeparator:
         self.last_gates = gates
         p = None
         if self.labeler is not None:
-            p = self.labeler.probs([out[k, 0].astype(np.float32) for k in range(self.n_streams)])
+            if rp is None:
+                rp = self.labeler.probs([residual.astype(np.float32)])[0]
+            silent = np.zeros_like(p1[0])  # empty slot: no evidence for any label
+            p = np.stack([vp[k] if vp[k] is not None and np.any(voices[k]) else silent
+                          for k in range(self.n_voices)] + [rp])
         return out, p
 
     def _match_order(self, out: np.ndarray, p):

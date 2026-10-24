@@ -1,7 +1,8 @@
 """GPU models for live separation (task C3). Needs `uv sync --group gpu`.
 
 - VoiceSeparator: MossFormer2_SS_16K (ClearerVoice-Studio, Apache-2.0), 2 voices at 16 kHz.
-  Chosen in A6: 714 MiB peak, RTF ~0.13 on the RTX 5070 Ti Laptop (docs/STATUS.md).
+  Chosen in A6: 714 MiB peak, RTF ~0.13 on the RTX 5070 Ti Laptop (docs/STATUS.md). Runs in bf16
+  by default: ~1.5x faster, separation within 0.3 dB of fp32 on the scenario suite.
 - SoundLabeler: AST fine-tuned on AudioSet (MIT/ast-finetuned-audioset-10-10-0.4593, BSD-3),
   527 classes, mapped to coarse labels.
 """
@@ -17,17 +18,18 @@ SR = 16000
 class VoiceSeparator:
     n_out = 2
 
-    def __init__(self, device: str = "cuda"):
+    def __init__(self, device: str = "cuda", bf16: bool = True):
         from clearvoice import ClearVoice
 
-        self.device = device
+        self.device, self.bf16 = device, bf16
         self.net = ClearVoice(task="speech_separation", model_names=["MossFormer2_SS_16K"]).models[0].model
         self.net.to(device).eval()
 
     @torch.inference_mode()
     def __call__(self, x: np.ndarray) -> np.ndarray:
         """x: (n,) float32 mono at 16 kHz -> (2, n) voice estimates (arbitrary scale)."""
-        out = self.net(torch.from_numpy(np.ascontiguousarray(x, np.float32))[None].to(self.device))
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.bf16):
+            out = self.net(torch.from_numpy(np.ascontiguousarray(x, np.float32))[None].to(self.device))
         return np.stack([o.squeeze().float().cpu().numpy()[: len(x)] for o in out])
 
 

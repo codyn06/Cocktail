@@ -143,10 +143,11 @@ def main():
     ap.add_argument("--out", default="sessions/suite", type=Path)
     ap.add_argument("--no-labels", action="store_true")
     ap.add_argument("--win", type=float, default=4.0, help="window seconds (hop = half)")
+    ap.add_argument("--fp32", action="store_true", help="separator in full precision (default bf16)")
     a = ap.parse_args()
     from .models import SoundLabeler, VoiceSeparator
 
-    live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler(), win_s=a.win)
+    live = LiveSeparator(VoiceSeparator(bf16=not a.fp32), None if a.no_labels else SoundLabeler(), win_s=a.win)
     ids = [int(x) for x in a.only.split(",")] if a.only else list(SCENES)
     results = {}
     for sid in ids:

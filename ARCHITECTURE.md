@@ -88,7 +88,7 @@ The mock headset (`hub/mockclient`) replaces the left column for testing without
 
 | Model | Use | GPU memory | Speed |
 |---|---|---|---|
-| MossFormer2 + AST labels | live separation (C3) | ~1.1 GB | ~460 ms per 1 s hop |
+| MossFormer2 (bf16, 2 passes) + AST labels | live separation (C3) | ~1.3 GB | ~1.5 s per 2 s hop |
 | SAM 3 image model | outlines (C5) | ~4.0 GB | ~320 ms per frame + ~80 ms per prompt |
 | SAM Audio small-tv, core parts only | replay (D3 task) | ~4.4 GB peak | ~2.1 s per 5 s clip per sound |
 | Gemma 4 E2B, 4-bit | later | 2.9 GB + KV cache (official table) | not measured |
@@ -97,42 +97,42 @@ The mock headset (`hub/mockclient`) replaces the left column for testing without
 - **SAM Audio fully loaded takes 22.3 GB.** Only its core parts may go on the GPU (D10).
 - **Full-precision Gemma, SAM Audio base/large, and the SAM 3.1 tracker don't fit or don't work** (D9).
 
-### D7. Live separation: MossFormer2 on sliding windows, the residual is "everything else"
-**Merged** (PR #19, A6/C3; hardware-tested on simulated audio).
-- **How it works:**
-  - MossFormer2_SS_16K (Apache-2.0) splits two voices from 2 s windows every 1 s.
-  - Overlapping halves are cross-faded, and voice order is kept by matching the overlap.
-  - Stream 3 is the mix minus the two voices: music and other sounds.
-- **Labels:** AST (AudioSet, 527 classes) labels each stream, mapped to speech / music /
-  alarm / siren / other and smoothed across hops.
-- **Results:**
-  - **+17.8 / +17.1 / +17.5 dB** on a simulated 2 talkers + music scene; the target was +8 dB.
-  - Labels correct.
-  - A listening check confirmed the voices are well separated.
-- **Why MossFormer2:** best measured quality of the candidates. Waveformer has no speech or
-  general music class; GTCRN only enhances speech. It's fast enough for 1 s hops on this GPU.
-- **One talker, or none:** MossFormer2 always outputs two voices, so with a single talker it
-  splits that person across both voice streams. Two gates fix this (PR #26):
-  - **Direction gate:** if the two voice streams arrive from the same direction (their
-    left/right level differences, 1–8 kHz, differ by less than 4.5 dB), they're one source.
-    The voice is merged into the slot it already occupied.
-  - **Speech gate:** a voice stream that doesn't sound like speech moves into the residual.
-- **Why direction:** level correlation and voice fingerprints (WavLM speaker embeddings) were
-  measured first and couldn't tell one split talker from two real ones, including a
-  same-gender pair.
+### D7. Live separation: MossFormer2 on 4 s windows, a second pass for 3+ voices
+**Merged** (PRs #19, #26; this PR for 3+ voices; hardware-tested on simulated audio).
+- **How it works (every 2 s, on the last 4 s):**
+  - MossFormer2_SS_16K (Apache-2.0, bf16) splits two voices; the residual is the mix minus them.
+  - **Direction gate:** two outputs that arrive from the same direction (left/right level
+    differences within 4.5 dB, 1–8 kHz) are one talker split in two and get merged.
+  - **Second pass:** if the residual still sounds like speech, it's separated again. Clear voices
+    found there get their own slots; music and other sounds stay in the residual.
+  - **Speech gate:** a voice slot that doesn't sound like speech moves into the residual.
+  - **Order matching:** all streams are matched to the previous window (Hungarian assignment
+    on overlap similarity, ignoring streams 30 dB below the total), so each source keeps its
+    stream.
+  - Streams: up to 4 voice slots plus the residual. AST labels each one (speech / music /
+    alarm / siren / other), smoothed across hops.
+- **Scenario suite** (`python -m separate.suite`, 11 simulated scenes):
+  - two talkers, including two men and music louder than speech: +17 to +22 dB;
+  - **three talkers: +18.5 / +11.3 / +13.3 dB; three talkers + music: +18.8 / +16.7 / +17.0,
+    music +20.5** (2 s windows without a second pass: +6.5 / +8.0 / +1.6);
+  - one talker: +8 to +16 dB in a single stream;
+  - music only: stays whole in the residual;
+  - a listening check confirmed the voices are well separated.
+- **Why 4 s windows:** separation of 3+ voices is much better than with 2 s. The scope is live
+  segmentation (labeled streams, not playback), so ~2 s of delay is acceptable.
+- **Speed:** ~1.5 s of compute per 2 s hop live (bf16, ~25% headroom), ~1.3 GB GPU. fp32 or 2 s
+  windows with the second pass don't keep up in real time on this GPU.
+- **Why direction for the one-talker case:** level correlation and voice fingerprints (WavLM
+  speaker embeddings) were measured and couldn't tell one split talker from two real ones.
 - **The separator does not decide identity across pauses.** It keeps a voice in its stream
   while it continues; whether the next voice after a pause is the same person is tracking's
-  job (D1), using world bearing (D8). Head-relative directions drift as the head turns, so a
-  direction memory inside the separator made single talkers hop between streams.
-- **Scenario suite** (`python -m separate.suite`, 11 simulated scenes):
-  - two talkers, including two men and music louder than the speech: +17 to +22 dB;
-  - one talker: +9 to +16 dB in a single stream;
-  - three voices: the third ends up in the residual.
+  job (D1), using world bearing (D8).
 - **Limits:**
-  - About 1–2 s of delay: fine for labeling and locating, too slow for live listening.
-  - At most 2 voices, plus 1 residual.
+  - About 2 s of delay: fine for segmentation, labels and locating, too slow for live listening.
+  - At most 4 voices.
   - Two talkers standing in the same direction get merged.
   - The 4.5 dB threshold is tuned for ear-level mics and needs re-tuning on the 3S.
+  - The residual can be labeled "speech" from faint voice leftovers.
   - Clean read speech in the tests, so expect lower scores on real room audio.
 
 ### D8. Locating: bearing from natural head movement, using per-mic levels of each stream
