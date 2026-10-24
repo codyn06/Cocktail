@@ -57,6 +57,11 @@ async def ws_audio(ws: WebSocket) -> None:
             hdr, pcm = p.unpack(data, p.AudioChunk)
             if hdr.sample_format != "s16le":
                 continue
+            if S["last_audio_ts_us"] is not None and hdr.device_ts_us < S["last_audio_ts_us"] - 2_000_000:
+                # the app restarted (its clock restarted from 0): keep only the new session
+                print("[audio] headset clock restarted; discarding the earlier session")
+                S["audio"], S["audio_frames"], S["audio_rate"] = [], 0, None
+                S["pose"] = []
             if S["audio_rate"] is None:
                 S["audio_rate"], S["audio_ch"], S["first_audio_ts_us"] = hdr.sample_rate, hdr.channels, hdr.device_ts_us
                 S["t_first_wall"] = time.monotonic()
@@ -93,6 +98,8 @@ async def ws_pose(ws: WebSocket) -> None:
                 S["hello"] = m.model_dump()
             elif isinstance(m, p.PoseSample):
                 q = m.rot_xyzw
+                if S["pose"] and m.device_ts_us < S["pose"][-1][0] - 2_000_000:
+                    S["pose"] = []  # app restarted: new clock
                 S["pose"].append((m.device_ts_us, q[0], q[1], q[2], q[3]))
     except (WebSocketDisconnect, RuntimeError):
         pass

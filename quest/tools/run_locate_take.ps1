@@ -68,13 +68,13 @@ foreach ($truth in $Truths) {
 
     $rec = Start-Process uv -ArgumentList "run","--project","hub","python","quest/tools/record_session.py","--out",$out,"--truth",$truth,"--noise-until",$NoiseUntil,"--go-at",$GoAt,"--stop-at",$StopAt -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds 5
-    # (re)start the headset app so it connects to the recorder
-    & $Adb shell am force-stop $pkg | Out-Null
+    # start the headset app if it is not running (if it is, it reconnects to the recorder by itself;
+    # restarting it would reset its clock mid-recording)
     & $Adb shell am start -n $act -e hub_host 127.0.0.1 -e micsrc unprocessed -e micch 2 | Out-Null
     $t0 = $null
     for ($i = 0; $i -lt 60 -and -not $t0; $i++) {
         Start-Sleep -Milliseconds 500
-        try { $h = Invoke-RestMethod "http://localhost:$Port/health" -TimeoutSec 2; if ($h.audio_frames -gt 0) { $t0 = Get-Date } } catch {}
+        try { $h = Invoke-RestMethod "http://localhost:$Port/health" -TimeoutSec 2; if ($h.audio_frames -gt 4800) { $t0 = (Get-Date).AddSeconds(-0.1) } } catch {}
     }
     if (-not $t0) { Write-Host "No audio reached the recorder in 30 s. Is the headset on and the app running?" -ForegroundColor Red; $rec | Stop-Process -Force -ErrorAction SilentlyContinue; continue }
     Start-Sleep -Seconds $NoiseUntil

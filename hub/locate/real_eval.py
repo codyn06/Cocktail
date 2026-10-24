@@ -103,6 +103,9 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True)
     e = est.estimate("src")
 
     motion = (pt >= go) & (pt <= stop) if (go and stop) else np.ones_like(pt, bool)
+    if not motion.any():  # no head pose during the turn phase (clock/recording problem)
+        motion = np.ones_like(pt, bool)
+        print("WARNING: no head-pose samples inside the turn phase; recording timing looks wrong")
     res = {
         "seconds": len(mono) / rate, "yaw_min": float(yaw[motion].min()), "yaw_max": float(yaw[motion].max()),
         "yaw_std": float(yaw[motion].std()), "active_frac": float(weight[in_win].mean()) if in_win.any() else 0.0,
