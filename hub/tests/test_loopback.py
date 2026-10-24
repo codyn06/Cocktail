@@ -24,12 +24,24 @@ def test_loopback_end_to_end():
                 headers.append(header)
         assert [h.seq for h in headers] == list(range(9))
         assert [h.ref_seq for h in headers] == sorted(h.ref_seq for h in headers)
-        assert all(h.pts_us == h.ref_seq * 20_000 for h in headers)
+        # each frame's timestamp is its own first sample: ~20 ms apart, off by the resampler's sub-ms lag
+        assert all(abs(h.pts_us - h.seq * 20_000) < 200 for h in headers)
         stats = client.get("/stats").json()
         assert stats["chunks_in"] == 10
         assert stats["seq_gaps"] == 0
         assert stats["frames_out"] == 9
         assert stats["format"]["chunk_ms"] == 20
+
+
+def test_long_chunk_is_not_dropped():
+    # a 4096-sample iOS-style tap at 16 kHz is 256 ms, i.e. 12 out frames at once
+    pcm = np.zeros(4096, "<i2").tobytes()
+    with TestClient(create_app()) as client:
+        with client.websocket_connect("/audio/out") as out, client.websocket_connect("/ingest/audio") as ingest:
+            ingest.send_bytes(protocol.pack(AudioHeader(0, 1, 0, 16_000, 1), pcm))
+            pts = [protocol.unpack(out.receive_bytes())[0].pts_us for _ in range(12)]
+        assert pts == [20_000 * i for i in range(12)]
+        assert client.get("/stats").json()["frames_dropped"] == 0
 
 
 def test_counts_gaps_and_bad_messages():

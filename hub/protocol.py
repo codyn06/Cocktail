@@ -8,14 +8,15 @@ interleaved PCM samples:
     4      1    version        1
     5      1    sample_format  1 = int16, 2 = float32
     6      2    channels       >= 1
-    8      4    sample_rate    Hz
-    12     4    seq            per-stream counter, +1 per message
-    16     4    epoch          bumped by the sender on every reconnect
-    20     8    pts_us         glasses presentation timestamp (microseconds)
+    8      8    pts_us         glasses timestamp of the first sample (microseconds)
+    16     4    sample_rate    Hz
+    20     4    seq            per-stream counter, +1 per message
+    24     4    epoch          bumped by the sender on every reconnect
     28     4    ref_seq        out frames: seq of the newest input chunk inside; in: 0
 
-Out frames reuse the epoch and pts_us of the input chunk named by ref_seq, so the
-phone can relate what it plays back to the glasses timestamp it came from.
+Every field sits at a multiple of its own size. Out frames carry the glasses
+timestamp of their own first sample, so the phone can relate what it plays back to
+when the glasses heard it.
 """
 
 import struct
@@ -28,7 +29,7 @@ FMT_FLOAT32 = 2
 SAMPLE_BYTES = {FMT_INT16: 2, FMT_FLOAT32: 4}
 MIN_RATE, MAX_RATE = 8_000, 96_000
 
-_HEADER = struct.Struct("<4sBBHIIIqI")
+_HEADER = struct.Struct("<4sBBHqIIII")
 HEADER_SIZE = _HEADER.size  # 32
 
 
@@ -59,10 +60,10 @@ def pack(header: AudioHeader, payload: bytes) -> bytes:
             VERSION,
             header.sample_format,
             header.channels,
+            header.pts_us,
             header.sample_rate,
             header.seq,
             header.epoch,
-            header.pts_us,
             header.ref_seq,
         )
         + payload
@@ -72,7 +73,7 @@ def pack(header: AudioHeader, payload: bytes) -> bytes:
 def unpack(data: bytes) -> tuple[AudioHeader, memoryview]:
     if len(data) < HEADER_SIZE:
         raise FrameError(f"message is {len(data)} bytes, shorter than the {HEADER_SIZE}-byte header")
-    magic, version, fmt, channels, rate, seq, epoch, pts_us, ref_seq = _HEADER.unpack_from(data)
+    magic, version, fmt, channels, pts_us, rate, seq, epoch, ref_seq = _HEADER.unpack_from(data)
     if magic != MAGIC:
         raise FrameError(f"bad magic {magic!r}")
     if version != VERSION:

@@ -17,7 +17,7 @@ def decode(header: AudioHeader, payload) -> np.ndarray:
     if header.sample_format == FMT_INT16:
         x = np.frombuffer(payload, dtype="<i2").astype(np.float32) / 32768.0
     else:
-        x = np.frombuffer(payload, dtype="<f4").astype(np.float32)
+        x = np.nan_to_num(np.frombuffer(payload, dtype="<f4"), nan=0.0, posinf=1.0, neginf=-1.0)
     return x.reshape(-1, header.channels)
 
 
@@ -62,14 +62,19 @@ class StreamingResampler:
 @dataclass(frozen=True)
 class OutFrame:
     pcm: bytes  # FRAME_SAMPLES x 2 int16, little-endian, interleaved
+    pts_us: int  # glasses timestamp of this frame's first sample
+    epoch: int
     ref_seq: int  # newest input chunk whose samples are in this frame
-    ref_epoch: int
-    ref_pts_us: int
-    ref_recv_ns: int  # hub monotonic time that chunk arrived
+    newest_recv_ns: int  # hub monotonic time that chunk arrived (frame became complete)
+    oldest_recv_ns: int  # hub monotonic time the chunk holding the first sample arrived
 
 
 class Framer:
-    """Collects 48 kHz stereo samples and emits fixed 20 ms int16 frames."""
+    """Collects 48 kHz stereo samples and emits fixed 20 ms int16 frames.
+
+    Sample timestamps map from the chunk that produced them; the resampler's one
+    input sample of delay (<= 125 us) is ignored.
+    """
 
     def __init__(self):
         self._buf = np.zeros((0, OUT_CHANNELS), np.float32)
@@ -85,11 +90,25 @@ class Framer:
         frames = []
         while len(self._buf) >= FRAME_SAMPLES:
             end = self._base + FRAME_SAMPLES
-            while len(self._tags) >= 2 and self._tags[1][0] < end:
+            while len(self._tags) >= 2 and self._tags[1][0] <= self._base:
                 self._tags.popleft()
-            _, header, recv_ns = self._tags[0]
+            first_start, first, first_recv_ns = self._tags[0]
+            newest, newest_recv_ns = first, first_recv_ns
+            for start, header, recv_ns in self._tags:
+                if start >= end:
+                    break
+                newest, newest_recv_ns = header, recv_ns
             pcm = np.round(np.clip(self._buf[:FRAME_SAMPLES], -1.0, 1.0) * 32767).astype("<i2")
-            frames.append(OutFrame(pcm.tobytes(), header.seq, header.epoch, header.pts_us, recv_ns))
+            frames.append(
+                OutFrame(
+                    pcm.tobytes(),
+                    pts_us=first.pts_us + (self._base - first_start) * 1_000_000 // OUT_RATE,
+                    epoch=newest.epoch,
+                    ref_seq=newest.seq,
+                    newest_recv_ns=newest_recv_ns,
+                    oldest_recv_ns=first_recv_ns,
+                )
+            )
             self._buf = self._buf[FRAME_SAMPLES:]
             self._base = end
         return frames

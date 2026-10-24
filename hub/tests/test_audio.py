@@ -43,10 +43,25 @@ def test_framer_tags_newest_chunk():
     f.push(np.zeros((600, 2), np.float32), h[1], 200)  # frame 0 ends inside this chunk
     f.push(np.zeros((600, 2), np.float32), h[2], 300)
     frames = f.pop_frames()
-    assert [(fr.ref_seq, fr.ref_recv_ns) for fr in frames] == [(1, 200)]
+    assert [(fr.ref_seq, fr.newest_recv_ns, fr.oldest_recv_ns, fr.pts_us) for fr in frames] == [(1, 200, 100, 0)]
     assert len(frames[0].pcm) == FRAME_SAMPLES * 2 * 2
     f.push(np.zeros((600, 2), np.float32), AudioHeader(3, 1, 3000, 48_000, 2), 400)
-    assert [fr.ref_seq for fr in f.pop_frames()] == [3]
+    # frame 1 starts 360 samples (7500 us) into chunk 1
+    assert [(fr.ref_seq, fr.oldest_recv_ns, fr.pts_us) for fr in f.pop_frames()] == [(3, 200, 1000 + 7500)]
+
+
+def test_frames_from_one_long_chunk_get_their_own_timestamps():
+    f = Framer()
+    f.push(np.zeros((FRAME_SAMPLES * 5, 2), np.float32), AudioHeader(0, 1, 1_000_000, 48_000, 2), 0)
+    assert [fr.pts_us for fr in f.pop_frames()] == [1_000_000 + 20_000 * i for i in range(5)]
+
+
+def test_float32_nan_and_inf_become_silence_and_clip():
+    p = LoopbackPipeline()
+    x = np.zeros(FRAME_SAMPLES, "<f4")
+    x[:3] = [np.nan, np.inf, -np.inf]
+    pcm = np.frombuffer(p.process(AudioHeader(0, 1, 0, 48_000, 1, FMT_FLOAT32), x.tobytes(), 0)[0].pcm, "<i2")
+    assert pcm[:6].tolist() == [0, 0, 32767, 32767, -32767, -32767]
 
 
 def test_pipeline_mono_float32_to_stereo_int16():

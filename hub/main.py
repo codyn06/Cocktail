@@ -15,7 +15,9 @@ from hub.stats import LoopbackStats
 
 log = logging.getLogger("hub")
 
-OUT_QUEUE_FRAMES = 5  # 100 ms per listener; older frames are dropped beyond this
+# Per-listener backlog cap: 100 ms, or one whole input chunk if that is longer, so a
+# large chunk (e.g. a 4096-sample iOS tap) never evicts its own frames.
+OUT_QUEUE_FRAMES = 5
 
 
 class Hub:
@@ -26,26 +28,29 @@ class Hub:
         self.ingest_gen = 0  # a new ingest connection takes over from the old one
         self.out_seq = 0
 
-    def publish(self, frame: OutFrame) -> None:
-        self.stats.frames_out += 1
+    def publish(self, frames: list[OutFrame]) -> None:
+        """Queue the frames made from one input chunk for every listener."""
+        self.stats.frames_out += len(frames)
         if not self.listeners:
-            self.stats.frames_unheard += 1
+            self.stats.frames_unheard += len(frames)
             return
-        header = protocol.AudioHeader(
-            seq=self.out_seq,
-            epoch=frame.ref_epoch,
-            pts_us=frame.ref_pts_us,
-            sample_rate=OUT_RATE,
-            channels=OUT_CHANNELS,
-            ref_seq=frame.ref_seq,
-        )
-        self.out_seq += 1
-        item = (protocol.pack(header, frame.pcm), frame.ref_recv_ns)
-        for q in self.listeners:
-            if q.full():
-                q.get_nowait()
-                self.stats.frames_dropped += 1
-            q.put_nowait(item)
+        cap = max(OUT_QUEUE_FRAMES, len(frames))
+        for frame in frames:
+            header = protocol.AudioHeader(
+                seq=self.out_seq,
+                epoch=frame.epoch,
+                pts_us=frame.pts_us,
+                sample_rate=OUT_RATE,
+                channels=OUT_CHANNELS,
+                ref_seq=frame.ref_seq,
+            )
+            self.out_seq += 1
+            item = (protocol.pack(header, frame.pcm), frame.newest_recv_ns, frame.oldest_recv_ns)
+            for q in self.listeners:
+                if q.qsize() >= cap:
+                    q.get_nowait()
+                    self.stats.frames_dropped += 1
+                q.put_nowait(item)
 
 
 async def _wait_disconnect(ws: WebSocket) -> None:
@@ -95,32 +100,37 @@ def create_app() -> FastAPI:
                 hub.stats.on_chunk(header, len(payload) // header.frame_bytes, recv_ns)
                 frames = hub.pipeline.process(header, payload, recv_ns)
                 hub.stats.process_ms.append((time.monotonic_ns() - recv_ns) / 1e6)
-                for frame in frames:
-                    hub.publish(frame)
+                hub.publish(frames)
         except WebSocketDisconnect:
             pass
 
     @app.websocket("/audio/out")
     async def audio_out(ws: WebSocket):
-        q: asyncio.Queue = asyncio.Queue(maxsize=OUT_QUEUE_FRAMES)
+        q: asyncio.Queue = asyncio.Queue()  # bounded by Hub.publish
         hub.listeners.add(q)  # before accept, so frames are queued once the client is connected
+        closed = get = None
         try:
             await ws.accept()
             closed = asyncio.create_task(_wait_disconnect(ws))
+            get = asyncio.create_task(q.get())
             while True:
-                get = asyncio.create_task(q.get())
                 done, _ = await asyncio.wait({get, closed}, return_when=asyncio.FIRST_COMPLETED)
                 if closed in done:
-                    get.cancel()
                     return
-                data, ref_recv_ns = get.result()
+                data, newest_recv_ns, oldest_recv_ns = get.result()
+                get = asyncio.create_task(q.get())
                 await ws.send_bytes(data)
+                now = time.monotonic_ns()
                 hub.stats.frames_sent += 1
-                hub.stats.hub_latency_ms.append((time.monotonic_ns() - ref_recv_ns) / 1e6)
-        except WebSocketDisconnect:
-            pass
+                hub.stats.hub_latency_ms.append((now - newest_recv_ns) / 1e6)
+                hub.stats.hub_hold_ms.append((now - oldest_recv_ns) / 1e6)
+        except (WebSocketDisconnect, RuntimeError, OSError):
+            pass  # client went away mid-send
         finally:
             hub.listeners.discard(q)
+            for task in (get, closed):
+                if task is not None:
+                    task.cancel()
 
     return app
 

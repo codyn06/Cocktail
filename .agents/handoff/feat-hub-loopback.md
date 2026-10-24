@@ -13,10 +13,18 @@ Owner: Lalithaaaa / Claude Code   PR: see `gh pr list --head feat/hub-loopback`
 - Output is fixed at int16 stereo 48 kHz, 20 ms frames, as the PRD's `/audio/out` says.
 - A new `/ingest/audio` connection replaces the old one (reconnect), and resets the
   pipeline and sequence tracking.
-- 100 ms per-listener out queue, drop oldest: delay never builds up.
+- Per-listener backlog cap of 100 ms or one input chunk, whichever is longer, drop
+  oldest: delay can't build up, and a long chunk never evicts its own frames.
+- Out frame `pts_us` is the glasses time of the frame's own first sample.
+- Reviewer pass done; fixed: burst drops on chunks > 100 ms (reproduced: 250 ms chunks
+  lost 89 of 150 frames), unaligned int64 header field, per-frame timestamps, task
+  cleanup in /audio/out, NaN/Inf float input. Not done (low priority): closing a stalled
+  old ingest socket on takeover; telling the phone why a bad frame was dropped.
 
 ## Verification
-- `.venv/Scripts/python -m pytest hub` -> 18 passed (mocked)
+- `.venv/Scripts/python -m pytest hub` -> 22 passed (mocked)
+- phone_sim 3 s at 20 / 100 / 250 ms chunks -> 149/150 frames each, 0 dropped; round
+  trip p50 1.7 / 4.1 / 6.4 ms (mocked, localhost)
 - `uvicorn hub.main:app` + `python -m mock.phone_sim --seconds 10` -> 500 chunks in,
   499 frames out, 0 gaps / drops; round trip on localhost p50 2.4 ms, p95 3.2 ms;
   hub_latency p50 1.3 ms (mocked, localhost, Windows 11)

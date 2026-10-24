@@ -40,6 +40,9 @@ class LoopbackStats:
         self.process_ms: deque[float] = deque(maxlen=WINDOW)
         # newest input chunk in a frame received -> frame handed to the socket
         self.hub_latency_ms: deque[float] = deque(maxlen=WINDOW)
+        # chunk holding a frame's first sample received -> frame handed to the socket;
+        # includes waiting for the rest of the frame (up to 20 ms, or more with long chunks)
+        self.hub_hold_ms: deque[float] = deque(maxlen=WINDOW)
         self._prev: tuple[AudioHeader, int, float] | None = None  # header, recv_ns, duration_ms
 
     def on_connect(self) -> None:
@@ -84,4 +87,5 @@ class LoopbackStats:
             "arrival_jitter": _summary(self.arrival_jitter_ms),
             "process": _summary(self.process_ms),
             "hub_latency": _summary(self.hub_latency_ms),
+            "hub_hold": _summary(self.hub_hold_ms),
         }

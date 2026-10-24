@@ -46,14 +46,20 @@ Every binary message is a 32-byte little-endian header, then interleaved PCM. De
 | 4 | 1 | version | `1` |
 | 5 | 1 | sample_format | `1` int16, `2` float32 |
 | 6 | 2 | channels | |
-| 8 | 4 | sample_rate | Hz |
-| 12 | 4 | seq | +1 per message |
-| 16 | 4 | epoch | sender bumps it on every reconnect |
-| 20 | 8 | pts_us | glasses presentation timestamp, µs |
+| 8 | 8 | pts_us | glasses timestamp of the first sample, µs (signed) |
+| 16 | 4 | sample_rate | Hz |
+| 20 | 4 | seq | +1 per message |
+| 24 | 4 | epoch | sender bumps it on every reconnect |
 | 28 | 4 | ref_seq | out frames: newest input chunk in the frame; in: 0 |
 
-Out frames carry the `epoch` and `pts_us` of the input chunk in `ref_seq`, so the phone
-can match what it plays to when the glasses heard it.
+Every field is aligned to its own size. Out frames carry the glasses timestamp of their
+own first sample, so the phone can match what it plays to when the glasses heard it. A
+gap in out `seq` means frames were dropped for that listener.
+
+Any chunk size works; a long chunk (e.g. a 4096-sample iOS tap) arrives as a burst of
+back-to-back 20 ms frames, so the phone needs its own small playout buffer. Text
+messages on `/ingest/audio` close it with code 1003; malformed binary messages are
+dropped and counted in `bad_messages`.
 
 ## What `/stats` measures
 
@@ -62,6 +68,9 @@ can match what it plays to when the glasses heard it.
   adds several ms.
 - `process`: chunk received -> resampled and framed.
 - `hub_latency`: newest input chunk in a frame received -> frame written to the socket.
+  A lower bound on what the hub adds.
+- `hub_hold`: chunk holding the frame's first sample received -> frame written. Adds the
+  wait for the rest of the 20 ms frame (longer with long input chunks).
 - `seq_gaps`, `out_of_order`, `bad_messages`, `frames_dropped`, `frames_unheard`
   (frames made while nobody was listening).
 

@@ -29,6 +29,12 @@ def test_rejects_malformed(mutate, message):
         protocol.unpack(mutate(data))
 
 
+def test_fields_are_naturally_aligned():
+    data = protocol.pack(AudioHeader(seq=1, epoch=2, pts_us=-3, sample_rate=16_000, channels=1, ref_seq=4), b"")
+    assert int.from_bytes(data[8:16], "little", signed=True) == -3
+    assert [int.from_bytes(data[o : o + 4], "little") for o in (16, 20, 24, 28)] == [16_000, 1, 2, 4]
+
+
 def test_rejects_out_of_range_rate():
     with pytest.raises(FrameError, match="sample_rate"):
         protocol.unpack(protocol.pack(AudioHeader(0, 0, 0, 1_000, 1), b""))
