@@ -96,6 +96,13 @@ def score_scene(sess: Session, live: LiveSeparator) -> dict:
     live.reset()
     mix, est, labels = run_session(sess, live)
     n = min(len(mix), *(len(v) for v in est.values()))
+    lab = {sid: max(set(v), key=v.count) for sid, v in labels.items()}
+    od = sess.path.parent / "out"  # what to listen to: the mix and every output stream
+    od.mkdir(exist_ok=True)
+    peak = max(np.abs(mix[:n]).max(), 1e-9)
+    wavfile.write(od / "mix.wav", SR, (mix[:n] / peak * 0.9).astype(np.float32))
+    for sid, e in est.items():  # same scale as the mix, so a quiet stream really is quiet
+        wavfile.write(od / f"{sid}_{lab[sid]}.wav", SR, np.clip(e[:n] / peak * 0.9, -1, 1).astype(np.float32))
     refs = {}
     for q in sess.meta["sources"]:
         r = wavfile.read(sess.path / q["stem"])[1].astype(np.float32)[:n]
