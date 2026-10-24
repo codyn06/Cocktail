@@ -49,10 +49,13 @@ Trivial tasks: write a brief plan and do them directly.
 - Each feature has one orchestrator. Before parallel work, agree on a team integration
   owner for shared interfaces and `.agents/decisions.md`; only that owner approves
   changes to them. Subagents return handoff notes to their orchestrator.
-- Separate worktrees do not isolate hardware. Before using a shared headset, glasses,
-  or GPU exclusively, check and claim it in a GitHub issue labelled `hardware`
-  (`gh issue list --label hardware`) and release it when done; branch files cannot
-  coordinate this because other branches do not see them.
+- Separate worktrees do not isolate hardware. Agree on one reservation owner per
+  shared headset, glasses, or GPU. Before exclusive use, obtain that owner's explicit
+  acknowledgment in team chat or a GitHub issue labelled `hardware`; the owner grants
+  one reservation at a time and confirms release with the current holder before
+  granting the next. An unanswered request or apparently empty issue is not a grant.
+  Tell the owner when done. Branch files are notes, not live reservations. Agents
+  without permission to message the team ask the user to coordinate the reservation.
 - Read-only roles may run bounded inspection commands (`rg`, file reads, `git status`,
   `git diff`, `git show`) and retrieve public official documentation without saving it.
   They must not mutate files, install software, execute repository code, or run tests
@@ -107,11 +110,16 @@ current branch and PR; do not restart the branch workflow for each agent subtask
   `feat(perception): add SAM3 image prompt wrapper`. Make small focused commits, and
   never commit secrets, `.env` files, checkpoints, or large binaries.
 - **Scope:** one feature per branch and PR. Unrelated fixes get their own branch.
-- **Before opening a PR:** rebase on or merge the latest target branch, run the
+- **Draft PRs:** open early with `gh pr create --draft --base <target>` to show work
+  in progress. Checks and review may still be pending; state that clearly and keep
+  the branch handoff available throughout development and review.
+- **Before marking a PR ready for review (or opening a non-draft PR):** rebase on or
+  merge the latest target branch, run the
   relevant checks (and `node .agents/scripts/sync.mjs --check` if `.agents/` or
-  `AGENTS.md` changed), and get a `reviewer` pass for non-trivial changes. Move
-  durable decisions from the branch handoff file into `.agents/decisions.md` or the
-  PR body, then delete the handoff file.
+  `AGENTS.md` changed), and get a `reviewer` pass for non-trivial changes.
+- **When preparing to merge:** move durable decisions from the branch handoff file
+  into `.agents/decisions.md` or the PR body, then delete the handoff file in that PR.
+  Re-run checks affected by final edits. A human still approves and merges.
 - **Open the PR** with `gh pr create --base <target>`, using a Conventional Commit
   title. The body covers: summary, linked issue (if any), checks actually run with
   results, evidence labels (hardware-tested / mocked / replayed / untested), and

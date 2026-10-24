@@ -6,6 +6,8 @@ branch's orchestrator edits it, so parallel branches never conflict.
 
 - Create it on the feature branch when a substantive task starts; commit it with the work
   so any tool can resume from the branch.
+- Keep it through draft PRs, active development, and review; opening a PR is not a
+  reason to delete it.
 - Before merging: move durable decisions into `.agents/decisions.md` (or the PR body)
   and delete the file in the same PR. `main` should hold only this README.
 - No secrets, credentials, or conversation transcripts.
@@ -16,7 +18,7 @@ branch's orchestrator edits it, so parallel branches never conflict.
 # <branch>
 Status: <in progress | blocked | ready for review> (<date>)
 Owner: <person / orchestrating tool>   PR: <link or "not opened">
-Hardware in use: <none | device, reserved via issue #N>
+Hardware in use: <none | device, reservation owner, acknowledgment in chat/issue>
 
 ## Ownership
 - <task> -> <role/agent>: <files>

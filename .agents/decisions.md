@@ -17,8 +17,9 @@ status and device reservations do not belong here (see `AGENTS.md` > Continuity)
 - Project fallbacks cover unavailable metavr/TDD tooling without modifying vendored skills.
 - Project-local dependency installs follow one policy; global installs and gated
   downloads still need approval.
-- Task handoffs are per branch in `.agents/handoff/`; live status and hardware
-  reservations are tracked in GitHub (draft PRs / issues), not in git files.
+- Task handoffs are per branch in `.agents/handoff/`; live task status is tracked in
+  GitHub draft PRs. Hardware reservations require acknowledgment from the device's
+  reservation owner in team chat or a GitHub issue, not a claim in a branch file.
 
 ## Open items
 - Each teammate: confirm their tool loads the roles/skills (README "pending runtime
