@@ -42,8 +42,8 @@ def run(live, x):
 
 
 def test_overlap_add_keeps_order_and_scale():
-    x = np.stack([MIX, MIX], axis=1)
-    est, chunks = run(LiveSeparator(OracleSeparator()), x)
+    x = np.stack([MIX, MIX], axis=1)  # no direction information: direction gate off
+    est, chunks = run(LiveSeparator(OracleSeparator(), merge_ild_db=0), x)
     n = len(est["s1"])
     assert n == 7 * SR  # 7 windows of 2 s over 8 s, one 1 s hop each
     # Stream identity stays fixed despite random order from the separator.
@@ -132,3 +132,57 @@ def test_worker_notices_ring_reset():
     worker.live.sep.pos = 0
     _feed(st, worker, MIX[: SR * 3], k0=1000)
     assert len(worker.chunks) == 4 and worker.chunks[-1][0].start_ts_us == 1000 * 20_000 + 1_000_000
+
+
+class SplitOracle:
+    """Splits one source into two 'voices' by alternating 100 ms pieces, like MossFormer2 does
+    with a single talker."""
+    n_out = 2
+
+    def __call__(self, x):
+        mask = (np.arange(len(x)) // 1600) % 2 == 0
+        return np.stack([x * mask, x * ~mask])
+
+
+def test_direction_gate_merges_one_source_split_in_two():
+    rng2 = np.random.default_rng(3)
+    v = rng2.standard_normal(SR * 4).astype(np.float32) * 0.1
+    x = np.stack([v, 0.3 * v], axis=1)  # one source on the left: same level difference everywhere
+    live = LiveSeparator(SplitOracle())
+    est, _ = run(live, x)
+    loud, quiet = sorted([est["s1"], est["s2"]], key=lambda e: -np.sum(e**2))
+    assert live.last_gates["merged"] and np.sum(quiet**2) == 0
+    assert sisdr(loud, v[: len(loud)] * 0.65) > 20  # the whole voice is back in one stream
+
+
+def test_direction_gate_keeps_two_sources_from_different_directions():
+    rng2 = np.random.default_rng(4)
+    a = rng2.standard_normal(SR * 4).astype(np.float32) * 0.1
+    b = rng2.standard_normal(SR * 4).astype(np.float32) * 0.1
+
+    class TwoOracle:
+        n_out = 2
+        pos = 0
+
+        def __call__(self, x):
+            i = self.pos
+            self.pos += SR
+            return np.stack([0.65 * a[i : i + len(x)], 0.65 * b[i : i + len(x)]])
+
+    x = np.stack([a + 0.3 * b, 0.3 * a + b], axis=1)  # a on the left, b on the right
+    live = LiveSeparator(TwoOracle())
+    run(live, x)
+    assert not live.last_gates["merged"] and live.last_gates["ild_diff_db"] > live.merge_ild_db
+
+
+
+def test_merged_voice_stays_in_one_stream_across_a_pause():
+    """One talker, a pause, then the same direction again: every window merges, and the voice
+    must stay in one stream (identity across pauses with different people is D1's job)."""
+    rng2 = np.random.default_rng(5)
+    a = rng2.standard_normal(SR * 3).astype(np.float32) * 0.1
+    left = np.concatenate([a, np.zeros(SR, np.float32), a])
+    x = np.stack([left, 0.3 * left], axis=1)
+    est, _ = run(LiveSeparator(SplitOracle()), x)
+    e = {k: np.sum(est[k] ** 2) for k in ("s1", "s2")}
+    assert min(e.values()) == 0

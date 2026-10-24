@@ -1,0 +1,71 @@
+[
+ {
+  "model": "sepformer-whamr16k",
+  "mode": "fast",
+  "window_s": 1.5,
+  "hop_ms": 20,
+  "look_ms": 0,
+  "sisdri_mean": 8.318393468856812,
+  "sisdr_mean": 6.094929178555806,
+  "per_case": {
+   "2spk+music_p0_snr0_m5": 10.0,
+   "2spk+music_p1_snr0_m5": 8.48,
+   "2spk+music_p2_snr0_m5": 6.47
+  },
+  "compute_ms_mean": 119.81189805878579,
+  "compute_ms_p95": 121.81169996038079,
+  "compute_ms_max": 150.18819994293153,
+  "rtf": 5.990594902939289,
+  "algo_latency_ms": 20,
+  "e2e_latency_ms_p95": 141.8116999603808,
+  "peak_vram_mb": 323.80322265625,
+  "params_M": 25.679361,
+  "native_sr": 16000
+ },
+ {
+  "model": "sepformer-whamr16k",
+  "mode": "balanced",
+  "window_s": 2.0,
+  "hop_ms": 50,
+  "look_ms": 100,
+  "sisdri_mean": 10.785591026147207,
+  "sisdr_mean": 8.570297400156656,
+  "per_case": {
+   "2spk+music_p0_snr0_m5": 12.07,
+   "2spk+music_p1_snr0_m5": 10.37,
+   "2spk+music_p2_snr0_m5": 9.92
+  },
+  "compute_ms_mean": 160.00818911407396,
+  "compute_ms_p95": 162.05513991881162,
+  "compute_ms_max": 166.12710000481457,
+  "rtf": 3.200163782281479,
+  "algo_latency_ms": 150,
+  "e2e_latency_ms_p95": 312.0551399188116,
+  "peak_vram_mb": 386.10498046875,
+  "params_M": 25.679361,
+  "native_sr": 16000
+ },
+ {
+  "model": "sepformer-whamr16k",
+  "mode": "accurate",
+  "window_s": 6.0,
+  "hop_ms": 1000,
+  "look_ms": 2000,
+  "sisdri_mean": 11.551134367783865,
+  "sisdr_mean": 9.407122532526651,
+  "per_case": {
+   "2spk+music_p0_snr0_m5": 12.17,
+   "2spk+music_p1_snr0_m5": 11.06,
+   "2spk+music_p2_snr0_m5": 11.43
+  },
+  "compute_ms_mean": 460.54203778298364,
+  "compute_ms_p95": 464.3172400537878,
+  "compute_ms_max": 464.5343000302091,
+  "rtf": 0.46054203778298364,
+  "algo_latency_ms": 3000,
+  "e2e_latency_ms_p95": 3464.317240053788,
+  "peak_vram_mb": 885.66845703125,
+  "params_M": 25.679361,
+  "native_sr": 16000
+ }
+]

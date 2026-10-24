@@ -1,0 +1,222 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: abbb70fb3f886e748a97c9f4ef19e5d7, type: 3}
+  m_Name: CocktailUiTheme
+  m_EditorClassIdentifier: 
+  nearBlack: {r: 0.039215688, g: 0.039215688, b: 0.078431375, a: 1}
+  plateAlt: {r: 0.07058824, g: 0.0627451, b: 0.11764706, a: 1}
+  navy: {r: 0.09019608, g: 0.15686275, b: 0.27450982, a: 1}
+  navyDark: {r: 0.050980393, g: 0.105882354, b: 0.2, a: 1}
+  plum: {r: 0.31764707, g: 0.050980393, b: 0.24705882, a: 1}
+  mutedTeal: {r: 0.28627452, g: 0.43137255, b: 0.4509804, a: 1}
+  cyan: {r: 0, g: 0.90588236, b: 1, a: 1}
+  hotPink: {r: 1, g: 0.26666668, b: 0.8, a: 1}
+  deepPink: {r: 1, g: 0, b: 0.5647059, a: 1}
+  yellow: {r: 1, g: 0.8784314, b: 0.2509804, a: 1}
+  orange: {r: 1, g: 0.4, b: 0, a: 1}
+  acidLime: {r: 0.8, g: 1, b: 0, a: 1}
+  offWhite: {r: 0.95686275, g: 0.94509804, b: 0.9254902, a: 1}
+  speechColor: {r: 0, g: 0.90588236, b: 1, a: 1}
+  otherSoundColor: {r: 1, g: 0.26666668, b: 0.8, a: 1}
+  selectedColor: {r: 0.8, g: 1, b: 0, a: 1}
+  alertColor: {r: 1, g: 0.4, b: 0, a: 1}
+  hazardColor: {r: 1, g: 0.8784314, b: 0.2509804, a: 1}
+  lostColor: {r: 0.28627452, g: 0.43137255, b: 0.4509804, a: 1}
+  lostFlickerColor: {r: 1, g: 0, b: 0.5647059, a: 1}
+  plateColor: {r: 0.039215688, g: 0.039215688, b: 0.078431375, a: 0.85}
+  outlineColor: {r: 0.09019608, g: 0.15686275, b: 0.27450982, a: 1}
+  textLight: {r: 0.95686275, g: 0.94509804, b: 0.9254902, a: 1}
+  textDark: {r: 0.039215688, g: 0.039215688, b: 0.078431375, a: 1}
+  secondaryTextAlpha: 0.82
+  barBackgroundAlpha: 0.28
+  alphaTracking: 1
+  alphaLastSeen: 0.8
+  alphaLost: 0.55
+  dimAlpha: 0.6
+  labels:
+  - label: speech
+    color: {r: 0, g: 0, b: 0, a: 0}
+    displayName: 
+  - label: music
+    color: {r: 0, g: 0, b: 0, a: 0}
+    displayName: 
+  - label: alarm
+    color: {r: 0, g: 0, b: 0, a: 0}
+    displayName: 
+  font: {fileID: 0}
+  titleStyle: 1
+  bodyStyle: 0
+  uppercase: 1
+  fontCondense: 0.82
+  characterSpacing: 2
+  monospaceEm: 0.55
+  fontSizePerMetre: 10
+  plateSprite: {fileID: 0}
+  outlineSprite: {fileID: 0}
+  barSprite: {fileID: 0}
+  bracketSprite: {fileID: 0}
+  arrowSprite: {fileID: 0}
+  reticleSprite: {fileID: 0}
+  markerDistance: 2
+  maxSources: 8
+  plateSize: {x: 0.66, y: 0.4}
+  platePadding: 0.035
+  accentRuleWidth: 0.012
+  titleEm: 0.09
+  dataEm: 0.075
+  labelEm: 0.08
+  levelBarHeight: 0.022
+  labelPlateSize: {x: 0.34, y: 0.11}
+  smallBoxSize: 0.18
+  dotSize: 0.045
+  calloutLength: 0.12
+  labelGap: 0.03
+  defaultBoxSize: {x: 0.4, y: 0.5}
+  minBoxSize: {x: 0.22, y: 0.22}
+  maxBoxSize: {x: 0.8, y: 1}
+  bracketThickness: 0.01
+  bracketArm: 0.28
+  bracketThicknessSelected: 0.022
+  calloutWidth: 0.006
+  tickLength: 0.03
+  tickThickness: 0.005
+  glowSpread: 0.07
+  glowAlpha: 0.28
+  stackSpacing: 0.4
+  stackWithinDeg: 14
+  levelMinDb: -60
+  levelMaxDb: 0
+  lockOnScale: 1.7
+  fallbackCameraHfovDeg: 80
+  cameraAspect: 1.3333
+  chipRowOffset: {x: 0, y: -0.5, z: 1.1}
+  chipScale: 0.55
+  chipSpacing: 0.4
+  maxChips: 3
+  showRadar: 1
+  radarOffset: {x: 0, y: 0, z: 1.1}
+  radarRadius: 0.27
+  radarLineWidth: 0.004
+  radarTickDeg: 30
+  radarTick: 0.022
+  radarTickMajor: 0.04
+  radarPipSize: 0.05
+  radarPipSizeSelected: 0.075
+  radarFovDeg: 80
+  radarFovAlpha: 0.1
+  radarAlpha: 0.9
+  showCompass: 0
+  compassOffset: {x: 0, y: 0.36, z: 1.1}
+  compassWidth: 1.1
+  compassSpanDeg: 180
+  compassTickMinorDeg: 10
+  compassTickMajorDeg: 30
+  compassTickMinor: 0.016
+  compassTickMajor: 0.03
+  compassTickWidth: 0.003
+  compassPipSize: 0.045
+  compassEm: 0.042
+  showEdgeArrows: 1
+  edgeDistance: 1.1
+  edgeHalfWidthDeg: 40
+  edgeHalfHeightDeg: 14
+  arrowSize: 0.07
+  arrowTitleEm: 0.045
+  arrowDetailEm: 0.038
+  arrowBoxSize: {x: 0.46, y: 0.125}
+  arrowTextGap: 0.02
+  arrowStackSpacing: 0.16
+  bannerOffset: {x: 0, y: -0.4, z: 1.1}
+  bannerSize: {x: 0.8, y: 0.2}
+  bannerTitleEm: 0.056
+  bannerDetailEm: 0.044
+  bannerRuleWidth: 0.01
+  states:
+  - state: 0
+    title: Listening
+    color: {r: 0, g: 0, b: 0, a: 0}
+    animated: 0
+  - state: 1
+    title: Selected
+    color: {r: 0, g: 0, b: 0, a: 0}
+    animated: 0
+  - state: 2
+    title: Playing
+    color: {r: 0, g: 0, b: 0, a: 0}
+    animated: 0
+  - state: 3
+    title: Target lost
+    color: {r: 0, g: 0, b: 0, a: 0}
+    animated: 0
+  - state: 4
+    title: Replay processing
+    color: {r: 0, g: 0, b: 0, a: 0}
+    animated: 1
+  - state: 5
+    title: Replay playing
+    color: {r: 0, g: 0, b: 0, a: 0}
+    animated: 0
+  modeNames:
+  - Fast
+  - Balanced
+  - Accurate
+  glassesOffset: {x: 0.28, y: -0.18, z: 1.1}
+  glassesSize: {x: 0.5, y: 0.2}
+  glassesArrowSize: 0.1
+  glassesTitleEm: 0.05
+  glassesDetailEm: 0.042
+  alertOffset: {x: 0, y: 0.26, z: 1.1}
+  alertSize: {x: 1, y: 0.2}
+  alertEm: 0.06
+  alertDetailEm: 0.045
+  alertArrowSize: 0.12
+  alertStripeWidth: 0.09
+  alertSecondsCritical: 9
+  alertSecondsNormal: 5
+  reticleDistance: 2
+  reticleDiameter: 0.05
+  reticleHoverDiameter: 0.075
+  reticleDotDiameter: 0.012
+  reticleAlpha: 0.85
+  dwellSeconds: 0.6
+  hoverHighlightSeconds: 0.2
+  positionSmoothing: 7
+  easing: 12
+  fadeInSeconds: 0.25
+  removeGraceSeconds: 1.2
+  pendingSelectSeconds: 0.8
+  processingDotsPeriod: 0.45
+  flickerFrames: 2
+  flickerAlpha: 0.35
+  markerTitle: '{label}'
+  markerConf: '{conf}%'
+  markerBearing: BRG {brg}
+  markerLevel: LVL {db} DB
+  statusTracking: TRK
+  statusLastSeen: LST {age}S
+  statusLost: LOST
+  statusUnlocated: NO BRG
+  selectedTag: TARGET LOCK
+  arrowTitle: '{label}'
+  arrowDetail: '{clock} O''CLOCK  {bearing}'
+  bannerTitle: '{state}'
+  bannerDetail: '{target}  //  {mode}'
+  noTarget: NO TARGET
+  glassesTitle: '{target}'
+  glassesDetail: '{state}'
+  replayDetail: REPLAY {seconds}S
+  degreeUnit: ' DEG'
+  aheadWord: AHEAD
+  behindWord: BEHIND
+  rightWord: R
+  leftWord: L
+  alertDetail: '{clock} O''CLOCK  {bearing}'
