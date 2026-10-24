@@ -49,13 +49,6 @@ Trivial tasks: write a brief plan and do them directly.
 - Each feature has one orchestrator. Before parallel work, agree on a team integration
   owner for shared interfaces and `.agents/decisions.md`; only that owner approves
   changes to them. Subagents return handoff notes to their orchestrator.
-- Separate worktrees do not isolate hardware. Agree on one reservation owner per
-  shared headset, glasses, or GPU. Before exclusive use, obtain that owner's explicit
-  acknowledgment in team chat or a GitHub issue labelled `hardware`; the owner grants
-  one reservation at a time and confirms release with the current holder before
-  granting the next. An unanswered request or apparently empty issue is not a grant.
-  Tell the owner when done. Branch files are notes, not live reservations. Agents
-  without permission to message the team ask the user to coordinate the reservation.
 - Read-only roles may run bounded inspection commands (`rg`, file reads, `git status`,
   `git diff`, `git show`) and retrieve public official documentation without saving it.
   They must not mutate files, install software, execute repository code, or run tests

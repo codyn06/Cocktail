@@ -18,7 +18,6 @@ branch's orchestrator edits it, so parallel branches never conflict.
 # <branch>
 Status: <in progress | blocked | ready for review> (<date>)
 Owner: <person / orchestrating tool>   PR: <link or "not opened">
-Hardware in use: <none | device, reservation owner, acknowledgment in chat/issue>
 
 ## Ownership
 - <task> -> <role/agent>: <files>
