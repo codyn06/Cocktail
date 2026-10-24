@@ -102,7 +102,7 @@ def test_simulated_session_replays_into_hub(hub, tmp_path):
     assert st["video_received"] == 180 and st["video_dropped"] == 179  # nobody consumed frames
     assert all(c["seq_gaps"] == 0 for c in st["channels"].values())
     audio, ts0 = state.audio.last(10.0)
-    assert ts0 == s.start_ts_us + 2_000_000
+    assert ts0 == s.start_ts_us + 2_000_000 - 750  # minus the 12-sample resampler lag
     assert np.abs(audio).max() > 0.01
 
 

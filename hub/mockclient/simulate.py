@@ -77,7 +77,8 @@ def simulate(out: Path, stem_specs: list[str], duration_s: float | None = None, 
     n = int(duration_s * sr) if duration_s else max(len(s) for s in stems)
     t = np.arange(n) / sr
     yaw = head_yaw(t, yaw_amp_deg)
-    audio = render(stems, bearings, sr, yaw)
+    images = [render([s], [b], sr, yaw) for s, b in zip(stems, bearings)]  # each source alone
+    audio = sum(images)
     peak = np.abs(audio).max()
     scale = 0.7 / peak if peak > 0.7 else 1.0
     audio *= scale
@@ -89,10 +90,11 @@ def simulate(out: Path, stem_specs: list[str], duration_s: float | None = None, 
 
     (out / "stems").mkdir(parents=True, exist_ok=True)
     sources = []
-    for path, b, s in zip(paths, bearings, stems):
+    for path, b, img in zip(paths, bearings, images):
         name = Path(path).stem
-        dry = signal.resample_poly(np.pad(s[:n], (0, max(0, n - len(s)))) * scale, 1, sr // 16000)
-        wavfile.write(out / "stems" / f"{name}.wav", 16000, dry.astype(np.float32))
+        # Reference = this source as the mics hear it (mean over mics), 16 kHz, same scale as the mix.
+        ref = signal.resample_poly(img.mean(axis=1) * scale, 1, sr // 16000)
+        wavfile.write(out / "stems" / f"{name}.wav", 16000, ref.astype(np.float32))
         sources.append({"name": name, "bearing_deg": b, "stem": f"stems/{name}.wav"})
     meta = {"device": "mock", "simulated": True, "sample_rate": sr, "mic_channels": 2,
             "mic_az_deg": [-90.0, 90.0], "camera": False, "start_ts_us": start_ts_us,

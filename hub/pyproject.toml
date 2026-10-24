@@ -15,7 +15,12 @@ dependencies = [
 [dependency-groups]
 dev = ["pytest>=8", "httpx>=0.27"]
 # GPU machine only (A3). Blackwell needs CUDA 12.8+ wheels: `uv sync --group gpu`.
-gpu = ["torch>=2.7", "torchaudio>=2.7"]
+gpu = [
+    "clearvoice>=0.1.2",
+    "torch>=2.7",
+    "torchaudio>=2.7",
+    "transformers>=4.40",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -23,7 +28,7 @@ build-backend = "hatchling.build"
 
 # One package per owned folder (PRD section 14). Add yours here when you create it.
 [tool.hatch.build.targets.wheel]
-packages = ["protocol", "ingest", "mockclient"]
+packages = ["protocol", "ingest", "mockclient", "separate"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
