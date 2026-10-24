@@ -91,6 +91,14 @@ rebuilt per checkout). Skill: `.agents/skills/graphify/SKILL.md`.
   Build with `graphify update .` (code only: local tree-sitter, no model calls). The
   full `/graphify .` pass also sends docs, PDFs, and images to the assistant's model
   provider; ask the user before running it on anything sensitive.
+- **Start of every session and every subagent assignment:** before any other codebase
+  exploration, make sure the graph exists and matches `git rev-parse HEAD` (the
+  "Built from commit" line in `graphify-out/GRAPH_REPORT.md`); if it is missing or
+  stale, run `graphify update .`. Then read that report's Summary and God Nodes, and
+  run `graphify query` for the task at hand. If graphify is not set up and cannot be
+  (installing needs user approval), say so and fall back to normal search. Claude Code
+  does this automatically via `SessionStart`/`SubagentStart` hooks
+  (`.claude/hooks/graphify-session.mjs`); other tools follow this rule by hand.
 - If `graphify` is not on PATH, call `.tools/graphify/Scripts/graphify`
   (`.tools/graphify/bin/graphify` on macOS/Linux) wherever these rules say `graphify`.
 - When `graphify-out/graph.json` exists, run `graphify query "<question>"`,
