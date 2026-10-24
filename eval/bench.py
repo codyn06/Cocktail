@@ -16,7 +16,7 @@ import torch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "hub"))
-from separate.models import REGISTRY  # noqa: E402
+from separate.bench_models import REGISTRY  # noqa: E402
 from separate.streaming import MODES, WindowedStreamer, SR  # noqa: E402
 
 

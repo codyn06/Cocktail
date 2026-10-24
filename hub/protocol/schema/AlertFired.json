@@ -1,0 +1,46 @@
+{
+  "properties": {
+    "type": {
+      "const": "alert.fired",
+      "default": "alert.fired",
+      "title": "Type",
+      "type": "string"
+    },
+    "alert_id": {
+      "title": "Alert Id",
+      "type": "string"
+    },
+    "label": {
+      "title": "Label",
+      "type": "string"
+    },
+    "critical": {
+      "title": "Critical",
+      "type": "boolean"
+    },
+    "spoken_text": {
+      "title": "Spoken Text",
+      "type": "string"
+    },
+    "bearing_deg": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Bearing Deg"
+    }
+  },
+  "required": [
+    "alert_id",
+    "label",
+    "critical",
+    "spoken_text"
+  ],
+  "title": "AlertFired",
+  "type": "object"
+}

@@ -1,0 +1,29 @@
+{
+  "$defs": {
+    "Mode": {
+      "enum": [
+        "fast",
+        "balanced",
+        "accurate"
+      ],
+      "title": "Mode",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "type": {
+      "const": "cmd.mode",
+      "default": "cmd.mode",
+      "title": "Type",
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/$defs/Mode"
+    }
+  },
+  "required": [
+    "mode"
+  ],
+  "title": "SetMode",
+  "type": "object"
+}

@@ -6,7 +6,7 @@ chunk-by-chunk through the model on the local GPU). Not live audio, not on-devic
 ## Run (from `hub/`)
 
 ```
-uv sync                                   # project-local venv (Python 3.12, torch cu124)
+uv sync --group gpu --group bench                                   # project-local venv (Python 3.12, torch cu124)
 # one-time: LibriSpeech dev-clean (public, 337 MB) -> eval/data/raw/
 curl -L -o ../eval/data/raw/dev-clean.tar.gz https://www.openslr.org/resources/12/dev-clean.tar.gz
 uv run python ../eval/prepare_data.py     # builds 9 controlled 20 s mixtures in eval/data/
@@ -26,4 +26,4 @@ a GTZAN music clip 5 dB below the speech. Three speaker pairs. Output: `eval/res
 Modes (`hub/separate/streaming.py:MODES`): fast (1.5 s window, 20 ms hop, 0 look),
 balanced (2 s, 50 ms hop, 100 ms look), accurate (6 s, 1 s hop, 2 s look).
 
-Add a model: register a loader returning `(fn, n_spk, info)` in `hub/separate/models.py`.
+Add a model: register a loader returning `(fn, n_spk, info)` in `hub/separate/bench_models.py`.

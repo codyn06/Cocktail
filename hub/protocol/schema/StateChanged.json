@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "HubState": {
+      "enum": [
+        "listening",
+        "selected",
+        "playing",
+        "target_lost",
+        "replay_processing",
+        "replay_playing"
+      ],
+      "title": "HubState",
+      "type": "string"
+    },
+    "Mode": {
+      "enum": [
+        "fast",
+        "balanced",
+        "accurate"
+      ],
+      "title": "Mode",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "type": {
+      "const": "state.changed",
+      "default": "state.changed",
+      "title": "Type",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/HubState"
+    },
+    "target_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Id"
+    },
+    "selection_version": {
+      "default": 0,
+      "title": "Selection Version",
+      "type": "integer"
+    },
+    "mode": {
+      "$ref": "#/$defs/Mode",
+      "default": "balanced"
+    }
+  },
+  "required": [
+    "state"
+  ],
+  "title": "StateChanged",
+  "type": "object"
+}

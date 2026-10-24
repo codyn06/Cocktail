@@ -1,4 +1,4 @@
-# Old repo-local tool environments (graphify is now installed globally; see AGENTS.md)
+﻿# Old repo-local tool environments (graphify is now installed globally; see AGENTS.md)
 .tools/
 
 # graphify output: rebuilt locally per checkout (see AGENTS.md "Codebase context")
@@ -6,3 +6,15 @@ graphify-out/
 
 # graphify hook install adds a merge driver for graph.json; unused since the graph is not committed
 .gitattributes
+
+# hub Python env
+hub/.venv/
+__pycache__/
+.pytest_cache/
+
+
+# mock headset sessions (recorded or simulated audio; never commit)
+hub/sessions/
+
+# model weights downloaded at runtime (ClearVoice writes to ./checkpoints)
+hub/checkpoints/

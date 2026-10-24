@@ -1,54 +1,75 @@
-"""Loaders for candidate separators. Each returns (fn, n_spk, info) with
-fn(window[T] at 16 kHz, on cuda) -> [n_spk, T]. Weights go to hub/models/ (gitignored)."""
+"""GPU models for live separation (task C3). Needs `uv sync --group gpu`.
+
+- VoiceSeparator: MossFormer2_SS_16K (ClearerVoice-Studio, Apache-2.0), 2 voices at 16 kHz.
+  Chosen in A6: 714 MiB peak, RTF ~0.13 on the RTX 5070 Ti Laptop (docs/STATUS.md).
+- SoundLabeler: AST fine-tuned on AudioSet (MIT/ast-finetuned-audioset-10-10-0.4593, BSD-3),
+  527 classes, mapped to coarse labels.
+"""
+
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
+import numpy as np
 import torch
-import torchaudio.functional as AF
 
-MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
-os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+SR = 16000
 
 
-def _fit_len(o: torch.Tensor, T: int) -> torch.Tensor:
-    if o.shape[-1] < T:
-        o = torch.nn.functional.pad(o, (0, T - o.shape[-1]))
-    return o[..., :T]
+class VoiceSeparator:
+    n_out = 2
+
+    def __init__(self, device: str = "cuda"):
+        from clearvoice import ClearVoice
+
+        self.device = device
+        self.net = ClearVoice(task="speech_separation", model_names=["MossFormer2_SS_16K"]).models[0].model
+        self.net.to(device).eval()
+
+    @torch.inference_mode()
+    def __call__(self, x: np.ndarray) -> np.ndarray:
+        """x: (n,) float32 mono at 16 kHz -> (2, n) voice estimates (arbitrary scale)."""
+        out = self.net(torch.from_numpy(np.ascontiguousarray(x, np.float32))[None].to(self.device))
+        return np.stack([o.squeeze().float().cpu().numpy()[: len(x)] for o in out])
 
 
-def load_sepformer(source: str, native_sr: int, device="cuda"):
-    from speechbrain.inference.separation import SepformerSeparation
-    from speechbrain.utils.fetching import LocalStrategy
-    m = SepformerSeparation.from_hparams(
-        source=source, savedir=str(MODELS_DIR / source.replace("/", "__")),
-        run_opts={"device": device}, local_strategy=LocalStrategy.COPY)
-    m.mods.eval()
-
-    def fn(w: torch.Tensor) -> torch.Tensor:
-        x = w[None]
-        if native_sr != 16000:
-            x = AF.resample(x, 16000, native_sr)
-        est = m.separate_batch(x)[0].T  # [n_spk, T']
-        if native_sr != 16000:
-            est = AF.resample(est, native_sr, 16000)
-        return _fit_len(est, w.numel())
-    n_params = sum(p.numel() for p in m.mods.parameters())
-    return fn, 2, {"params_M": n_params / 1e6, "native_sr": native_sr}
+# AudioSet class name -> coarse label. First match in this order wins.
+COARSE = [
+    ("alarm", ("smoke detector", "fire alarm", "alarm", "buzzer")),
+    ("siren", ("siren", "emergency vehicle", "police car", "ambulance", "fire engine")),
+    ("speech", ("speech", "conversation", "narration", "male speech", "female speech", "child speech")),
+    ("music", ("music", "musical instrument", "orchestra", "string section", "violin", "guitar",
+               "piano", "drum", "singing")),
+]
 
 
-def load_convtasnet_libri2mix(device="cuda"):
-    from asteroid.models import ConvTasNet
-    m = ConvTasNet.from_pretrained("JorisCos/ConvTasNet_Libri2Mix_sepclean_16k").to(device).eval()
+def coarse_label(audioset_name: str) -> str:
+    n = audioset_name.lower()
+    if "car alarm" in n or "alarm clock" in n or "babble" in n:
+        return "other"
+    for coarse, keys in COARSE:
+        if any(k in n for k in keys):
+            return coarse
+    return "other"
 
-    def fn(w: torch.Tensor) -> torch.Tensor:
-        return _fit_len(m(w[None, None])[0], w.numel())
-    return fn, 2, {"params_M": sum(p.numel() for p in m.parameters()) / 1e6, "native_sr": 16000}
 
+class SoundLabeler:
+    def __init__(self, device: str = "cuda", model_id: str = "MIT/ast-finetuned-audioset-10-10-0.4593"):
+        from transformers import ASTFeatureExtractor, ASTForAudioClassification
 
-REGISTRY = {
-    "sepformer-whamr16k": lambda d: load_sepformer("speechbrain/sepformer-whamr16k", 16000, d),
-    "sepformer-libri2mix-8k": lambda d: load_sepformer("speechbrain/sepformer-libri2mix", 8000, d),
-    "convtasnet-libri2mix-16k": load_convtasnet_libri2mix,
-}
+        self.device = device
+        self.fe = ASTFeatureExtractor.from_pretrained(model_id)
+        self.model = ASTForAudioClassification.from_pretrained(model_id).to(device).eval()
+        self.names = [self.model.config.id2label[i] for i in range(self.model.config.num_labels)]
+        groups: dict[str, list[int]] = {}
+        for i, n in enumerate(self.names):
+            groups.setdefault(coarse_label(n), []).append(i)
+        self.groups = {k: np.array(v) for k, v in groups.items()}
+
+    @torch.inference_mode()
+    def probs(self, xs: list[np.ndarray]) -> np.ndarray:
+        """Batch of 16 kHz mono clips -> (batch, 527) sigmoid class probabilities."""
+        f = self.fe(xs, sampling_rate=SR, return_tensors="pt")["input_values"].to(self.device)
+        return torch.sigmoid(self.model(f).logits).float().cpu().numpy()
+
+    def coarse(self, p: np.ndarray) -> dict[str, float]:
+        """Class probabilities -> coarse label scores (max over member classes)."""
+        return {k: float(p[idx].max()) for k, idx in self.groups.items()}
