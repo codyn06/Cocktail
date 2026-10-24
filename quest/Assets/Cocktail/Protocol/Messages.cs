@@ -153,7 +153,7 @@ namespace Cocktail.Protocol
         [JsonProperty("bearing_source")] public BearingSource? BearingSource;
         [JsonProperty("elevation_deg")] public float? ElevationDeg;
         [JsonProperty("distance_m")] public float? DistanceM;
-        [JsonProperty("state")] public TrackState State = "tracking";
+        [JsonProperty("state")] public TrackState State = TrackState.Tracking;
         [JsonProperty("level_db")] public float LevelDb;
         [JsonProperty("in_view")] public bool InView = false;
         [JsonProperty("bbox")] public float[] Bbox;
@@ -174,7 +174,7 @@ namespace Cocktail.Protocol
         [JsonProperty("state")] public HubState State;
         [JsonProperty("target_id")] public string TargetId;
         [JsonProperty("selection_version")] public long SelectionVersion = 0;
-        [JsonProperty("mode")] public Mode Mode = "balanced";
+        [JsonProperty("mode")] public Mode Mode = Mode.Balanced;
     }
 
     public class TargetUpdated
