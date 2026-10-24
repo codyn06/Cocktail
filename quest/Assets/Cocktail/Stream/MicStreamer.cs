@@ -167,6 +167,8 @@ namespace Cocktail.Stream
                           : srcName == "voice_recognition" ? 6 : srcName == "voice_communication" ? 7
                           : srcName == "default" ? 0 : -1;
                 if (srcId >= 0) { _java.Call("setForcedSource", srcId); Debug.Log("[MicStreamer] forced audio source " + srcName + " (" + srcId + ")"); }
+                string maskName = ReadIntentExtra("micmask"); // frontback (0x30) | stereo (default)
+                if (maskName == "frontback") { _java.Call("setForcedChannelMask", 0x30); Debug.Log("[MicStreamer] forced channel mask FRONT|BACK (0x30)"); }
                 int wantCh = wantNativeChannels;
                 string chExtra = ReadIntentExtra("micch");
                 if (!string.IsNullOrEmpty(chExtra) && int.TryParse(chExtra, out int parsedCh) && parsedCh > 0) wantCh = parsedCh;
@@ -391,7 +393,7 @@ namespace Cocktail.Stream
                     _sxy = _sxx = _syy = 0; _corrN = 0;
                 }
             }
-            if (ch >= 3) AccumulateArray(pcm, frames, ch);
+            if (ch >= 2) AccumulateArray(pcm, frames, ch);
         }
 
         // Mic-array check: cross-correlation of every channel pair over +-1 ms. A clear peak at a

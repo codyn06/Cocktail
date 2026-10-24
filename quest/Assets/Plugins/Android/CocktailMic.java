@@ -64,6 +64,13 @@ public class CocktailMic {
         forcedSource = src;
     }
 
+    /** Test switch: positional mask used for 2-channel capture (e.g. CHANNEL_IN_FRONT|CHANNEL_IN_BACK = 0x30); 0 = stereo. */
+    private volatile int forcedChannelMask = 0;
+
+    public void setForcedChannelMask(int mask) {
+        forcedChannelMask = mask;
+    }
+
     public synchronized String start(int wantChannels, int preferredRate, int chunkMs, boolean preferUnprocessed) {
         stop();
         int[] sources = forcedSource >= 0
@@ -126,7 +133,7 @@ public class CocktailMic {
             if (ch == 1) {
                 fb.setChannelMask(AudioFormat.CHANNEL_IN_MONO);
             } else if (ch == 2) {
-                fb.setChannelMask(AudioFormat.CHANNEL_IN_STEREO);
+                fb.setChannelMask(forcedChannelMask != 0 ? forcedChannelMask : AudioFormat.CHANNEL_IN_STEREO);
             } else {
                 fb.setChannelIndexMask((1 << ch) - 1);
             }
