@@ -10,8 +10,8 @@ by `node .agents/scripts/sync.mjs`. Do not edit generated copies.
 
 Cocktail is a 4-person hackathon project: an audio-first assistive experience using
 Ray-Ban Meta glasses, a phone, and possibly a Quest headset as a display. Expected
-building blocks: Gemma (open-weight models; variant and runtime not chosen yet), SAM3 (promptable visual segmentation), and possibly
-SAM Audio (prompted audio source separation).
+building blocks: Gemma (open-weight models; variant and runtime not chosen yet),
+SAM3 (promptable visual segmentation), and possibly SAM Audio (prompted audio source separation).
 
 Do not assume:
 - an app stack, language, framework, or build system (none is chosen yet);
