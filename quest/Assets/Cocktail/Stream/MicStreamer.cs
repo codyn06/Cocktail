@@ -380,6 +380,60 @@ namespace Cocktail.Stream
                     _sxy = _sxx = _syy = 0; _corrN = 0;
                 }
             }
+            if (ch >= 3) AccumulateArray(pcm, frames, ch);
+        }
+
+        // Mic-array check: cross-correlation of every channel pair over +-1 ms. A clear peak at a
+        // non-zero lag that moves with the sound's direction means independent mics with real delays.
+        const int MaxLag = 48; // 1 ms at 48 kHz
+        double[][] _xc; double[] _en; float[] _arrBuf; int _arrN;
+
+        void AccumulateArray(byte[] pcm, int frames, int ch)
+        {
+            int pairs = ch * (ch - 1) / 2;
+            if (_xc == null || _en.Length != ch)
+            {
+                _xc = new double[pairs][];
+                for (int p = 0; p < pairs; p++) _xc[p] = new double[2 * MaxLag + 1];
+                _en = new double[ch]; _arrN = 0;
+            }
+            if (_arrBuf == null || _arrBuf.Length < ch * frames) _arrBuf = new float[ch * frames];
+            for (int i = 0; i < frames; i++)
+                for (int c = 0; c < ch; c++)
+                {
+                    int o = 2 * (i * ch + c);
+                    float v = (short)(pcm[o] | (pcm[o + 1] << 8));
+                    _arrBuf[c * frames + i] = v;
+                    _en[c] += (double)v * v;
+                }
+            int k = 0;
+            for (int a = 0; a < ch; a++)
+                for (int b = a + 1; b < ch; b++, k++)
+                    for (int lag = -MaxLag; lag <= MaxLag; lag++)
+                    {
+                        int i0 = System.Math.Max(0, -lag), i1 = System.Math.Min(frames, frames - lag);
+                        double sum = 0;
+                        for (int i = i0; i < i1; i++) sum += _arrBuf[a * frames + i] * _arrBuf[b * frames + i + lag];
+                        _xc[k][lag + MaxLag] += sum;
+                    }
+            _arrN += frames;
+            if (_arrN < SampleRate) return;
+            var sb = new StringBuilder("[MicArray] pair: best lag (ch b is later than a when +), corr at best / at 0 lag | ");
+            k = 0;
+            for (int a = 0; a < ch; a++)
+                for (int b = a + 1; b < ch; b++, k++)
+                {
+                    double norm = System.Math.Sqrt(System.Math.Max(1e-9, _en[a] * _en[b]));
+                    int best = 0; double bv = double.MinValue;
+                    for (int l = 0; l < _xc[k].Length; l++) if (_xc[k][l] > bv) { bv = _xc[k][l]; best = l; }
+                    int lagS = best - MaxLag;
+                    sb.Append($"{a}-{b}: {lagS:+0;-0;0} smp ({lagS / 48.0:+0.00;-0.00;0.00} ms) {bv / norm:F2}/{_xc[k][MaxLag] / norm:F2} | ");
+                    System.Array.Clear(_xc[k], 0, _xc[k].Length);
+                }
+            sb.Append("levels dB ").Append(LevelsText());
+            Debug.Log(sb.ToString());
+            for (int c = 0; c < ch; c++) _en[c] = 0;
+            _arrN = 0;
         }
 
         public string LevelsText()
