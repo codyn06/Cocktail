@@ -47,7 +47,21 @@ $gen | Set-Content -Encoding ascii "$env:TEMP\gen_pink.py"
 uv run --project hub python "$env:TEMP\gen_pink.py" $noiseWav
 $player = New-Object System.Media.SoundPlayer $noiseWav
 
-& $Adb reverse tcp:$Port tcp:$Port | Out-Null
+# adb can hang when two adb servers fight over port 5037; run it with a timeout and restart the server once.
+function AdbRun([string[]]$a, [int]$timeoutSec = 15) {
+    for ($try = 0; $try -lt 2; $try++) {
+        $of = Join-Path $env:TEMP "adbrun.out"
+        $p = Start-Process $Adb -ArgumentList $a -NoNewWindow -PassThru -RedirectStandardOutput $of
+        if ($p.WaitForExit($timeoutSec * 1000)) { return (Get-Content $of -ErrorAction SilentlyContinue) }
+        Write-Host "adb hung; restarting the adb server..." -ForegroundColor Yellow
+        Get-Process adb -ErrorAction SilentlyContinue | Stop-Process -Force
+        Start-Sleep -Seconds 2
+        Start-Process $Adb -ArgumentList "start-server" -NoNewWindow -Wait | Out-Null
+    }
+    throw "adb keeps hanging. Close Unity/Meta Quest Developer Hub, run 'taskkill /f /im adb.exe', and try again."
+}
+
+AdbRun @("reverse","tcp:$Port","tcp:$Port") | Out-Null
 $results = @()
 Say "Locator test. Keep the headset on and stay seated. Put the laptop about one meter in front of you with the volume up. Starting in ten seconds."
 Start-Sleep -Seconds 10
@@ -70,7 +84,7 @@ foreach ($truth in $Truths) {
     Start-Sleep -Seconds 5
     # start the headset app if it is not running (if it is, it reconnects to the recorder by itself;
     # restarting it would reset its clock mid-recording)
-    & $Adb shell am start -n $act -e hub_host 127.0.0.1 -e micsrc unprocessed -e micch 2 | Out-Null
+    AdbRun @("shell","am","start","-n",$act,"-e","hub_host","127.0.0.1","-e","micsrc","unprocessed","-e","micch","2") | Out-Null
     $t0 = $null
     for ($i = 0; $i -lt 60 -and -not $t0; $i++) {
         Start-Sleep -Milliseconds 500
