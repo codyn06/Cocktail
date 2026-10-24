@@ -66,11 +66,23 @@ namespace Cocktail.UserInput
             }
 
             if (select) SendSelect(pointer, modality);
-            if (OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch)) Send(ProtoAction.Stop);
-            if (OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch)) Send(ProtoAction.Replay);
+            // Right controller only (one controller is enough):
+            //   front trigger = select, side trigger (grip) or B = stop, A = replay,
+            //   joystick flick right/left = next/prev. Left X/Y/stick-click still work if present.
+            if (OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger, OVRInput.Controller.RTouch)
+                || OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch)) Send(ProtoAction.Stop);
+            if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch)
+                || OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch)) Send(ProtoAction.Replay);
             if (OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch)) Send(ProtoAction.Next);
             if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch)) Send(ProtoAction.Prev);
+
+            float sx = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch).x;
+            if (_stickLatched) { if (Mathf.Abs(sx) < 0.4f) _stickLatched = false; }
+            else if (sx > 0.7f) { _stickLatched = true; Send(ProtoAction.Next); }
+            else if (sx < -0.7f) { _stickLatched = true; Send(ProtoAction.Prev); }
         }
+
+        bool _stickLatched;
 
         void ScanHands()
         {
