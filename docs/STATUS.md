@@ -57,7 +57,7 @@ the earlier tasks that must be usable first; mocks and recordings let you start 
 | A7 | Alerts engine | Rules file that matches sounds (smoke alarm, siren) and the wearer's name, with a name-detection model. Tested with the laptop mic. | `hub/alerts` | | | todo | |
 | A8 | ★ Work out where a sound is from head movement | Math that turns "this sound got louder and brighter as the head turned" into a direction, all 360 degrees, in view or not. Tested on simulated audio and head turns. | `hub/locate` | | feat/a8-locate | done (simulated) | PR #11; needs per-mic levels per source from separation |
 | A9 | Pitch and demo outline | Outline of the video and slides. Start after the product works. | `docs/` | | | todo | later |
-| A10 | Private network | Laptop hotspot or phone hotspot that the laptop and headset both join (no venue Wi-Fi). | none | | | todo | |
+| A10 | Network | Laptop and headset on the same network. University Wi-Fi is good enough for now; a private hotspot is later and only if delay or jitter becomes a problem. | none | | | todo | low priority, later |
 
 ### Getting data flowing
 
