@@ -71,7 +71,11 @@ Trivial tasks: write a brief plan and do them directly.
   when metavr is unavailable, verify documentation claims using current official Meta
   documentation or upstream source, recording URL, version/date, and uncertainty. Do
   not install tooling just to answer a docs question. Device-state claims still need
-  device evidence; mark them unverified if unavailable. If a role has no web access,
+  device evidence; mark them unverified if unavailable. The vendored `gemma-dev` skill's
+  `search_documentation` tool is the Google Developer Knowledge MCP server
+  (`search_documents`, `get_documents`, `answer_query`); each person adds it at user
+  scope with their own API key, never in repo config. Without it, use
+  https://gemma.ai/llms.txt as the skill describes. If a role has no web access,
   ask the orchestrator to retrieve the specific sources, then continue independent work.
 - The missing `superpowers:test-driven-development` skill is not a blocker: reproduce
   the failure with the smallest test or repeatable check, confirm it fails before the
