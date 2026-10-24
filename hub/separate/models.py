@@ -43,10 +43,12 @@ COARSE = [
 
 def coarse_label(audioset_name: str) -> str:
     n = audioset_name.lower()
+    if "car alarm" in n or "alarm clock" in n or "babble" in n:
+        return "other"
     for coarse, keys in COARSE:
         if any(k in n for k in keys):
             return coarse
-    return n
+    return "other"
 
 
 class SoundLabeler:

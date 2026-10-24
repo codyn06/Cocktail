@@ -53,7 +53,8 @@ def band_levels(x: np.ndarray) -> np.ndarray:
 
 class LiveSeparator:
     def __init__(self, separator, labeler=None, win_s: float = 2.0, hop_s: float = 1.0,
-                 label_every: int = 1, label_smooth: float = 0.6):
+                 label_every: int = 1, label_smooth: float = 0.6, swap_margin: float = 0.1,
+                 floor_db: float = -60.0):
         self.sep, self.labeler = separator, labeler
         self.W, self.H = int(win_s * SR), int(hop_s * SR)
         assert self.W == 2 * self.H, "overlap-add assumes 50 % overlap"
@@ -61,6 +62,7 @@ class LiveSeparator:
         self.n_streams = separator.n_out + 1
         self.ids = [f"s{i + 1}" for i in range(self.n_streams)]
         self.label_every, self.label_smooth = label_every, label_smooth
+        self.swap_margin, self.floor_db = swap_margin, floor_db
         self.reset()
 
     def reset(self):
@@ -75,11 +77,17 @@ class LiveSeparator:
         v = self.sep(mono)  # (voices, W)
         if self._prev_mono is not None:  # keep voice order consistent with the previous window
             a, b = v[:, : self.H], self._prev_mono
-            same = abs(np.dot(a[0], b[0])) + abs(np.dot(a[1], b[1]))
-            swap = abs(np.dot(a[0], b[1])) + abs(np.dot(a[1], b[0]))
-            if swap > same:
+
+            def cos(u, w):
+                return abs(np.dot(u, w)) / (np.linalg.norm(u) * np.linalg.norm(w) + 1e-9)
+            same = cos(a[0], b[0]) + cos(a[1], b[1])
+            swap = cos(a[0], b[1]) + cos(a[1], b[0])
+            if swap > same + self.swap_margin:  # weak evidence keeps the previous order
                 v = v[::-1]
-        g = np.linalg.lstsq(v.T, mono, rcond=None)[0]  # fit the separator's arbitrary scale
+        # Fit the separator's arbitrary per-output scale (ridge keeps it sane when a voice is absent).
+        A = v @ v.T
+        lam = 1e-6 * np.trace(A) / len(A) + 1e-12
+        g = np.linalg.solve(A + lam * np.eye(len(A)), v @ mono)
         v = v * g[:, None]
         est = np.concatenate([v, (mono - v.sum(0))[None]])  # (streams, W)
         self._prev_mono = v[:, self.H :].copy()
@@ -94,6 +102,8 @@ class LiveSeparator:
         return np.concatenate([est[:, None], imgs], axis=1)
 
     def _update_labels(self, out: np.ndarray):
+        # Labels look at the whole 2 s window and are smoothed across hops, so they describe the
+        # recent past of the stream rather than exactly the emitted hop.
         if self.labeler is None:
             return
         p = self.labeler.probs([out[k, 0].astype(np.float32) for k in range(self.n_streams)])
@@ -120,7 +130,7 @@ class LiveSeparator:
         frames = lv_all.shape[0]
         lv_all = lv_all.reshape(frames, self.n_streams, -1, len(BAND_CENTERS_HZ))
         hop_us = 1_000_000 // LEVEL_HZ
-        level_ts = start_ts_us + hop_us + np.arange(frames) * hop_us  # centres of 100 ms frames
+        level_ts = start_ts_us + hop_us + np.arange(frames) * hop_us  # centres of 100 ms windows, 50 ms apart
         pow_bb = np.mean(10 ** (lv_all / 10), axis=(2, 3))  # (frames, streams) broadband power
         mix_db = 10 * np.log10(pow_bb.sum(axis=1) + 1e-10)
 
@@ -129,7 +139,9 @@ class LiveSeparator:
             s = self._scores[k]
             label, conf = max(s.items(), key=lambda kv: kv[1]) if s else ("speech" if k < 2 else "other", 0.0)
             bb = 10 * np.log10(pow_bb[:, k] + 1e-10)
-            activity = np.clip((bb - (mix_db - 30)) / 20, 0, 1)  # 0 when 30 dB below the mix
+            # Active = loud in absolute terms (above floor_db, power re full scale) and not buried
+            # in the other streams (0 at 25 dB below the mix, 1 within 5 dB of it).
+            activity = np.clip((bb - self.floor_db) / 10, 0, 1) * np.clip((bb - (mix_db - 25)) / 20, 0, 1)
             chunks.append(StreamChunk(self.ids[k], label, float(conf), start_ts_us, head[k, 0].copy(),
                                       head[k, 1:].copy(), level_ts, lv_all[:, k], activity,
                                       scores=dict(sorted(s.items(), key=lambda kv: -kv[1])[:3])))

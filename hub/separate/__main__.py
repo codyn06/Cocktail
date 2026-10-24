@@ -34,6 +34,9 @@ def status():
     ms = list(worker.compute_ms)
     return {
         "hops_done": len(ms),
+        "lag_s": round(worker.lag_s, 2),
+        "skips": worker.skips,
+        "listener_errors": worker.listener_errors,
         "compute_ms_p50": float(np.median(ms)) if ms else None,
         "compute_ms_max": float(np.max(ms)) if ms else None,
         "streams": [{"id": c.stream_id, "label": c.label, "label_conf": round(c.label_conf, 3),

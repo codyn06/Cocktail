@@ -49,8 +49,11 @@ def score(s: Session, live: LiveSeparator) -> dict:
         refs[src["name"]] = r.astype(np.float32)
     n = min(len(next(iter(est.values()))), len(mix), *(len(r) for r in refs.values()))
     names, sids = list(refs), list(est)
-    # Best one-to-one assignment of streams to references by total SI-SDR.
-    best = max(itertools.permutations(sids, len(names)) if len(sids) >= len(names) else [],
+    # Oracle assignment: each reference gets the stream that best matches it (by total SI-SDR).
+    # Fine for measuring separation quality; live code never sees the ground truth.
+    if len(sids) < len(names):
+        raise ValueError(f"{len(names)} sources but only {len(sids)} streams")
+    best = max(itertools.permutations(sids, len(names)),
                key=lambda p: sum(sisdr(est[sid][:n], refs[nm][:n]) for sid, nm in zip(p, names)))
     out = {}
     for sid, nm in zip(best, names):

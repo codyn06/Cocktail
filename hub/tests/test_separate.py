@@ -87,3 +87,48 @@ def test_coarse_labels():
     assert coarse_label("Male speech, man speaking") == "speech"
     assert coarse_label("Smoke detector, smoke alarm") == "alarm"
     assert coarse_label("Violin, fiddle") == "music"
+
+
+def _feed(st, worker, sig, k0=0):
+    frames = SR // 50
+    for k in range(len(sig) // frames):
+        h = p.AudioChunk(seq=k0 + k, device_ts_us=(k0 + k) * 20_000, epoch=0, sample_rate=SR, channels=1,
+                         frames=frames)
+        st.on_audio(h, (sig[k * frames : (k + 1) * frames] / 4 * 32767).astype("<i2").tobytes())
+        while worker.poll():
+            pass
+
+
+def test_listener_error_does_not_repeat_window():
+    st = IngestState()
+    worker = SeparationWorker(st, LiveSeparator(OracleSeparator()))
+    seen = []
+
+    def bad(chunks):
+        seen.append(chunks[0].start_ts_us)
+        raise ValueError("boom")
+    worker.listeners.append(bad)
+    _feed(st, worker, MIX[: SR * 4])
+    assert seen == [0, 1_000_000, 2_000_000] and worker.listener_errors == 3
+
+
+def test_silence_has_no_activity():
+    class Quiet:
+        n_out = 2
+
+        def __call__(self, x):
+            return np.stack([x * 0.5, x * 0.5])
+    live = LiveSeparator(Quiet())
+    x = (rng.standard_normal((2 * SR, 1)) * 1e-4).astype(np.float32)  # -80 dBFS hiss
+    for c in live.step(x, 0):
+        assert c.activity.max() == 0
+
+
+def test_worker_notices_ring_reset():
+    st = IngestState()
+    worker = SeparationWorker(st, LiveSeparator(OracleSeparator()))
+    _feed(st, worker, MIX[: SR * 3])
+    st.audio.reset()  # e.g. a reconnect, while the worker holds an old position
+    worker.live.sep.pos = 0
+    _feed(st, worker, MIX[: SR * 3], k0=1000)
+    assert len(worker.chunks) == 4 and worker.chunks[-1][0].start_ts_us == 1000 * 20_000 + 1_000_000

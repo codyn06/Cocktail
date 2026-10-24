@@ -54,6 +54,7 @@ class AudioRing:
         self.written = 0  # total samples ever written (absolute index of the next sample)
         self.anchors: deque[tuple[int, int]] = deque(maxlen=4096)  # (abs index, device_ts_us)
         self.contiguous_since_us: int | None = None  # start of the current gap-free stretch
+        self.resets = 0  # consumers compare this to notice a reset
         self.lock = threading.RLock()
 
     def write(self, x: np.ndarray, device_ts_us: int) -> None:
@@ -86,6 +87,7 @@ class AudioRing:
             self.written = 0
             self.anchors.clear()
             self.contiguous_since_us = None
+            self.resets += 1
 
     def last(self, seconds: float) -> tuple[np.ndarray, int]:
         """Most recent audio, shape (n, channels), and the device time of its first sample."""
