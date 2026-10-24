@@ -136,17 +136,13 @@ namespace Cocktail.Audio
         {
             try
             {
-                string[] names = AudioSettings.GetSpatializerPluginNames();
+                // The spatializer plugin is chosen in Project Settings > Audio (set by the
+                // Cocktail setup menu). The runtime list/set APIs are not in Unity 6000.0.
                 string current = AudioSettings.GetSpatializerPluginName();
-                bool available = System.Array.IndexOf(names, preferredSpatializer) >= 0;
-                if (available && current != preferredSpatializer)
-                {
-                    AudioSettings.SetSpatializerPluginName(preferredSpatializer);
-                    current = AudioSettings.GetSpatializerPluginName();
-                }
-                SpatializerInfo = $"spatializer='{current}' available=[{string.Join(", ", names)}]";
+                bool available = current == preferredSpatializer;
+                SpatializerInfo = $"spatializer='{current}'";
                 if (!available)
-                    SpatializerInfo += " (Meta XR Audio plugin NOT installed: using Unity built-in 3D panning)";
+                    SpatializerInfo += " (Meta XR Audio not selected: using Unity built-in 3D panning)";
                 Debug.Log("[AudioOutPlayer] " + SpatializerInfo + $" outputSampleRate={AudioSettings.outputSampleRate}Hz");
             }
             catch (System.Exception e) { SpatializerInfo = "spatializer query failed: " + e.Message; Debug.LogWarning("[AudioOutPlayer] " + SpatializerInfo); }
