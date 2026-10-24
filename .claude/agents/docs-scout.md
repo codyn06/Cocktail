@@ -3,7 +3,7 @@ name: docs-scout
 description: "Read-only researcher that verifies SDK APIs, hardware capabilities, model requirements, and official examples needed by the plan. Use before relying on any external API or device claim."
 tools: Read, Grep, Glob, WebFetch, WebSearch, Bash
 disallowedTools: Write, Edit, NotebookEdit
-model: inherit
+model: sonnet
 skills:
   - hz-quest-verify-first
   - gemini-api-dev

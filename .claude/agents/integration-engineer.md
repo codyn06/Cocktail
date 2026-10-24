@@ -1,7 +1,7 @@
 ---
 name: integration-engineer
 description: "Engineer for bounded Gemini API integration and communication/interface tasks between components (phone, glasses, display, perception services)."
-model: inherit
+model: sonnet
 skills:
   - gemini-api-dev
   - systematic-debugging

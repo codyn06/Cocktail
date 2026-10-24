@@ -3,7 +3,7 @@ name: reviewer
 description: "Independent read-only reviewer for correctness, concurrency, latency, secret handling, regressions, and verification evidence."
 tools: Read, Grep, Glob, WebFetch, WebSearch, Bash
 disallowedTools: Write, Edit, NotebookEdit
-model: inherit
+model: sonnet
 skills:
   - verification-before-completion
 ---
