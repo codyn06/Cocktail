@@ -3,3 +3,6 @@
 
 # graphify output: rebuilt locally per checkout (see AGENTS.md "Codebase context")
 graphify-out/
+
+# graphify hook install adds a merge driver for graph.json; unused since the graph is not committed
+.gitattributes

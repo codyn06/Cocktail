@@ -91,10 +91,11 @@ graphify builds a local knowledge graph of the repo in `graphify-out/` (gitignor
 rebuilt per clone by git hooks). Skill: `.agents/skills/graphify/SKILL.md`. Setup follows
 the official docs (https://github.com/Graphify-Labs/graphify, https://docs.graphify.com).
 
-- **Setup (once per machine):** `uv tool install graphifyy` (or `pipx install graphifyy`)
+- **Setup (once per machine):** `uv tool install graphifyy==0.9.95` (or `pipx install graphifyy==0.9.95`)
   so `graphify` is on PATH. Installing software needs user approval.
 - **Setup (once per clone):** `graphify hook install` (post-commit/checkout/merge/rewrite
-  hooks rebuild the graph, code only), then `graphify update .` to build the first graph.
+  hooks rebuild the graph, code only; it also adds a `.gitattributes` merge-driver line,
+  which is not committed because the graph isn't), then `graphify update .` to build the first graph.
   Run `graphify update .` after pulls too. Both are local tree-sitter, no model calls.
   The full `/graphify .` pass also sends docs, PDFs, and images to the assistant's model
   provider; ask the user before running it on anything sensitive.
@@ -110,8 +111,8 @@ the official docs (https://github.com/Graphify-Labs/graphify, https://docs.graph
 - Claude Code: `graphify claude install` wrote the graphify section in `CLAUDE.md` and
   the `graphify hook-guard` PreToolUse hooks in `.claude/settings.json` (they nudge
   toward graph queries). `.claude/hooks/graphify-subagent-guard.mjs` adds a project
-  rule: it blocks a subagent's Bash/Grep/Glob/Read calls until that subagent has run a
-  `graphify` command (reads inside `graphify-out/` are allowed); it does nothing when the
+  rule: it blocks a subagent's Bash/Grep/Glob/Read calls until that subagent has run
+  `graphify query|explain|path|update` (reads inside `graphify-out/` are allowed); it does nothing when the
   graph or CLI is missing. Without the CLI on PATH the official hooks report a
   non-blocking hook error. Other tools follow these rules from this file.
 - Not run here: `graphify codex|antigravity|pi ... install`. They write into
