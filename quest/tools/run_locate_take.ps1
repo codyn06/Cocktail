@@ -16,6 +16,7 @@ Angles: 0 = laptop straight ahead, 90 = directly on your right, 180 = behind you
 param(
     [double[]]$Truths = @(0, 90, 180, -90),
     [switch]$Quiet,
+    [int]$VoiceVolume = 35,      # spoken prompts, 0-100
     [int]$NoiseUntil = 4,
     [int]$GoAt = 8,
     [int]$StopAt = 28,
@@ -31,6 +32,7 @@ $act = "$pkg/com.unity3d.player.UnityPlayerGameActivity"
 $stamp = Get-Date -Format "MMdd-HHmm"
 Add-Type -AssemblyName System.Speech
 $voice = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$voice.Volume = $VoiceVolume
 function Say($t) { Write-Host ">> $t" -ForegroundColor Cyan; if (-not $Quiet) { $voice.Speak($t) } else { Start-Sleep -Seconds 4 } }
 
 # stimulus: 40 s of pink-ish noise as a WAV the laptop can loop
@@ -39,7 +41,7 @@ $gen = @'
 import numpy as np, wave, sys
 rng = np.random.default_rng(0); n = 44100 * 40
 w = rng.standard_normal(n); W = np.fft.rfft(w); f = np.fft.rfftfreq(n, 1/44100); f[0] = 1
-x = np.fft.irfft(W / np.sqrt(f), n); x = x / np.abs(x).max() * 0.9
+x = np.fft.irfft(W / np.sqrt(f), n); x = np.clip(x / x.std() * 0.30, -0.98, 0.98)  # loud: RMS about -10 dBFS
 with wave.open(sys.argv[1], "wb") as o:
     o.setnchannels(1); o.setsampwidth(2); o.setframerate(44100); o.writeframes((x * 32767).astype("<i2").tobytes())
 '@
