@@ -11,7 +11,7 @@ Each decision has a status:
 - **Open**: not decided.
 
 Evidence labels follow the team convention: hardware-tested, mocked, replayed, simulated,
-untested. Last updated 2026-10-24.
+untested. Last updated 2026-10-24 (after PRs #20, #21, #28, #30, #32).
 
 ## System overview
 
@@ -27,12 +27,18 @@ untested. Last updated 2026-10-24.
                                                                │ per-mic band levels
                                                                ▼
                                                  locate: bearing from head movement      [C4]
+                                                               │ GET /sources (slots s1, s2, ...)
+                                                               ▼
+                                                 track: stable ids t1, t2, ... [D1, not wired yet]
                                                                │
- labels, arrows ◀── /events (JSON: sources, state) ◀──── sources (label + bearing + level)
+ labels, arrows ◀── /events (JSON: sources, state) ◀──── sources (label + bearing + state)
  3D playback    ◀── /audio/out (binary, 48 kHz)    ◀──── chosen sound (E1, not built)
 ```
 
 The mock headset (`hub/mockclient`) replaces the left column for testing without a headset.
+The Quest side (left column) is merged (PRs #18, #28) and hardware-tested for streaming; the
+hub currently answers it with ingest, separation and `/sources`, and does not yet push
+`sources.updated` events or `/audio/out`.
 
 ## Decisions
 
@@ -44,8 +50,9 @@ The mock headset (`hub/mockclient`) replaces the left column for testing without
   private hotspot.
 
 ### D2. Hub stack: Python 3.12, one uv project in `hub/`, one folder per task
-**Merged** (PRs #10, #15). Packages: `protocol/` (A2), `ingest/` (B3), `mockclient/` (B4),
-`separate/` (A6/C3); `locate/` (A8/C4) is in review.
+**Merged** (PRs #10, #15, #11, #21, #30). Packages: `protocol/` (A2), `ingest/` (B3),
+`mockclient/` (B4), `separate/` (A6/C3), `locate/` (A8/C4), `track/` (D1). The separation
+benchmark harness from PR #20 lives in `eval/` with its own `bench` dependency group.
 - **Why:** the ML ecosystem is Python. One project with one lockfile avoids version drift.
   One owner per folder keeps parallel work from conflicting (PRD section 14).
 - **GPU dependencies are an opt-in group** (`uv sync --group gpu`): PyTorch built for CUDA
@@ -62,6 +69,9 @@ The mock headset (`hub/mockclient`) replaces the left column for testing without
 - **The schema is frozen:** changes only by team agreement.
 - **Audio chunk timestamp = capture time of the chunk's first sample.** The hub assumed this
   (PR #15) and the Quest client sets it this way (PR #18, `MicStreamer.cs`).
+- **The Quest 3S delivers 2 raw mic channels at 48 kHz** (PR #18, hardware-tested: native
+  `AudioRecord` UNPROCESSED, Unity Microphone as fallback). Channel order (left/right) is still
+  unconfirmed; it matters for D8.
 
 ### D4. One clock: the headset's; audio converted to 16 kHz at ingest
 **Merged** (PR #15, simulated).
@@ -114,8 +124,10 @@ The mock headset (`hub/mockclient`) replaces the left column for testing without
 - **One talker, or none:** MossFormer2 always outputs two voices, so with a single talker it
   splits that person across both voice streams. Two gates fix this (PR #26):
   - **Direction gate:** if the two voice streams arrive from the same direction (their
-    left/right level differences, 1–8 kHz, differ by less than 4.5 dB), they're one source.
-    The voice is merged into the slot it already occupied.
+    left/right level differences differ by less than 4.5 dB), they're one source and are
+    merged. Compared **per band** (1–2, 2–4, 4–8 kHz, PR #21): head shadow depends on
+    frequency, and the separator gives the two halves of one talker different frequency
+    regions, so a single broadband comparison made them look like two directions.
   - **Speech gate:** a voice stream that doesn't sound like speech moves into the residual.
 - **Why direction:** level correlation and voice fingerprints (WavLM speaker embeddings) were
   measured first and couldn't tell one split talker from two real ones, including a
@@ -128,6 +140,9 @@ The mock headset (`hub/mockclient`) replaces the left column for testing without
   - two talkers, including two men and music louder than the speech: +17 to +22 dB;
   - one talker: +9 to +16 dB in a single stream;
   - three voices: the third ends up in the residual.
+- **3+ voices: parked (PR #27, draft).** Order matching across all streams, a gated second pass
+  on the residual and 4 s windows reach +18.5 / +11.3 / +13.3 dB with three talkers (vs +7 /
+  +6 / +1 today) and run in real time in bf16. Not merged by decision; pick it up from the PR.
 - **Limits:**
   - About 1–2 s of delay: fine for labeling and locating, too slow for live listening.
   - At most 2 voices, plus 1 residual.
@@ -136,19 +151,33 @@ The mock headset (`hub/mockclient`) replaces the left column for testing without
   - Clean read speech in the tests, so expect lower scores on real room audio.
 
 ### D8. Locating: bearing from natural head movement, using per-mic levels of each stream
-**Proposed** (PR #11 A8 estimator, by Lalitha; PR #21 C4 wiring, simulated).
+**Merged** (PR #11 A8 estimator, by Lalitha; PR #21 C4 wiring; simulated).
 - **Inputs:** separation produces each stream as heard at each mic (spectrogram masks applied
   to every mic). It then computes band levels at 20 Hz in the estimator's 5 bands
   (500 Hz – 8 kHz).
 - **Processing:** the estimator matches how those levels change as the head turns, giving a
   360° bearing in the world frame. Convention: 0 = initial forward, + = right.
 - **Bearings are withheld until the estimator has seen enough head movement.**
-- **Simulated errors:** 40° / 9° / 16°. Most of the error comes from the estimator's head model
-  itself. It also reports full confidence when wrong. Findings are posted on PR #11.
+- **Output** (`LiveLocator`, served at `GET /sources`): one protocol `Source` per separator slot
+  with label, world bearing and confidence, and a state: `tracking` while heard, `last_seen`
+  after 2 s of silence, `lost` after 10 s. Never-heard slots aren't published; ambiguous
+  (mirror) bearings are capped at 0.5 confidence.
+- **`source_id` is a separator slot (`s1`, `s2`, ...), not a person.** Slots change occupant;
+  identity is D1's job (D14).
+- **World 0°** is the headset's tracking-space forward, which equals "initial forward" only if
+  the tracking origin faced forward. Needs a headset check (recentring shifts it).
+- **Simulated errors:** female voice within 7–16°, music 5–15°, **male voices pulled 30–45°
+  toward the front** whichever side they're on (swapping sides showed the error follows the
+  voice, not the side, so it's not a wiring bug). The estimator also reports full confidence
+  when wrong. Findings are on PR #11.
+- **Real-world test tooling** (PR #32, Lalitha's from #29): `quest/tools/run_locate_take.ps1`
+  records a take on the 3S with a sound source at a known angle and scores it with
+  `locate.real_eval`. The recorder is hardware-tested; no real take has passed yet.
 - **Open:**
   - the 3S mics aren't at ear positions, so the mic angles and gain table need calibrating
-    from a real 3S recording (C2);
-  - audio channel order (left/right) is still unconfirmed on the headset.
+    from real takes;
+  - audio channel order (left/right) is still unconfirmed on the headset;
+  - the male-voice bias and overconfidence are in the estimator (A8).
 
 ### D9. Vision: the SAM 3 image model per frame, not the SAM 3.1 tracker
 **Proposed** (from A3 measurements, hardware-tested; C5 not built).
@@ -193,8 +222,13 @@ The mock headset (`hub/mockclient`) replaces the left column for testing without
   - writes 50 Hz head poses and per-source ground truth.
 - **Replayer** (`mockclient.replay`): streams any session into the hub in real time over the
   real protocol.
-- **Scoring:** `separate.score` (SI-SDR improvement and labels) and `locate.score_live`
-  (bearing error, in PR #21).
+- **Scoring:**
+  - `separate.score` (SI-SDR improvement and labels) and `separate.suite` (11 scenes: 1-3
+    voices, music, bird, turn-taking);
+  - `locate.score_live` (bearing error vs truth);
+  - `locate.real_eval` scores real 3S takes (PR #32);
+  - `eval/` (PR #20) benchmarks streaming separators (ConvTasNet, SepFormer) on LibriSpeech
+    mixtures, for the low-latency modes.
 - **Demo audio:** `mockclient.demo_stems` makes reproducible demo clips.
 - **Caveat:** the simulator assumes ear-level mics and no room echo. Real accuracy has to be
   measured on 3S recordings.
@@ -209,16 +243,31 @@ The mock headset (`hub/mockclient`) replaces the left column for testing without
 - **After a crash or interrupted download, verify the cache.** Corrupted files have kept their
   correct size.
 
+### D14. Tracking: stable source ids from world bearing and label
+**Merged, not wired into the live hub** (PR #30, D1, by Lalitha; simulated).
+- `hub/track` turns the separator slots plus their world bearings into stable sources `t1`,
+  `t2`, ... with a state (`tracking`, `last_seen`, `lost`) and an `in_view` flag. Input and
+  output are protocol `Source` objects, so it slots in after `LiveLocator`.
+- **Identity comes from world bearing plus label,** so a talker who pauses and returns in a
+  different slot keeps their id (the case the separator leaves open, D7). Ids are never reused.
+- `update()` must run on every tick (~10 Hz), even when nothing is heard; that's where
+  `last_seen` and `lost` happen.
+- **Next:** call it from the hub after `LiveLocator` and push `sources.updated` to the headset.
+  It inherits D8's accuracy: a 30–45° male-voice bias can split one person into two tracks.
+
 ## Open items
 
 - **Integration owner:** unassigned. `.agents/decisions.md` is out of date ("no app stack
   chosen") and should be updated by whoever takes the role. Its decisions on agent tooling and
   Gemma still stand.
 - **Low-latency modes (F1) need a different separator:** D7's ~1 s delay is too slow for
-  Fast/Balanced listening. PR #20 (Lalitha) benchmarks ConvTasNet and SepFormer with
-  streaming windows; reconcile with D7.
-- **First headset test (PR #18):**
-  - mic channel count, whether the audio is raw, and channel order (left/right);
-  - the real delay over Wi-Fi vs USB.
-- **Locating accuracy** on the 3S recording (C2), and the estimator's overconfidence (PR #11).
-- **Sending sound back to the headset** (`/audio/out`, E1) is not built yet.
+  Fast/Balanced listening. PR #20's benchmark (`eval/`) found no candidate real-time in Fast
+  mode yet; reconcile with D7.
+- **Wire the live loop end to end:** tracker (D14) after `LiveLocator`, `sources.updated` to the
+  headset UI (PR #28), then `/audio/out` (E1).
+- **Headset checks:** mic channel order (left/right), tracking-origin yaw (D8), real delay
+  over Wi-Fi vs USB. Mic count and raw access are confirmed (D3).
+- **Locating accuracy on real takes** (PR #32 tooling) and the estimator's male-voice bias and
+  overconfidence (A8).
+- **Direction gate threshold** (D7) is tuned on simulated ear-level mics; calibrate per device.
+- **3+ voices** (D7): parked in PR #27.

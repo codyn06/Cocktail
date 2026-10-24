@@ -8,7 +8,7 @@ Each take: ~4 s of room noise (source off, used to subtract the room), the lapto
 noise, then two beeps in the headset (and a voice) = turn your head slowly left/right about 40 degrees
 each way, three beeps = stop. Then it scores the take (PASS/FAIL per check).
 
-Run from the repo root of the branch feat/locate-real-test:
+Run from the repo root:
     powershell -ExecutionPolicy Bypass -File quest/tools/run_locate_take.ps1
 Options: -Truths 0,90,180,-90   -Quiet (no spoken prompts; just wait)   -Seconds 28
 Angles: 0 = laptop straight ahead, 90 = directly on your right, 180 = behind you, -90 = on your left.

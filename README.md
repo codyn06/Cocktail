@@ -8,9 +8,10 @@ chosen sound back to the headset in 3D. Plan: [`docs/QUEST_PRD.txt`](docs/QUEST_
 Live progress: [`docs/STATUS.md`](docs/STATUS.md).
 
 > **Status (2026-10-24):** the hub runs end to end on simulated data: ingest, a mock
-> headset, and live separation with labels. Direction finding is in review (PR #21).
-> The Quest app doesn't stream to the hub yet (task B1), and nothing has been tested
-> on the headset yet.
+> headset, live separation with labels, and direction finding (`GET /sources`). The Quest
+> app streams mic audio (2 raw channels, 48 kHz), head pose and camera to the hub
+> (hardware-tested) and has a headset UI. Not yet: the tracker (`hub/track`) in the live
+> loop, sources pushed to the headset, sound sent back, and a passing real-world test.
 
 ## Repository layout
 
@@ -22,8 +23,9 @@ Live progress: [`docs/STATUS.md`](docs/STATUS.md).
 | `.agents/` | Canonical roles, skills, sync script, decisions, and branch handoffs |
 | `.claude/`, `.codex/`, `.pi/`, `.agent/` | Per-tool copies generated from `.agents/` |
 | `graphify-out/` | Local code knowledge graph (gitignored, rebuilt per clone) |
-| `hub/` | Laptop hub (Python 3.12): `protocol/` wire format, `ingest/` server, `mockclient/` fake headset, `separate/` live separation |
-| `quest/` | Unity project for the Quest headset ([setup](quest/README.md)) |
+| `hub/` | Laptop hub (Python 3.12): `protocol/` wire format, `ingest/` server, `mockclient/` fake headset, `separate/` live separation, `locate/` direction finding, `track/` stable source ids |
+| `quest/` | Unity project for the Quest headset ([setup](quest/README.md)); `quest/tools/` has the mock hub, headset validation and the real-world recorder |
+| `eval/` | Streaming separation benchmark ([README](eval/README.md)) |
 | `ARCHITECTURE.md` | System overview and architectural decisions, with their status and evidence |
 | `docs/` | Plan (`QUEST_PRD.txt`) and status board (`STATUS.md`) |
 
@@ -36,7 +38,8 @@ What you need depends on what you work on. All setup steps are below or linked.
 | Everyone (repo, agents) | any | Git, GitHub CLI, Node.js 18+, uv, a coding agent | GitHub | small |
 | Hub on recorded/simulated data | any laptop, Windows/macOS/Linux | uv (installs Python 3.12 itself) | none | ~200 MB |
 | Live separation and labels | NVIDIA GPU, ~2 GB free VRAM; driver with CUDA 12.8+ (RTX 50-series needs it) | the hub's `gpu` dependency group | none (models are public) | ~5 GB (PyTorch ~3 GB, models ~1 GB) |
-| SAM 3 / SAM Audio (A3, C5, D3; experimental) | NVIDIA GPU; 12 GB is tight (see STATUS budget) | separate environment, not in the hub yet | Hugging Face account approved for the `facebook/sam3*` and `facebook/sam-audio-*` repos | ~18 GB of weights |
+| Separation benchmark (`eval/`) | NVIDIA GPU | `gpu` + `bench` dependency groups | none | several GB + LibriSpeech dev-clean (~330 MB) |
+| SAM 3 / SAM Audio (A3, C5, D3; experimental) | NVIDIA GPU; 12 GB is tight (see STATUS budget) | separate environment, not in the hub yet | Hugging Face account approved for the `facebook/sam3*` and `facebook/sam-audio-*` repos | ~35 GB in the Hugging Face cache (SAM Audio alone pulls ~28 GB with its companion models) |
 | Quest app | Quest 3S (camera, main) or Quest 2 (display only); USB-C data cable | Unity 6000.0.80f1 with Android Build Support, Meta XR packages | Meta developer organization, Developer Mode on the headset | Unity install + project |
 | Headset to hub | laptop and headset on the same private network, or USB | Windows Firewall allows TCP 8765, or `adb reverse` | none | none |
 
@@ -176,7 +179,9 @@ uv run python -m mockclient.replay sessions/demo
 ```
 
 http://localhost:8765/separate/status shows each separated stream with its label, level
-and compute time per 1 s hop.
+and compute time per 1 s hop. http://localhost:8765/sources shows the sources with their
+direction (world bearing in degrees, + = right), confidence and state (`tracking`,
+`last_seen`, `lost`). A source's `source_id` is a separator slot (`s1`, `s2`, ...), not a person.
 
 Score separation on a simulated session (it needs ground truth, so only `mockclient.simulate`
 sessions work). It prints the SI-SDR improvement per source, which needs to be at least +8 dB,
@@ -189,10 +194,44 @@ uv run --group gpu python -m separate.score sessions/demo
 
 Add `--no-labels` to either command to skip the labeling model.
 
+More scoring on simulated sessions:
+
+```sh
+uv run --group gpu --with librosa python -m separate.suite   # 11 scenes: 1-3 voices, music, bird, turn-taking
+uv run --group gpu python -m locate.score_live sessions/demo  # direction error per source vs truth
+```
+
+The suite writes each scene's mix and output streams as WAVs to `hub/sessions/suite/sceneNN/out/`
+for listening.
+
+### Real-world direction test (Quest 3S)
+
+Records a take on the headset with a sound source at a known angle and scores the direction
+finder on it. Needs the headset set up as in [`quest/README.md`](quest/README.md) and the app
+installed. From the repo root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File quest/tools/run_locate_take.ps1
+```
+
+A voice tells you when to turn your head; it prints PASS/FAIL per take. The pieces can also run
+separately: `quest/tools/record_session.py` records (audio + head pose, to `hub/recordings/`,
+gitignored), and `uv run python -m locate.real_eval recordings/<take>` (from `hub/`) scores.
+
 ### Quest app
 
 Unity, headset and developer-account setup are in [`quest/README.md`](quest/README.md).
-The app doesn't stream to the hub yet (task B1).
+The app streams mic audio, head pose and camera to the hub and has a headset UI; in Unity run
+**Cocktail > Add Streaming Components** (and **Add UI Components** for the UI) once, then
+Build And Run. To check a headset end to end against a mock hub:
+
+```powershell
+uv run --project hub python quest/tools/mock_hub.py                 # terminal 1
+powershell -ExecutionPolicy Bypass -File quest/tools/validate_quest.ps1   # terminal 2
+```
+
+It prints PASS/FAIL for hub reachable, audio and pose rates, camera frame rate, raw mic and
+controller input.
 
 ### Reaching the hub from the Quest
 
