@@ -36,17 +36,25 @@ Do not assume:
 4. **Integrate and review**: the orchestrator inspects and integrates results itself,
    then gets an independent review proportional to risk (the `reviewer` role for
    non-trivial or shared-interface changes).
-5. **Continuity**: keep `.agents/handoff.md` current (status, ownership, decisions,
-   verification, next steps) so another agent or teammate can resume.
+5. **Continuity**: for substantive tasks keep a per-branch handoff file in
+   `.agents/handoff/` (format in `.agents/handoff/README.md`: status, ownership,
+   decisions, verification, next steps) so another agent or teammate can resume.
+   Only that branch's orchestrator edits it; delete it in the PR before merge.
+   Durable team-wide decisions go in `.agents/decisions.md` via PR.
+   Live status across teammates lives in GitHub: open a draft PR early
+   (`gh pr list` shows who is working on what).
 
 Trivial tasks: write a brief plan and do them directly.
 
 ## Hackathon coordination and fallbacks
 
 - Each feature has one orchestrator. Before parallel work, agree on a team integration
-  owner for shared interfaces and `.agents/handoff.md`; only that owner updates the
-  shared handoff. Other agents return handoff notes. Record active ownership and
-  exclusive headset/GPU reservations there; separate worktrees do not isolate hardware.
+  owner for shared interfaces and `.agents/decisions.md`; only that owner approves
+  changes to them. Subagents return handoff notes to their orchestrator.
+- Shared devices are not isolated by worktrees. Before running commands that change or
+  occupy a physical device (install, uninstall, reboot, clear data, settings changes)
+  or a long GPU job on a shared machine, ask the user to confirm it's free. Note in
+  results if measurements may have run alongside other work.
 - Read-only roles may run bounded inspection commands (`rg`, file reads, `git status`,
   `git diff`, `git show`) and retrieve public official documentation without saving it.
   They must not mutate files, install software, execute repository code, or run tests
@@ -101,9 +109,16 @@ current branch and PR; do not restart the branch workflow for each agent subtask
   `feat(perception): add SAM3 image prompt wrapper`. Make small focused commits, and
   never commit secrets, `.env` files, checkpoints, or large binaries.
 - **Scope:** one feature per branch and PR. Unrelated fixes get their own branch.
-- **Before opening a PR:** rebase on or merge the latest target branch, run the
+- **Draft PRs:** open early with `gh pr create --draft --base <target>` to show work
+  in progress. Checks and review may still be pending; state that clearly and keep
+  the branch handoff available throughout development and review.
+- **Before marking a PR ready for review (or opening a non-draft PR):** rebase on or
+  merge the latest target branch, run the
   relevant checks (and `node .agents/scripts/sync.mjs --check` if `.agents/` or
   `AGENTS.md` changed), and get a `reviewer` pass for non-trivial changes.
+- **When preparing to merge:** move durable decisions from the branch handoff file
+  into `.agents/decisions.md` or the PR body, then delete the handoff file in that PR.
+  Re-run checks affected by final edits. A human still approves and merges.
 - **Open the PR** with `gh pr create --base <target>`, using a Conventional Commit
   title. The body covers: summary, linked issue (if any), checks actually run with
   results, evidence labels (hardware-tested / mocked / replayed / untested), and
