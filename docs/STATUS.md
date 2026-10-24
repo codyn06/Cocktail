@@ -67,7 +67,8 @@ Demo work (A9 pitch, H1 filming, G4 README) starts only after the product is fin
 ## Open decisions / blockers
 - Integration owner: unassigned.
 - Unity: repo pins 6000.0.80f1; hub laptop has 6000.6.7f1.
-- GPU: the team has an RTX 5070 Ti machine (16 GB per spec; confirm with `nvidia-smi`).
-  Make it the live-run machine. It is Blackwell, so install PyTorch built for CUDA 12.8+
-  (cu128 wheels). Hub laptop (RTX 4060, 8 GB) is for development. Still to measure:
-  do separation, SAM 3, enhancement and SAM Audio fit together on 16 GB (A3)?
+- GPU: the live-run machine is an RTX 5070 Ti **Laptop** GPU with **12 GB** VRAM
+  (11.9 GiB usable, `nvidia-smi` 2026-10-24; not 16 GB). Blackwell (sm_120): install with
+  `cd hub && uv sync --group gpu` (torch 2.11.0+cu128, CUDA available, ~14.5 TFLOPS fp16
+  matmul). Hub laptop (RTX 4060, 8 GB) is for development. Still to measure:
+  do separation, SAM 3, enhancement and SAM Audio fit together on 12 GB (A3)?
