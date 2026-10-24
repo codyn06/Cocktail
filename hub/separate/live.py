@@ -9,7 +9,7 @@ Every hop (default 1 s) the separator sees the last `win` seconds (default 2 s) 
 The voice separator always outputs two voices. With one talker it splits that person across
 both, so two gates run on every window:
   merge:  if the two voice streams arrive from the same direction (their left/right level
-          difference, 1-8 kHz, differs by less than merge_ild_db) they are one source: summed
+          difference, per band 1-8 kHz, differs by less than merge_ild_db) they are one source: summed
           into the louder slot, the other slot goes silent. Needs >= 2 mics.
   speech: a voice stream the labeler does not hear as speech (music only, birds) moves into
           the residual. Needs a labeler.
@@ -130,14 +130,22 @@ class LiveSeparator:
         return out
 
     @staticmethod
-    def _ild_diff(E: np.ndarray, f: np.ndarray) -> float:
-        """E: (2 voices, 2 mics, F, T) power. Mean |ILD(v1) - ILD(v2)| in dB over 1-8 kHz,
-        weighted toward STFT frames where both voices are present."""
-        band = (f >= 1000) & (f <= 8000)
-        e = E[:, :, band].sum(2)                                   # (2, mics, T)
-        ild = 10 * np.log10((e[:, 1] + 1e-10) / (e[:, 0] + 1e-10))
-        w = np.minimum(e[0].sum(0), e[1].sum(0))
-        return float(np.sum(w * np.abs(ild[0] - ild[1])) / (w.sum() + 1e-12))
+    def _ild_diff(E: np.ndarray, f: np.ndarray, edges=(1000.0, 2000.0, 4000.0, 8000.0)) -> float:
+        """E: (2 voices, 2 mics, F, T) power. Mean |ILD(v1) - ILD(v2)| in dB, compared band by
+        band (1-2, 2-4, 4-8 kHz) and weighted toward STFT frames where both voices are present.
+
+        Per band, because head shadow depends on frequency and the separator tends to give the
+        two halves of one talker different frequency regions: a single broadband ILD makes the
+        halves look like they come from different directions."""
+        num = den = 0.0
+        for lo, hi in zip(edges, edges[1:]):
+            band = (f >= lo) & (f < hi)
+            e = E[:, :, band].sum(2)                               # (2 voices, mics, T)
+            ild = 10 * np.log10((e[:, 1] + 1e-10) / (e[:, 0] + 1e-10))
+            w = np.minimum(e[0].sum(0), e[1].sum(0))
+            num += np.sum(w * np.abs(ild[0] - ild[1]))
+            den += w.sum()
+        return float(num / (den + 1e-12))
 
     def _speech_gate(self, out: np.ndarray, p: np.ndarray) -> None:
         """Move voice streams that don't sound like speech into the residual (in place)."""
