@@ -43,7 +43,7 @@ def run(live, x):
 
 def test_overlap_add_keeps_order_and_scale():
     x = np.stack([MIX, MIX], axis=1)  # no direction information: direction gate off
-    est, chunks = run(LiveSeparator(OracleSeparator(), merge_ild_db=0), x)
+    est, chunks = run(LiveSeparator(OracleSeparator(), win_s=2.0, merge_ild_db=0), x)
     n = len(est["s1"])
     assert n == 7 * SR  # 7 windows of 2 s over 8 s, one 1 s hop each
     # Stream identity stays fixed despite random order from the separator.
@@ -55,7 +55,7 @@ def test_overlap_add_keeps_order_and_scale():
 
 def test_chunk_fields_for_locate():
     x = np.stack([MIX, 0.5 * MIX], axis=1)  # right mic 6 dB quieter
-    _, chunks = run(LiveSeparator(OracleSeparator()), x)
+    _, chunks = run(LiveSeparator(OracleSeparator(), win_s=2.0), x)
     c = chunks[3][0]
     assert c.mic_audio.shape == (2, SR) and c.audio.shape == (SR,)
     assert c.levels_db.shape == (len(c.level_ts_us), 2, len(BAND_CENTERS_HZ))
@@ -66,7 +66,7 @@ def test_chunk_fields_for_locate():
 
 def test_worker_follows_ingest_ring():
     st = IngestState()
-    worker = SeparationWorker(st, LiveSeparator(OracleSeparator()))
+    worker = SeparationWorker(st, LiveSeparator(OracleSeparator(), win_s=2.0))
     assert not worker.poll()
     frames = SR // 50  # 20 ms chunks at 16 kHz
     got = []
@@ -101,7 +101,7 @@ def _feed(st, worker, sig, k0=0):
 
 def test_listener_error_does_not_repeat_window():
     st = IngestState()
-    worker = SeparationWorker(st, LiveSeparator(OracleSeparator()))
+    worker = SeparationWorker(st, LiveSeparator(OracleSeparator(), win_s=2.0))
     seen = []
 
     def bad(chunks):
@@ -118,7 +118,7 @@ def test_silence_has_no_activity():
 
         def __call__(self, x):
             return np.stack([x * 0.5, x * 0.5])
-    live = LiveSeparator(Quiet())
+    live = LiveSeparator(Quiet(), win_s=2.0)
     x = (rng.standard_normal((2 * SR, 1)) * 1e-4).astype(np.float32)  # -80 dBFS hiss
     for c in live.step(x, 0):
         assert c.activity.max() == 0
@@ -126,7 +126,7 @@ def test_silence_has_no_activity():
 
 def test_worker_notices_ring_reset():
     st = IngestState()
-    worker = SeparationWorker(st, LiveSeparator(OracleSeparator()))
+    worker = SeparationWorker(st, LiveSeparator(OracleSeparator(), win_s=2.0))
     _feed(st, worker, MIX[: SR * 3])
     st.audio.reset()  # e.g. a reconnect, while the worker holds an old position
     worker.live.sep.pos = 0
@@ -148,7 +148,7 @@ def test_direction_gate_merges_one_source_split_in_two():
     rng2 = np.random.default_rng(3)
     v = rng2.standard_normal(SR * 4).astype(np.float32) * 0.1
     x = np.stack([v, 0.3 * v], axis=1)  # one source on the left: same level difference everywhere
-    live = LiveSeparator(SplitOracle())
+    live = LiveSeparator(SplitOracle(), win_s=2.0)
     est, _ = run(live, x)
     loud, quiet = sorted([est["s1"], est["s2"]], key=lambda e: -np.sum(e**2))
     assert live.last_gates["merged"] and np.sum(quiet**2) == 0
@@ -170,7 +170,7 @@ def test_direction_gate_keeps_two_sources_from_different_directions():
             return np.stack([0.65 * a[i : i + len(x)], 0.65 * b[i : i + len(x)]])
 
     x = np.stack([a + 0.3 * b, 0.3 * a + b], axis=1)  # a on the left, b on the right
-    live = LiveSeparator(TwoOracle())
+    live = LiveSeparator(TwoOracle(), win_s=2.0)
     run(live, x)
     assert not live.last_gates["merged"] and live.last_gates["ild_diff_db"] > live.merge_ild_db
 
@@ -183,6 +183,6 @@ def test_merged_voice_stays_in_one_stream_across_a_pause():
     a = rng2.standard_normal(SR * 3).astype(np.float32) * 0.1
     left = np.concatenate([a, np.zeros(SR, np.float32), a])
     x = np.stack([left, 0.3 * left], axis=1)
-    est, _ = run(LiveSeparator(SplitOracle()), x)
+    est, _ = run(LiveSeparator(SplitOracle(), win_s=2.0), x)
     e = {k: np.sum(est[k] ** 2) for k in ("s1", "s2")}
     assert min(e.values()) == 0

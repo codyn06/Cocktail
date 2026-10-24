@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -141,15 +142,18 @@ def main():
     ap.add_argument("--only", help="comma-separated scene numbers")
     ap.add_argument("--out", default="sessions/suite", type=Path)
     ap.add_argument("--no-labels", action="store_true")
+    ap.add_argument("--win", type=float, default=4.0, help="window seconds (hop = half)")
     a = ap.parse_args()
     from .models import SoundLabeler, VoiceSeparator
 
-    live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler())
+    live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler(), win_s=a.win)
     ids = [int(x) for x in a.only.split(",")] if a.only else list(SCENES)
     results = {}
     for sid in ids:
         title = SCENES[sid][0]
+        t0 = time.perf_counter()
         r = score_scene(make_session(a.out, sid), live)
+        r["compute_s_per_audio_s"] = round((time.perf_counter() - t0) / DUR, 2)
         results[sid] = {"title": title, **r}
         print(f"\n## {sid}. {title}", flush=True)
         for nm, s in r["sources"].items():
@@ -157,6 +161,7 @@ def main():
                   f"swaps {r['swaps'].get(nm, 0)}", flush=True)
         if r["shared_streams"]:
             print(f"  shared streams: {r['shared_streams']}", flush=True)
+        print(f"  compute: {r['compute_s_per_audio_s']} s per second of audio", flush=True)
         if r["unclaimed_stream_db"]:
             print(f"  unused streams (dB vs mix, lower = quieter): {r['unclaimed_stream_db']}", flush=True)
     (a.out / "results.json").write_text(json.dumps(results, indent=1))
