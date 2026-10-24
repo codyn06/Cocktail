@@ -20,4 +20,4 @@ Owner: codyn06 / Claude Code   PR: https://github.com/codyn06/Cocktail/pull/9
 ## Next steps
 - Install the APK on Quest 2 and confirm grayscale passthrough.
 - Then add a hub `/events` WebSocket client.
-- Rotate the Meta DevAgent access token that was committed in 965087b (public repo). The file is now untracked and gitignored.
+- Rotate the Meta DevAgent access token that was committed earlier on this branch (public repo). History was rewritten and force-pushed without it, and the file is gitignored.
