@@ -1,0 +1,292 @@
+{
+  "$defs": {
+    "Action": {
+      "enum": [
+        "select",
+        "stop",
+        "replay",
+        "next",
+        "prev"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "Hello": {
+      "description": "First message on /ingest/pose after connecting.",
+      "properties": {
+        "seq": {
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "device_ts_us": {
+          "description": "Headset monotonic clock, microseconds",
+          "title": "Device Ts Us",
+          "type": "integer"
+        },
+        "epoch": {
+          "description": "Increments on every reconnect",
+          "minimum": 0,
+          "title": "Epoch",
+          "type": "integer"
+        },
+        "type": {
+          "const": "hello",
+          "default": "hello",
+          "title": "Type",
+          "type": "string"
+        },
+        "device": {
+          "description": "\"quest3s\", \"quest2\", \"mock\", \"glasses\"",
+          "title": "Device",
+          "type": "string"
+        },
+        "protocol_version": {
+          "default": "1.0.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "mic_channels": {
+          "minimum": 1,
+          "title": "Mic Channels",
+          "type": "integer"
+        },
+        "mic_raw": {
+          "description": "True if the mic path is unprocessed",
+          "title": "Mic Raw",
+          "type": "boolean"
+        },
+        "camera": {
+          "title": "Camera",
+          "type": "boolean"
+        },
+        "camera_hfov_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Hfov Deg"
+        }
+      },
+      "required": [
+        "seq",
+        "device_ts_us",
+        "epoch",
+        "device",
+        "mic_channels",
+        "mic_raw",
+        "camera"
+      ],
+      "title": "Hello",
+      "type": "object"
+    },
+    "InputEvent": {
+      "description": "A user action. For select, give a ray (head gaze or hand/controller) in\ntracking space, and/or a source_id if the user picked a labeled source.",
+      "properties": {
+        "seq": {
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "device_ts_us": {
+          "description": "Headset monotonic clock, microseconds",
+          "title": "Device Ts Us",
+          "type": "integer"
+        },
+        "epoch": {
+          "description": "Increments on every reconnect",
+          "minimum": 0,
+          "title": "Epoch",
+          "type": "integer"
+        },
+        "type": {
+          "const": "input",
+          "default": "input",
+          "title": "Type",
+          "type": "string"
+        },
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        },
+        "ray_origin": {
+          "anyOf": [
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ray Origin"
+        },
+        "ray_dir": {
+          "anyOf": [
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ray Dir"
+        },
+        "modality": {
+          "default": "ui",
+          "enum": [
+            "head",
+            "hand",
+            "controller",
+            "ui"
+          ],
+          "title": "Modality",
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "device_ts_us",
+        "epoch",
+        "action"
+      ],
+      "title": "InputEvent",
+      "type": "object"
+    },
+    "PoseSample": {
+      "description": "Head pose in Unity tracking space: +x right, +y up, +z forward (left-handed).\n\nHub derives yaw (deg, + = right turn) from rot.",
+      "properties": {
+        "seq": {
+          "minimum": 0,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "device_ts_us": {
+          "description": "Headset monotonic clock, microseconds",
+          "title": "Device Ts Us",
+          "type": "integer"
+        },
+        "epoch": {
+          "description": "Increments on every reconnect",
+          "minimum": 0,
+          "title": "Epoch",
+          "type": "integer"
+        },
+        "type": {
+          "const": "pose",
+          "default": "pose",
+          "title": "Type",
+          "type": "string"
+        },
+        "pos": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Pos",
+          "type": "array"
+        },
+        "rot_xyzw": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Rot Xyzw",
+          "type": "array"
+        }
+      },
+      "required": [
+        "seq",
+        "device_ts_us",
+        "epoch",
+        "pos",
+        "rot_xyzw"
+      ],
+      "title": "PoseSample",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "hello": "#/$defs/Hello",
+      "input": "#/$defs/InputEvent",
+      "pose": "#/$defs/PoseSample"
+    },
+    "propertyName": "type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Hello"
+    },
+    {
+      "$ref": "#/$defs/PoseSample"
+    },
+    {
+      "$ref": "#/$defs/InputEvent"
+    }
+  ]
+}

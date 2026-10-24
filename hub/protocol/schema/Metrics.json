@@ -1,0 +1,35 @@
+{
+  "description": "Per-stage latency for the live dashboard, ~1 Hz.",
+  "properties": {
+    "type": {
+      "const": "metrics",
+      "default": "metrics",
+      "title": "Type",
+      "type": "string"
+    },
+    "stage_ms": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Stage Ms",
+      "type": "object"
+    },
+    "gpu_util": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gpu Util"
+    }
+  },
+  "required": [
+    "stage_ms"
+  ],
+  "title": "Metrics",
+  "type": "object"
+}

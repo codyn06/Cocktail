@@ -1,0 +1,74 @@
+{
+  "description": "First message on /ingest/pose after connecting.",
+  "properties": {
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    },
+    "device_ts_us": {
+      "description": "Headset monotonic clock, microseconds",
+      "title": "Device Ts Us",
+      "type": "integer"
+    },
+    "epoch": {
+      "description": "Increments on every reconnect",
+      "minimum": 0,
+      "title": "Epoch",
+      "type": "integer"
+    },
+    "type": {
+      "const": "hello",
+      "default": "hello",
+      "title": "Type",
+      "type": "string"
+    },
+    "device": {
+      "description": "\"quest3s\", \"quest2\", \"mock\", \"glasses\"",
+      "title": "Device",
+      "type": "string"
+    },
+    "protocol_version": {
+      "default": "1.0.0",
+      "title": "Protocol Version",
+      "type": "string"
+    },
+    "mic_channels": {
+      "minimum": 1,
+      "title": "Mic Channels",
+      "type": "integer"
+    },
+    "mic_raw": {
+      "description": "True if the mic path is unprocessed",
+      "title": "Mic Raw",
+      "type": "boolean"
+    },
+    "camera": {
+      "title": "Camera",
+      "type": "boolean"
+    },
+    "camera_hfov_deg": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Camera Hfov Deg"
+    }
+  },
+  "required": [
+    "seq",
+    "device_ts_us",
+    "epoch",
+    "device",
+    "mic_channels",
+    "mic_raw",
+    "camera"
+  ],
+  "title": "Hello",
+  "type": "object"
+}

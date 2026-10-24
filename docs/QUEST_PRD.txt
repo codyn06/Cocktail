@@ -1,0 +1,484 @@
+COCKTAIL: QUEST PRD
+See sound. Choose what you hear.
+Product requirements for the Meta Quest build. Every requirement is LIVE.
+Deadline: 10 AM tomorrow (Sunday), including the round-1 video.
+Working product target: tonight (Checkpoint 1 in section 15).
+
+
+================================================================
+0. REVIEW NOTES (issues found and how this version fixes them)
+================================================================
+
+1. Eye tracking: the Quest 2 and Quest 3S have no eye tracking. "Gaze" now
+   means HEAD gaze (where the headset points), plus hand or controller
+   pointing.
+2. Wi-Fi: hackathon Wi-Fi is congested and adds jitter. Use a private
+   network: the laptop's own hotspot or a phone hotspot (no extra hardware).
+   Test a USB-C cable link (adb reverse) for the lowest delay while sitting.
+3. Quest mic: Unity's Microphone API gives processed mono audio. Raw or
+   multichannel access needs a native Android plugin (AudioRecord with the
+   UNPROCESSED source). Test day one; do not assume either way.
+4. 3S camera: the Passthrough Camera API needs Horizon OS v74 or later and
+   the headset camera permission. Frames must be encoded on the headset
+   (JPEG at low resolution, or hardware H.264) before streaming.
+5. Separation: separating every source live is the hardest part. Speech
+   separation models handle a few simultaneous voices; other sounds need a
+   text-queried separator, which may not be causal. Benchmark on day one;
+   report anything blocked to the team.
+6. SAM Audio is heavy: clean replay is triggered and returns in seconds, so
+   it does not block the live path.
+7. Duplicate plans: the old "Build plan" section disagreed with the
+   step-by-step plan. It is replaced by section 15.
+8. Dependency fixes: E1 (select and hear) also depends on A6 (enhancement
+   model). D3 (replay) also depends on C3 (labels used as SAM Audio prompts).
+9. 3D audio: use the Meta XR Audio SDK spatializer in Unity for
+   head-tracked 3D placement.
+10. Automation: added section 16 (one-command scripts, agents per task,
+    automatic tests and metrics) so the team can move fast.
+
+
+================================================================
+1. SUMMARY
+================================================================
+
+Cocktail separates every sound in a room into its own source, tracks what
+each one is and where it is, and lets the wearer pick one to hear amplified
+and enhanced over the rest. It runs on a Meta Quest 3S, with a laptop GPU
+doing all processing live. The design carries over to Meta glasses later.
+
+
+================================================================
+2. PROBLEM
+================================================================
+
+In a busy place every sound reaches you mixed together. You can't pull out
+the one you want, and you often can't tell where it is coming from,
+especially when it is behind you or out of sight.
+
+
+================================================================
+3. USERS
+================================================================
+
+- Anyone in a loud place: dining hall, bar, concert, transit, hackathon
+  floor. Wants to hear one person or sound and know where it is.
+- Search and rescue teams (last priority): want to pick out a faint voice,
+  cough or tapping and find where it came from.
+- Someone looking for a device or person (less priority): crowd, venue,
+  large building. Triggers a beacon chirp from a phone; Cocktail isolates
+  it and points to it.
+
+
+================================================================
+4. MAIN GOAL
+================================================================
+
+AUDIO SEGMENTATION AND TRACKING. Split every sound in the room into its own
+source and track each one continuously: what it is and where it is, in
+view or not. Every other requirement builds on this and never takes
+priority over it. Blockers go to the team; nothing is assumed impossible or
+cut without asking.
+
+
+================================================================
+5. USER STORIES
+================================================================
+
+- As a wearer, I see every sound around me labeled where it is, including
+  sounds behind me.
+- As a wearer, I point at or face a person and hear their voice amplified
+  and clear, even while others talk.
+- As a wearer, I switch between people or sounds instantly.
+- As a wearer, I keep hearing the person I picked when I turn away.
+- As a wearer, I'm alerted to an alarm, a siren or my name, with its
+  direction.
+- As a wearer, I replay the last few seconds cleanly.
+
+
+================================================================
+6. REQUIREMENTS
+================================================================
+
+P0: all required, all live
+ 1. Stream: live mic audio, passthrough video (3S), head pose and input
+    from the Quest to the hub, and audio back.
+ 2. Segment: a causal model splits the mix into individual voices and
+    sounds, with no enrollment or solo sample; each source gets a label
+    (speech, music, alarm).
+ 3. Locate: each source gets a bearing from natural head movement matched
+    to head tracking, plus mic time differences if the Quest exposes 2+
+    channels; 3S cameras and depth confirm when in view. Ongoing sounds
+    first; short sounds after.
+ 4. Track: each source keeps an identity, bearing and state (tracking,
+    last seen, lost), in and out of view.
+ 5. Who is talking: location decides which voice belongs to which person;
+    lips and motion validate.
+ 6. Display: label and outline on each source in view; edge arrow and
+    clock position for sources out of view.
+ 7. Select: head gaze or point with hand or controller, pinch to confirm.
+    Actions: select, stop, replay, next.
+ 8. Hear: two layers in 3D audio. Inner layer: the selected person or
+    sound, amplified and enhanced. Outer layer: the rest of the room,
+    quieter, own volume. A voice embedding learned on the fly keeps the
+    lock.
+ 9. Alerts: alarm, siren and the wearer's name interrupt playback, with
+    direction.
+10. Replay: clean SAM Audio replay of the last 5 s, returned within
+    seconds.
+11. Modes: Fast (no lookahead), Balanced (about 100 ms lookahead) and
+    Accurate (phrase-level, played in pauses with slight speed-up), all
+    built and measured live.
+
+P1: secondary
+- Guidance to a sound: turn-to-find, approximate distance, and Gemma
+  landmark directions.
+
+P2: later
+- Noise cancelling, after the main tasks are a finished product.
+- Meta glasses version, if time allows.
+- Search and rescue, last priority; extra phones as listening posts are
+  lower priority within it.
+
+Feature layers (after P0; order set together)
+- Captions: speech-to-text on the isolated voice, shown in the headset.
+- Voice commands: "isolate the music", "what's that?"
+- "What's that?": Gemma describes the selected source.
+- Depth and distance: approximate distance on each source, calibrated
+  later.
+- Jev filter: decides which sounds and alerts matter right now.
+- Beacon locator: a phone plays a chirp and Cocktail points to it.
+- Twinly (least priority): one iMessage per critical alert; later calls
+  and recaps. Twinly is macOS only.
+
+Non-functional
+- Live: every P0 feature runs in real time on the headset and laptop; no
+  offline processing in the product (replay is triggered, not offline).
+- Latency: measured per stage and end to end for each mode; pushed as low
+  as possible.
+- Network: private hotspot (laptop or phone), not venue Wi-Fi.
+- No extra hardware: Quest 3S, Quest 2, laptops, phones only.
+- Privacy: live buffer only (10 s); recording only in an opt-in dev mode.
+
+
+================================================================
+7. ACCEPTANCE TEST
+================================================================
+
+Two people talking at once plus music: every source is shown and tracked
+live with direction; selecting A, then B, then the music isolates each
+live; turning away keeps them tracked; an alarm and the wearer's name
+trigger alerts; replay works; latency and accuracy are measured for all
+three modes.
+
+
+================================================================
+8. SUCCESS METRICS
+================================================================
+
+- Separation quality (SI-SDR gain on controlled two-speaker mixtures).
+- Wrong-speaker rate with two simultaneous speakers.
+- Bearing error in degrees, in view and out of view, and time to a stable
+  bearing.
+- End-to-end latency per mode, with jitter.
+- Time to switch targets.
+- False alerts per hour and detection rate (including the wearer's name).
+- Listener comprehension with processing on and off.
+
+Objective scores use controlled mixtures with aligned clean stems;
+real-room results are scored by listeners. Ten-trial checks are smoke
+tests; slide numbers use at least 30 trials per metric.
+
+
+================================================================
+9. TECHNICAL APPROACH
+================================================================
+
+The headset only captures data and shows results; the laptop hub does all
+processing, live, over a private local network. The same split lets the
+glasses replace the headset later.
+
+- Devices: Quest 3S (main: Passthrough Camera API, Depth API, head
+  tracking, hands, controllers, mics, speakers); Quest 2 (testing and UI
+  design, no camera access); laptop GPU.
+- Quest app (Unity, Meta XR SDK, Meta XR Audio SDK): streams audio, video,
+  pose and input; renders labels, outlines and arrows; plays hub audio in
+  3D. Native Android plugin for raw mic capture if needed.
+- Hub (laptop, Python): ingest, clock alignment, separation, locating,
+  tracking, labels, target record, alerts, scheduler, API. Live audio runs
+  in its own process with top priority.
+- GPU workers: separation, speech enhancement, SAM 3, depth, SAM Audio,
+  Gemma.
+- Protocol: WebSockets; audio and video on separate channels; every message
+  has a sequence number, device timestamp and reconnect epoch; every target
+  result carries target_id and selection_version.
+
+Hub details
+- Target record: one record ties outline, separator and audio placement to
+  the same target: target_id, selection_version, kind, track id, voice
+  embedding and confidence, audio association confidence, bearing and its
+  source (head movement, mics, camera), last observed time, state
+  (tracking, last seen, lost). Low confidence shows "source not located"
+  and stays manually selectable.
+- Scheduling: live audio first, SAM 3 next, SAM Audio, depth and Gemma
+  only with spare capacity. Bounded queues drop stale video frames and
+  expire jobs for an old selection_version. Live and replay are separate
+  jobs with their own deadlines and cancellation.
+- Clocks: measure the relationship between Quest audio, video and pose
+  timestamps on day one; explicit sample-rate conversion at ingest.
+- Alerts engine: YAML rules match label, confidence and mode. Critical
+  alerts (smoke alarm, siren) duck playback and speak over it; others
+  queue. The wearer's name uses its own keyword-spotting model. Repeats
+  within a cooldown update the existing alert. Our own playback is
+  subtracted or detection paused so it can't retrigger.
+- Interaction states: listening, selected, playing, target lost, replay
+  processing, replay playing. Stable sound list; no announcement on every
+  label update.
+- Latency plan: causal streaming models with 10 to 20 ms hops and
+  persistent GPU state; 16 kHz live audio; small fixed jitter buffers;
+  lowest-latency Quest audio output; private hotspot or USB link.
+- Echo control: level gating (boost the inner layer only when the target
+  is buried), pause playback with catch-up in Accurate mode, inner layer
+  clearly above the room, captions.
+- Dev workflow: opt-in recording mode for replaying sessions through the
+  pipeline; mock hub for building the Quest UI before models work;
+  controlled mixtures for scoring.
+
+
+================================================================
+10. PORTABILITY TO META GLASSES
+================================================================
+
+- Same protocol; the glasses phone app replaces the Quest app.
+- Core uses only what glasses have: head rotation, one mic channel, a
+  camera. Quest depth and position tracking are extras.
+- Gestures map to actions (select, stop, replay, next); glasses buttons
+  map to the same actions.
+- A small HUD view alongside the full mixed-reality view.
+- A glasses-like test mode: lower camera resolution and frame rate, added
+  Bluetooth delay.
+
+Glasses facts (from the glasses research)
+- Our glasses: Ray-Ban Meta Wayfarer Gen 1 (RW4006), no display, 5 mics,
+  open-ear stereo speakers.
+- Meta's Wearables toolkit runs only in an iOS or Android phone app with
+  the Meta AI app on the same phone; the phone passes data to the laptop.
+- Camera stream: up to 720 x 1280 at up to 30 fps over Bluetooth.
+  Camera-stream audio (beta): raw, up to 48 kHz, synced to video; only
+  mono documented, test 2+ channels.
+- Call-mode mic (HFP) is beamformed to the wearer's voice, so it is not
+  used for room audio.
+- Motion (IMU), buttons and touchpad events, on-glasses transcription;
+  capture button and touchpad map to Cocktail actions.
+- Bluetooth playback adds about 100 to 200 ms, so echo control matters
+  more on glasses.
+
+
+================================================================
+11. DEPENDENCIES AND RISKS
+================================================================
+
+- Quest mic channels and raw access: test day one (native plugin may be
+  needed).
+- 3S camera: OS version, permission, frame rate, resolution, delay and
+  on-headset encoding cost: test day one.
+- Network jitter: use a private hotspot; test USB link.
+- End-to-end audio delay and echo: the Quest speakers are open-ear; the
+  enhanced inner layer must stand out over the room. Measure per mode.
+- Live separation of many sources: benchmark models day one; report
+  blockers.
+- GPU throughput with separation, SAM 3 and enhancement running together.
+- Short sounds: head-movement locating needs a sound that lasts; work on
+  short sounds after ongoing sounds work.
+- Session drops and app restarts: recover automatically with a reconnect
+  epoch.
+- Feedback: the Quest mics pick up our own playback and alerts; measure and
+  subtract or gate.
+- Privacy: live buffer only, opt-in recording.
+
+
+================================================================
+12. HACKATHON: PRIZES AND JUDGING
+================================================================
+
+- Prizes: 1st / 2nd / 3rd ($2,000 / $1,000 / $500); Best Use of Twinly
+  API; Best Use of Gemma (MLH); Best Open Source Project (MLH, public repo
+  with MIT license and README); Best Design; Best AI Hack; Best Social
+  Impact (search and rescue).
+- Judging criteria: impact, technical execution, design and usability,
+  novelty, presentation and demo.
+- Format: round 1 is a video reviewed by a panel, which picks 10
+  finalists. Finals: Monday, 10:15 to 11:15 AM, live at the Reitz Union;
+  awards at 12:15 PM. At least one teammate must attend the finals in
+  person.
+- Demo: follows what we build; draft is the acceptance test filmed from
+  the headset view.
+
+
+================================================================
+13. TEAM ROLES (proposed)
+================================================================
+
+- Quest app: Unity, streaming, mixed-reality UI, 3D audio playback.
+- Audio ML: separation, locating, tracking, enhancement, three modes.
+- Vision: SAM 3, depth, lip and motion validation.
+- Hub: protocol, clocks, target record, scheduler, alerts, replay.
+- Design and demo: UI on the Quest 2, interaction states, demo video,
+  evaluation runs.
+
+
+================================================================
+14. NO-CONFLICT RULES
+================================================================
+
+- One owner per folder: each task writes only its own module.
+  Hub: ingest/ (B3), separate/ (C3), locate/ (C4), vision/ (C5),
+  track/ (D1), alerts/ (A7, D2), replay/ (D3), who/ (E2), modes/ (F1).
+  Quest app: stream/ (B1, B2), input/ (B5), audio/ (B6, E1),
+  ui/ (A5, C6, E3). Shared: protocol/ (A2).
+- Frozen contracts: the protocol and the target record schema are set in
+  A2; changes only by team agreement, so parallel tasks never break each
+  other.
+- Build on mocks, not on each other: every task tests against the mock
+  headset client (B4) and recorded data until its real inputs land.
+- One Quest 3S: headset time is booked: B2, then C2, then E2 and F2.
+  Everything else uses the Quest 2, the mock client or the C2 recording.
+- GPU: development runs on recorded data; live runs and benchmarks get the
+  GPU first.
+- Branches: each task on its own branch, merged when its tests pass;
+  measuring (G1) and filming (H1) use a tagged build that nobody changes.
+
+
+================================================================
+15. STEP-BY-STEP PLAN (parallel waves)
+================================================================
+
+Every task in a wave can run at the same time. A task in a later wave
+starts as soon as the tasks it depends on [in brackets] are done, without
+waiting for the whole wave. Segmentation and tracking tasks get people
+first.
+
+WAVE A: start immediately, no dependencies
+- A1 Repo: public GitHub repo, MIT license, README skeleton, folder layout
+  from section 14, run scripts from section 16.
+- A2 Protocol: message format and target record schema (section 9).
+- A3 GPU setup: laptop environment; benchmark separation, enhancement,
+  SAM 3, depth and SAM Audio running together.
+- A4 Unity setup: Unity with Meta XR SDK and Meta XR Audio SDK;
+  hello-world on the Quest 2 and the 3S; confirm 3S OS version for the
+  camera API.
+- A5 UI design: mixed-reality UI on the Quest 2 with fake data: labels,
+  outlines, edge arrows, clock positions, states, glasses-view HUD.
+- A6 Audio models: choose the causal separation model, labeler, speaker
+  embedding and enhancement; build the scoring harness with controlled
+  mixtures.
+- A7 Alerts: YAML rules engine and wearer's-name keyword spotting, tested
+  on the laptop mic.
+- A8 Locating algorithm: bearing from head movement, prototyped on
+  simulated audio and rotation.
+- A9 Pitch: demo video outline and slide skeleton.
+- A10 Network: set up the private hotspot; confirm laptop and headsets
+  connect.
+
+WAVE B
+- B1 Quest audio and pose streaming [A2, A4, A10]: report mic channel
+  count and raw access; add the native mic plugin if needed.
+- B2 3S camera streaming [A2, A4, A10]: Passthrough Camera API, on-headset
+  encoding; report frame rate, resolution, delay.
+- B3 Hub ingest [A2, A3]: separate audio and video channels, clock
+  alignment.
+- B4 Mock headset client [A2]: replays recorded or simulated sessions into
+  the hub.
+- B5 Selection input [A4, A5]: head gaze or point, pinch; select, stop,
+  replay, next.
+- B6 3D audio playback [A4]: two spatialized layers with separate volumes.
+Alongside Wave B: A5 to A9 keep going. B1 and B5 use the Quest 2; B2 uses
+the 3S; B3 and B4 are laptop only. No shared folders.
+
+WAVE C
+- C1 Loopback delay test [B1, B3]: Quest to hub to Quest, unprocessed.
+- C2 Test recording [B1, B2]: two people talking at once plus music,
+  natural head movement, on the 3S.
+- C3 Live separation and labels [A6, B3]: tested on B4, then C2.
+- C4 Live locating [A8, B3]: tested on B4, then C2.
+- C5 Camera confirmation [A3, B2]: SAM 3 outlines and depth on 3S frames.
+- C6 Live UI [A5, B1, B3]: the A5 UI driven by real hub events.
+Alongside Wave C: B5, B6 and any unfinished A tasks. C3 (separate/) and C4
+(locate/) run side by side on the same recording without touching each
+other's code. C2 holds the 3S; C5 develops on the C2 recording. C1 is a
+short test that blocks no one.
+
+WAVE D
+- D1 Tracking and target record [C3, C4]: identity, bearing, state, in and
+  out of view.
+- D2 Alerts live [A7, C3, B6]: ducking playback.
+- D3 Clean replay [A3, B3, B6, C3]: SAM Audio, last 5 s.
+Alongside Wave D: C5 and C6 if unfinished, plus B5 and B6. D1, D2 and D3
+own separate folders and only read the target record through the frozen
+schema.
+
+WAVE E
+- E1 Select and hear [D1, B5, B6, A6]: inner layer amplified and enhanced,
+  outer layer quieter, voice lock.
+- E2 Who is talking [D1, C5]: location decides; lips and motion validate.
+- E3 Display tracked sources [D1, C6]: labels and arrows for every tracked
+  source.
+Alongside Wave E: D2 and D3 if unfinished. E1 (audio/) and E3 (ui/) are in
+separate folders; E2 is hub only (who/) and books the 3S.
+
+>>> CHECKPOINT 1 (target: tonight): working product = E1 + E3 live on the
+    3S with D1 tracking. Everything after this improves and proves it.
+
+WAVE F
+- F1 Three modes [E1]: Fast, Balanced, Accurate, switchable live.
+- F2 Acceptance test [E1, E2, E3, D2, D3]: run end to end; fix; report
+  blockers to the team.
+Alongside Wave F: F1 builds the modes behind a switch in modes/ while F2
+runs in Balanced mode; F2 reruns in all three modes once F1 merges. G4
+README writing can start here.
+
+WAVE G
+- G1 Metrics [F2, A6]: section 8, at least 30 trials each.
+- G2 Echo and latency tuning [F1, C1].
+- G3 Glasses-like test mode [F2, A5].
+- G4 README [F2]: setup, architecture, metrics, limitations.
+Alongside Wave G: all four run at once. G1 measures the tagged build while
+G2 tunes on a branch; after G2 merges, G1 re-measures affected metrics. G3
+only touches ui/ and a test switch.
+
+WAVE H: submit
+- H1 Film the demo video [F2, G1, A9].
+- H2 Submit video and repo before 10 AM [H1, G4].
+Alongside Wave H: G4 finishing touches. H1 films the tagged build only; no
+merges during filming.
+
+If time remains
+- P1 guidance to a sound, then feature layers, then Meta glasses, in the
+  order the team chooses.
+
+
+================================================================
+16. AUTOMATION (move fast)
+================================================================
+
+- One agent per task: run a separate Claude Code session per wave task,
+  each on its own branch and folder (section 14), with this file as its
+  brief. Start all Wave A agents at once.
+- Contracts first: A2 produces protocol and schema files plus generated
+  Python and C# types, so agents never hand-sync message formats.
+- One-command scripts (A1):
+  - run_hub: starts the hub and GPU workers.
+  - run_mock: streams a recorded session into the hub (B4).
+  - deploy_quest: builds the Unity app and installs it on a connected
+    headset over adb.
+  - eval: runs the scoring harness and prints the section 8 metrics.
+- Automatic tests: every merge runs the hub against the mock client and
+  the controlled mixtures; a merge that breaks segmentation or tracking is
+  rejected.
+- Auto-metrics: G1 is a script, so re-measuring after tuning takes one
+  command.
+- Live dashboard on the laptop: per-stage latency, GPU load, active
+  sources and bearings, so problems show up immediately.
+- Hand-offs: when a task finishes, its agent posts what it built, how to
+  run it and test results, so dependent tasks start right away.
+
+This PRD is the source of truth. Nothing is cut without asking the team.

@@ -1,0 +1,91 @@
+{
+  "$defs": {
+    "AckAlert": {
+      "properties": {
+        "type": {
+          "const": "cmd.ack_alert",
+          "default": "cmd.ack_alert",
+          "title": "Type",
+          "type": "string"
+        },
+        "alert_id": {
+          "title": "Alert Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alert_id"
+      ],
+      "title": "AckAlert",
+      "type": "object"
+    },
+    "Mode": {
+      "enum": [
+        "fast",
+        "balanced",
+        "accurate"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "SetMode": {
+      "properties": {
+        "type": {
+          "const": "cmd.mode",
+          "default": "cmd.mode",
+          "title": "Type",
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/Mode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "SetMode",
+      "type": "object"
+    },
+    "SetVolumes": {
+      "properties": {
+        "type": {
+          "const": "cmd.volumes",
+          "default": "cmd.volumes",
+          "title": "Type",
+          "type": "string"
+        },
+        "inner_db": {
+          "default": 0.0,
+          "title": "Inner Db",
+          "type": "number"
+        },
+        "outer_db": {
+          "default": -12.0,
+          "title": "Outer Db",
+          "type": "number"
+        }
+      },
+      "title": "SetVolumes",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "cmd.ack_alert": "#/$defs/AckAlert",
+      "cmd.mode": "#/$defs/SetMode",
+      "cmd.volumes": "#/$defs/SetVolumes"
+    },
+    "propertyName": "type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/SetMode"
+    },
+    {
+      "$ref": "#/$defs/SetVolumes"
+    },
+    {
+      "$ref": "#/$defs/AckAlert"
+    }
+  ]
+}
