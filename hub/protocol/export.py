@@ -92,10 +92,10 @@ def gen_cs() -> str:
         for name, f in model.model_fields.items():
             t = cs_type(f.annotation)
             default = ""
-            if isinstance(f.default, str):
-                default = f' = "{f.default}";'
-            elif isinstance(f.default, Enum):
+            if isinstance(f.default, Enum):  # StrEnum members are also str: check Enum first
                 default = f" = {type(f.default).__name__}.{pascal(f.default.name)};"
+            elif isinstance(f.default, str):
+                default = f' = "{f.default}";'
             elif isinstance(f.default, bool):
                 default = f" = {str(f.default).lower()};"
             elif isinstance(f.default, (int, float)) and not isinstance(f.default, bool):
