@@ -44,7 +44,21 @@ re-run `cd hub && uv run python -m protocol.export`.
 | G1-G4 | Metrics, echo tuning, glasses mode, README | | | todo | |
 | H1-H2 | Film and submit before 10 AM | | | todo | |
 
+## Demo timing
+Demo work (A9 pitch, H1 filming, G4 README) starts only after the product is finished
+(Checkpoint 1 working on the 3S). Until then everyone builds the product.
+
+## Machines
+| Machine | Person | Hardware / notes |
+|---|---|---|
+| Cody's | Cody (codyn06) | RTX 5070 Ti: live-run GPU machine (hub + models) |
+| Lalitha's | Lalitha | RTX 4060 8 GB, Unity installed, Claude $100 plan: Quest app + dev |
+| Third | unassigned | |
+
 ## Open decisions / blockers
 - Integration owner: unassigned.
 - Unity: repo pins 6000.0.80f1; hub laptop has 6000.6.7f1.
-- GPU: hub laptop is an RTX 4060 8 GB; decide on a second or cloud GPU.
+- GPU: the team has an RTX 5070 Ti machine (16 GB per spec; confirm with `nvidia-smi`).
+  Make it the live-run machine. It is Blackwell, so install PyTorch built for CUDA 12.8+
+  (cu128 wheels). Hub laptop (RTX 4060, 8 GB) is for development. Still to measure:
+  do separation, SAM 3, enhancement and SAM Audio fit together on 16 GB (A3)?
