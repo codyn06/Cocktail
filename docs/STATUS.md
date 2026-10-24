@@ -23,6 +23,19 @@ replayed, untested.
 | Lalitha's | Lalitha | RTX 4060 8 GB, Unity installed, Claude $100 plan |
 | Third | unassigned | |
 
+## Milestones
+Deadline: 10 AM tomorrow (Sunday), including the video. Each milestone is done when its
+"proof" works; move on as soon as it does. Everything after M3 only improves and proves it.
+
+| # | Milestone | Proof it's done | Tasks |
+|---|---|---|---|
+| M0 | Everyone can build and run | Every machine pulled, models fit on the GPU, headset connects over the private network | A1, A3, A4, A10 |
+| M1 | Data flows end to end | Headset audio, video and head pose reach the hub; sound returns to the headset; delay measured; a recorded test scene exists | B1, B2, B3, B4, B6, C1, C2 |
+| M2 | Sounds separated and located (main goal) | On the test recording, each sound is its own labeled source with a direction | A6, A8, C3, C4, C5 |
+| M3 | **Checkpoint 1: working product** | On the 3S, sounds are tracked live on screen; pick one and hear it alone in 3D | D1, B5, C6, E1, E3 |
+| M4 | Complete feature set | Alerts, clean replay, who-is-talking, three modes; acceptance test passes | A7, D2, D3, E2, F1, F2 |
+| M5 | Proven and submitted | Metrics (30 trials each), tuning, README, video, submitted before 10 AM | G1-G4, A9, H1, H2 |
+
 ## Tasks
 
 **Main goal: split every sound into its own source and track what it is and where it
