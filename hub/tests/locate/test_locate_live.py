@@ -1,0 +1,46 @@
+import numpy as np
+
+import protocol as p
+from ingest import IngestState
+from locate.live import LiveLocator
+from mockclient.simulate import quat_yaw_pitch
+from separate.live import BAND_CENTERS_HZ, StreamChunk
+
+
+def chunk(sid, t0_us, levels, act=1.0):
+    n = levels.shape[0]
+    return StreamChunk(sid, "speech", 0.9, t0_us, np.full(16000, 0.01, np.float32), np.zeros((2, 16000)),
+                       t0_us + 50_000 + np.arange(n) * 50_000, levels, np.full(n, act))
+
+
+def pose(st, seq, ts, yaw, epoch=0):
+    st.on_pose_channel(p.PoseSample(seq=seq, device_ts_us=ts, epoch=epoch, pos=(0, 1.6, 0),
+                                    rot_xyzw=quat_yaw_pitch(yaw, 0)))
+
+
+def test_waits_for_poses_then_publishes_sources():
+    st = IngestState()
+    loc = LiveLocator(st)
+    lv = np.zeros((19, 2, len(BAND_CENTERS_HZ)))
+    loc.on_chunks([chunk("s1", 0, lv)])
+    assert loc.sources() == []                       # no head pose yet
+    for k in range(60):
+        pose(st, k, k * 20_000, 30 * np.sin(k / 10))
+    loc.on_chunks([chunk("s1", 0, lv), chunk("s2", 0, lv, act=0.0)])
+    src = {s.source_id: s for s in loc.sources()}
+    assert set(src) == {"s1", "s2"} and src["s1"].label == "speech"
+    assert src["s1"].last_observed_us == 50_000 + 18 * 50_000
+    assert src["s2"].bearing_deg is None              # never active: no bearing published
+    assert loc.est._poses[-1][0] == 59 * 0.02         # poses fed in device seconds
+
+
+def test_reconnect_resets_estimator():
+    st = IngestState()
+    loc = LiveLocator(st)
+    for k in range(10):
+        pose(st, k, k * 20_000, 0.0)
+    loc.on_chunks([chunk("s1", 0, np.zeros((19, 2, 5)))])
+    old = loc.est
+    pose(st, 0, 5_000, 0.0, epoch=1)
+    loc.on_chunks([chunk("s1", 0, np.zeros((19, 2, 5)))])
+    assert loc.est is not old and len(loc.est._poses) == 1

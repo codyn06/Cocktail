@@ -24,8 +24,22 @@ a = ap.parse_args()
 logging.basicConfig(level=logging.INFO)
 
 state = IngestState()
-worker = SeparationWorker(state, LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler())).start()
+worker = SeparationWorker(state, LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler()))
+try:  # direction finding (C4) if hub/locate is present
+    from locate.live import LiveLocator
+
+    locator = LiveLocator(state)
+    worker.listeners.append(locator.on_chunks)
+except ImportError:
+    locator = None
+worker.start()
 app = create_app(state)
+
+
+@app.get("/sources")
+def sources():
+    """Separated, labeled sources with head-movement bearings (protocol Source objects)."""
+    return [s.model_dump() for s in locator.sources()] if locator else []
 
 
 @app.get("/separate/status")
