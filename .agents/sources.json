@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "name": "gemini-api-dev",
+      "type": "skill",
+      "repository": "https://github.com/google-gemini/gemini-skills",
+      "url": "https://github.com/google-gemini/gemini-skills/tree/ee9da52195752ca83c2fca701d96bcb5a9c08d2d/skills/gemini-api-dev",
+      "commit": "ee9da52195752ca83c2fca701d96bcb5a9c08d2d",
+      "sourcePath": "skills/gemini-api-dev",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE"],
+      "destination": ".agents/skills/gemini-api-dev",
+      "localModifications": [],
+      "dependencies": ["Gemini SDKs (google-genai for Python, @google/genai for TypeScript) when writing code that uses the skill"],
+      "unresolvedReferences": [],
+      "notes": "Local reference references/migration.md included. Other *.md references are remote ai.google.dev doc URLs (fetched at use time)."
+    },
+    {
+      "name": "systematic-debugging",
+      "type": "skill",
+      "repository": "https://github.com/obra/superpowers",
+      "url": "https://github.com/obra/superpowers/tree/2ce8aa15d05bd57213e6f746f953aafb7ded7a8b/skills/systematic-debugging",
+      "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+      "sourcePath": "skills/systematic-debugging",
+      "license": "MIT",
+      "licenseFiles": ["LICENSE"],
+      "destination": ".agents/skills/systematic-debugging",
+      "localModifications": [],
+      "dependencies": [],
+      "unresolvedReferences": ["superpowers:test-driven-development (not installed; superpowers framework intentionally not vendored)"],
+      "notes": "root-cause-tracing.md, defense-in-depth.md, condition-based-waiting.md (+ example .ts) and find-polluter.sh are in-folder. superpowers:verification-before-completion resolves to the vendored sibling skill. Test/creation-log files copied as upstream ships them."
+    },
+    {
+      "name": "verification-before-completion",
+      "type": "skill",
+      "repository": "https://github.com/obra/superpowers",
+      "url": "https://github.com/obra/superpowers/tree/2ce8aa15d05bd57213e6f746f953aafb7ded7a8b/skills/verification-before-completion",
+      "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+      "sourcePath": "skills/verification-before-completion",
+      "license": "MIT",
+      "licenseFiles": ["LICENSE"],
+      "destination": ".agents/skills/verification-before-completion",
+      "localModifications": [],
+      "dependencies": [],
+      "unresolvedReferences": [],
+      "notes": "Single SKILL.md; no cross-skill references."
+    },
+    {
+      "name": "hz-quest-verify-first",
+      "type": "skill",
+      "repository": "https://github.com/meta-quest/agentic-tools",
+      "url": "https://github.com/meta-quest/agentic-tools/tree/3a8553d10a5a1bd1bf9beaaa950243fbbed3b9ea/skills/hz-quest-verify-first",
+      "commit": "3a8553d10a5a1bd1bf9beaaa950243fbbed3b9ea",
+      "sourcePath": "skills/hz-quest-verify-first",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE"],
+      "destination": ".agents/skills/hz-quest-verify-first",
+      "localModifications": [],
+      "dependencies": ["metavr CLI (npm package 'metavr', or standalone binary) and/or metavr MCP server tools (vr_docs_search, vr_docs_get_page, device, app, files, run, cli_help); frontmatter allowed-tools: Bash(metavr:*), Bash(npx:*)"],
+      "unresolvedReferences": [
+        "Related/specialist skills not installed: metavr-cli, hz-vr-debug, hz-perfetto-debug, hz-store-submit, hz-android-2d-porting, hz-react-native-expo, hz-new-project-creation, hz-spatial-sdk, hz-platform-sdk, hz-xr-simulator-install-and-configure, hz-unity-project-analyzer, hz-unity-meta-core-sdk, hz-iwsdk-webxr, hz-store-pwa"
+      ],
+      "notes": "The 'verify Quest answers first' skill. Single SKILL.md upstream; no NOTICE in repo."
+    },
+    {
+      "name": "pi-subagent",
+      "type": "pi-extension",
+      "repository": "https://github.com/earendil-works/pi",
+      "url": "https://github.com/earendil-works/pi/tree/136b87e8a7f5a3e5186de0289523ba327dc592fc/packages/coding-agent/examples/extensions/subagent",
+      "commit": "136b87e8a7f5a3e5186de0289523ba327dc592fc",
+      "sourcePath": "packages/coding-agent/examples/extensions/subagent",
+      "license": "MIT",
+      "licenseFiles": ["LICENSE"],
+      "destination": ".agents/vendor/pi-subagent",
+      "localModifications": [],
+      "dependencies": ["@earendil-works/pi-coding-agent", "@earendil-works/pi-agent-core (type-only)", "@earendil-works/pi-ai", "@earendil-works/pi-tui", "typebox", "node builtins: fs, path, os, child_process"],
+      "unresolvedReferences": [],
+      "notes": "Copied unchanged; to be installed into .pi/extensions/ by a sync script. Includes agents/ (planner, reviewer, scout, worker) and prompts/. Imports are expected to be provided by the pi runtime. index.ts spawns pi subprocesses."
+    }
+  ],
+  "projectSkills": [
+    {"name": "cocktail-perception", "type": "skill", "origin": "project-authored", "destination": ".agents/skills/cocktail-perception", "notes": "Not vendored; no upstream. Covered by the repository license."}
+  ],
+  "deferred": [
+    {"name": "hz-unity-meta-interaction-sdk", "repository": "https://github.com/meta-quest/agentic-tools", "sourcePath": "skills/hz-unity-meta-interaction-sdk", "reason": "repo has no Unity/MRUK/web frontend yet"},
+    {"name": "hz-unity-meta-mixed-reality-utility-kit", "repository": "https://github.com/meta-quest/agentic-tools", "sourcePath": "skills/hz-unity-meta-mixed-reality-utility-kit", "reason": "repo has no Unity/MRUK/web frontend yet"},
+    {"name": "webapp-testing", "repository": "https://github.com/anthropics/skills", "sourcePath": "skills/webapp-testing", "reason": "repo has no Unity/MRUK/web frontend yet"}
+  ]
+}
