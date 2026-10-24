@@ -30,6 +30,13 @@ Do not assume:
      otherwise serialize.
    - Every assignment states: goal and context, allowed files, skills to load,
      dependencies, acceptance/verification, and what to return.
+   - Subagents start cold: they see only the assignment, not the orchestrator's
+     conversation. Make each assignment self-contained. Include the user's actual
+     requirements and constraints (quoted where wording matters), decisions already
+     made and why, relevant findings with file:line references or excerpts, approaches
+     already ruled out, and the branch handoff file path if one exists. Pass concrete
+     facts, not "as discussed" or "see above". For follow-ups, continue the same
+     subagent (e.g. Claude Code `SendMessage`) rather than starting a fresh one.
    - Out-of-scope needs are reported back to the orchestrator, not acted on.
 4. **Integrate and review**: the orchestrator inspects and integrates results itself,
    then gets an independent review proportional to risk (the `reviewer` role for
@@ -81,6 +88,8 @@ Trivial tasks: write a brief plan and do them directly.
 - Report checks honestly: only claim what you actually ran, with results.
 - Label evidence: hardware-tested, mocked, replayed (recorded data), or untested.
 - Subagents return: findings/changes, checks run, uncertainty, handoff notes.
+- Subagents whose assignment lacks context they need ask the orchestrator for it
+  instead of guessing or re-deriving it from scratch.
 - The orchestrator inspects and integrates subagent output; it does not rubber-stamp.
 - Apart from the branch/PR flow in **Git workflow**, this configuration grants no
   permission to deploy, publish, message people, install
