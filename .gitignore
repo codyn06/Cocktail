@@ -3,3 +3,9 @@
 
 # graphify output: rebuilt locally per checkout (see AGENTS.md "Codebase context")
 graphify-out/
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.wav
