@@ -50,7 +50,7 @@ the earlier tasks that must be usable first; mocks and recordings let you start 
 |---|---|---|---|---|---|---|---|
 | A1 | Repo and run scripts | Public repo with MIT license, README skeleton, one-command scripts: run the hub, replay a recorded session, deploy to the headset, run the evaluation. | repo root, `scripts/` | | | todo | |
 | A2 | Message format between headset and laptop | The frozen set of messages (audio, video, head pose, button actions, events back) with generated Python and C# code. | `hub/protocol` | | feat/a1-a2-repo-protocol | done | merged in PR #10; mocked (5 tests) |
-| A3 | Check all the AI models fit on one GPU | Run separation, speech enhancement, SAM 3 (object outlines), depth and SAM Audio together on the RTX 5070 Ti. Done when we know which ones fit, how fast, and how much memory. | `eval/` | Cody | chore/gpu-env | doing | PR #13 merged: cu128 env, 12 GB budget, C3 candidates benchmarked (hardware-tested). SAM 3 image measured (see Open decisions). Left: SAM 3.1 tracker, SAM Audio small/small-tv |
+| A3 | Check all the AI models fit on one GPU | Run separation, speech enhancement, SAM 3 (object outlines), depth and SAM Audio together on the RTX 5070 Ti. Done when we know which ones fit, how fast, and how much memory. | `eval/` | Cody | chore/gpu-env | PR #13 merged: cu128 env, 12 GB budget, C3 candidates benchmarked (hardware-tested). done | SAM 3 image ~4 GB, SAM Audio small-tv ~4.4 GB (core only), live separation ~1.1 GB: fit together in 12 GB. SAM 3.1 tracker crashed Windows (see Open decisions) |
 | A4 | Unity and headset ready | Unity with the Meta XR and Meta XR Audio SDKs builds and runs hello-world on the Quest 2 and Quest 3S. Confirm the 3S software version supports the camera API (v74+). | `quest/` | | | todo | repo pins Unity 6000.0.80f1 |
 | A5 | Headset screen design with fake data | Labels and outlines on each sound in view, edge arrows and clock positions (like "4 o'clock") for sounds out of view, state banners, a small glasses-style view. Runs on the Quest 2 with made-up sources. | `quest/ui` | | | todo | |
 | A6 | ★ Choose the audio AI models and build the scoring test | Pick the model that splits mixed audio into voices, the sound labeler, the voice-ID model and the speech enhancer. Build a test that mixes known clean recordings and scores the result. | `hub/separate`, `eval/` | Cody | feat/c3-live-separation | done (simulated) | PR #19 merged. MossFormer2 (voices) + residual + AST labels; scoring test `python -m separate.score` |
@@ -149,14 +149,34 @@ alert messages, Meta glasses version, search and rescue.
   - Prompt wording matters a lot: on a photo of six children, "child" scored 0.96 but "person"
     only 0.27 (below the default 0.5 threshold, so 0 detections). C5 should try several prompts or
     lower the threshold.
-  - SAM 3.1 video tracker on Windows: needs `use_fa3=False` (no FlashAttention 3), a workaround
-    for an upstream bug (`start_session` passes `offload_state_to_cpu`, which the 3.1 tracker
-    rejects), and allowing non-flash attention in `sam3/model/decoder.py` (it forces the flash
-    kernel, which Windows PyTorch lacks). Not measured yet.
+  - **SAM 3.1 video tracker: not usable on this laptop.** On Windows it needs `use_fa3=False`, a
+    workaround for an upstream bug (`start_session` passes `offload_state_to_cpu`, which the 3.1
+    tracker rejects), and allowing non-flash attention in `sam3/model/decoder.py` (it forces the
+    flash kernel, which Windows PyTorch lacks). With those, it found people on frame 0, then
+    tracked at ~15.5 s per frame, and **Windows crashed both times** (bugcheck 0x00020001,
+    hypervisor error, 2026-10-24 14:33 and 15:24). Do not run it on this machine. Use the SAM 3
+    image model per frame for C5.
   - SAM Audio small: first load also downloads ~16 GB of companion models (`sam-audio-judge`
     12.3 GB, CLAP 1.8 GB, T5/RoBERTa/BART/BERT ~2.3 GB) on top of the 5.1 GB checkpoint. Needs
-    `transformers` 4.x (>=4.54) with `huggingface_hub` < 1.0. VRAM not measured yet. If the 6.1 GB
-    judge stays resident, D3 cannot fit in 12 GB with it.
+    `transformers` 4.x (>=4.54) with `huggingface_hub` < 1.0, `soundfile` for audio I/O
+    (`torchaudio.load` needs FFmpeg DLLs on Windows), and the span predictor at the revision
+    SAM Audio pins (`facebook/pe-a-frame-large@40187271`, 6.1 GB; the latest revision is a
+    different file).
+
+  SAM Audio small-tv (hardware-tested, same machine; text prompts, 1 candidate, no span
+  prediction, fp32; 5 s of the synthetic 2 talkers + music mix):
+
+  | | |
+  |---|---|
+  | VRAM, everything on GPU | 22.3 GB: does not fit (Windows spills into shared system memory) |
+  | VRAM, core only on GPU | 2.7 GB weights, **4.4 GB peak**. Codec, T5 text encoder and DiT on GPU; span predictor, judge/CLAP rankers and vision encoder stay on CPU (unused for text prompts with 1 candidate) |
+  | Load | ~64 s from disk (keep it loaded if replay is used often) |
+  | Time per 5 s clip | ~2.1 s per prompted sound |
+  | SI-SDR improvement | voice 1 +1.9 dB, voice 2 +5.4 dB, music +2.5 dB (MossFormer2: +18.1 / +16.8 / +17.8) |
+
+  SI-SDR penalizes generative output (SAM Audio re-synthesizes audio, so small phase and timing
+  differences count as error). The low numbers may understate it; judge D3 quality by listening.
+  For C3 (live) MossFormer2 stays: SAM Audio is batch-only and ~2 s per sound per clip.
   - All SAM weights together use ~35 GB of disk in the Hugging Face cache.
 
   C3 candidate benchmark (hardware-tested on the 5070 Ti, 2026-10-24, torch 2.11+cu128, fp32,
