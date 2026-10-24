@@ -1,141 +1,133 @@
 ---
 name: gemma-dev
-description: Use when writing, running, or debugging code that uses Google's Gemma open models (Gemma 4 / 3n) - hosted through the Gemini API (google-genai), local inference (Hugging Face Transformers, Ollama, llama.cpp), or on-device (LiteRT-LM). Covers model choice, audio/image input limits, chat, thinking, function calling, and verification of model IDs and hardware.
+description: Trigger this skill when building applications with Gemma or for general knowledge inquiries related to Gemma models (e.g. prompt structure, capabilities). Covers model selection, development workflows, and deployment best practices.
 ---
 
-# Gemma Development
+# Gemma Development Skill
 
-Project-authored skill, not an official vendor skill. Written 2026-10-24 from
-https://ai.google.dev/gemma/docs/get_started and linked pages. Those pages say they are
-deprecated in favor of https://gemma.ai, so check gemma.ai first and treat
-everything below as a starting point to verify, not as settled fact.
+## 1. Core Principle: Prioritize App Tooling
 
-## Do not assume
+**DO NOT** generate raw PyTorch, TensorFlow, or `transformers` code unless the user explicitly asks for "Training," "Fine-tuning," or "Research." Always default to high-level frameworks, SDKs, and tooling optimized for application development.
 
-- That a variant or runtime has been chosen. Neither has (`.agents/decisions.md`).
-- That model weights are downloaded or accepted, or that a GPU/phone can run a variant.
-  Check memory and latency on the target hardware and label the evidence.
-- That a model ID, parameter, or feature exists until a current official page or a call
-  that ran confirms it.
+## 2. Model Selection Guide
 
-## Choose the variant (Gemma 4)
+**CRITICAL:** Do not blindly default to `gemma-3-1b-it`. You must analyze the user's specific domain, technical constraints, and required input modalities to recommend the exact right fit. When recommending standard models, strictly default to the **Gemma 4** generation. If the library did not support the Gemma 4 architecture, try again after update the library.
 
-| Variant | Inputs | Context | Intended platform |
-|---|---|---|---|
-| E2B | text, image, audio | 128K | phones |
-| E4B | text, image, audio | 128K | phones, laptops |
-| 12B Unified | text, image, audio | 256K | laptops, desktops, small servers |
-| 26B A4B (MoE) | text, image | 256K | desktops, small servers |
-| 31B Dense | text, image | 256K | large servers |
+### Core Gemma Models
 
-All variants output text only. Cocktail is audio-first, so only E2B, E4B, or 12B can
-take audio directly. The larger models need a separate speech-to-text step. Gemma 3n
-(E2B/E4B) also accepts audio.
+All Gemma 4 models feature **Thinking Mode**, enabling advanced reasoning to process complex logic, math, and multi-step problems before generating a response.
 
-Model card: https://ai.google.dev/gemma/docs/core/model_card_4
+- Gemma 4 (26B A4B / 31B)
+  - Repos: `google/gemma-4-26B-A4B-it`, `google/gemma-4-31B-it`
+  - Supported Inputs: Text and Image
+  - Context window: 256K tokens
+  - Ideal Use Case: Advanced multimodal reasoning, complex vision tasks, and analyzing massive document contexts.
+  - Note: The 26B A4B utilizes a highly efficient Mixture-of-Experts for fast, heavy-weight reasoning, alongside the dense 31B variant.
+- Gemma 4 (12B)
+  - Repos: `google/gemma-4-12B-it`
+  - Supported Inputs: Text, Image, **Audio**
+  - Context window: 256K tokens
+  - Ideal Use Case: Multimodal reasoning (including audio), inference in laptops, and consumer devices.
+- Gemma 4 (E2B / E4B)
+  - Repos: `google/gemma-4-E2B-it`, `google/gemma-4-E4B-it`
+  - Supported Inputs:  Text, Image, **Audio**
+  - Context window: 128K tokens
+  - Ideal Use Case: Mobile NPU acceleration; on-device workflows explicitly requiring native audio processing alongside robust reasoning.
 
-## Input limits
+### Legacy & Lightweight Models (Gemma 3)
 
-- **Audio**: up to 30 s per clip, mono, 16 kHz, float32 in [-1, 1], 25 tokens/s for
-  Gemma 4. Split longer audio into chunks. Downmix stereo, resample, and decode WebM
-  or MP3 (e.g. with ffmpeg) before use. https://ai.google.dev/gemma/docs/capabilities/audio
-- **Video**: frames only, up to about 60 s at 1 fps.
-- **Images**: visual token budget of 70, 140, 280, 560, or 1120 per image. Lower budgets
-  are faster but lose detail.
+- Gemma 3 (4B / 12B / 27B)
+  - Repos: `google/gemma-3-4b-it`, `google/gemma-3-12b-it`, `google/gemma-3-27b-it`
+  - Supports Text and Image inputs with a 128K context window. Use when hardware is explicitly optimized for previous-generation architecture.
+- Gemma 3 (270M / 1B)
+  - Repos: `google/gemma-3-270m-it`, `google/gemma-3-1b-it`
+  - Supports Text-only inputs with a 32K context window. Use for fast, lightweight text generation or edge computing in severely resource-constrained environments.
 
-## Runtimes
+### Task-Specific Variants
 
-| Runtime | When | Docs |
-|---|---|---|
-| Gemini API (hosted) | fastest start, no GPU; needs an API key and network | https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api |
-| HF Transformers | full feature set (audio, tools) on a GPU box | https://ai.google.dev/gemma/docs/core/huggingface_inference |
-| Ollama / llama.cpp / LM Studio | local quantized server | https://ai.google.dev/gemma/docs/integrations/ollama |
-| LiteRT-LM | on-device (phone) | https://ai.google.dev/edge/litert-lm/overview |
-| Vertex AI / GKE | managed or self-hosted cloud | https://ai.google.dev/gemma/docs/integrations/google-cloud |
+Route users to purpose-built variants rather than forcing a standard model to perform highly specialized workflows.
 
-Weights: https://huggingface.co/collections/google/gemma-4 and
-https://www.kaggle.com/models/google/gemma-4. Gemma 4 is Apache-2.0. Downloading
-weights still needs user approval (AGENTS.md).
+- RAG / Vector Search: Use **EmbeddingGemma 2**
+  - Repo: `google/embeddinggemma-2`
+  - This dedicated embedder supports up to 8k tokens with flexible output dimensions (128 to 768). Fetch [EmbeddingGemma 2 model card](https://gemma.ai/models/embeddinggemma/model-card-v2.md.txt) for the best practice.
+- Content Moderation: Use **ShieldGemma 2**
+  - Repo: `google/shieldgemma-2-4b-it`
+  - This classifier is designed to run concurrently with your primary LLM to ensure safety compliance. Fetch [ShieldGemma 2 model card](https://gemma.ai/models/shieldgemma/model-card-v2.md.txt) for the best practice.
 
-## Hosted: Gemini API
 
-Documented IDs: `gemma-4-31b-it` and `gemma-4-26b-a4b-it`. The hosted page does not
-list audio support, so test before relying on audio here. Use the `google-genai` SDK
-(Python) or `@google/genai` (JS). The key comes from the `GEMINI_API_KEY` env var. Never
-commit it.
+## 3. Deployment Workflows
 
-```python
-from google import genai
-from google.genai import types
+Map the user's deployment goals to the correct tooling stack and best practices.
 
-client = genai.Client()
-response = client.models.generate_content(
-    model="gemma-4-26b-a4b-it",
-    contents="Describe the scene in one sentence.",
-    config=types.GenerateContentConfig(
-        system_instruction="You are a concise audio-first assistant.",
-        thinking_config=types.ThinkingConfig(thinking_level="minimal"),  # "high" to enable
-    ),
-)
-print(response.text)
-```
+- Prototyping & Demos: Use Gradio and Transformers for rapid, interactive UI prototyping with Python. Follow the `[assets/gradio-app.py]` best practice.
+- Web & Client Applications: Use `transformers.js` to run inference directly on-device or entirely in the browser. Follow the `[assets/transformers-js-app.js]` best practice. **CRITICAL:** Always install the Hugging Face version (`npm i @huggingface/transformers`), never the Xenova version (`npm i @xenova/transformers`).
+- Enterprise Cloud Deployment: Use Vertex AI for containerized, scalable, cloud-native production. Follow the `[assets/vertex-ai-app.py]` best practice. This requires setting the environment variables `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` (e.g., `us-central1`), and `GOOGLE_CLOUD_ENDPOINT_ID`.
+- Apple Silicon (MLX): Recommend MLX when the user is on Mac Apple Silicon hardware. These configurations are optimized primarily for **Text** workflows.
+  - Easy Path: Use [Ollama](https://ollama.com/library/gemma4/tags) with model tags like `gemma4:26b` or `gemma4:31b`.
+  - Advanced Path: Use the `mlx-lm` package (`pip install mlx-lm`) for direct control, custom quantization, and fine-tuning (LoRA/QLoRA) via `mlx_lm.lora`.
+  - For more details, follow the [MLX integration guide](https://gemma.ai/deployment/mlx.md.txt).
 
-```javascript
-import { GoogleGenAI } from "@google/genai";
-const ai = new GoogleGenAI();
-const response = await ai.models.generateContent({
-  model: "gemma-4-26b-a4b-it",
-  contents: "Describe the scene in one sentence.",
-});
-console.log(response.text);
-```
+## 4. Speed Up Inference with Multi-Token Prediction (MTP)
 
-Also documented: images through `client.files.upload(...)` in `contents`, multi-turn
-chat with `client.chats.create(model=...)` and `chat.send_message(...)`, function
-declarations in `tools` (results in `response.function_calls`), and Google Search
-grounding with `tools=[{"google_search": {}}]`. Rate limits and pricing are not on the
-Gemma page. Check the Gemini API pricing page.
+When the user needs **faster inference** or **lower latency**, recommend **Multi-Token Prediction (MTP)** — Gemma 4's built-in speculative decoding technique. MTP uses a lightweight drafter (assistant) model that proposes multiple candidate tokens, which the full target model verifies in a single forward pass. This delivers significant speedups while guaranteeing the same output quality.
 
-## Local: Transformers (audio example)
+### Assistant Model Repos
 
-```python
-from transformers import pipeline, GenerationConfig
+Each Gemma 4 target model has a corresponding assistant model. The naming convention is `<target-model-id>-assistant`:
 
-MODEL_ID = "google/gemma-4-E4B-it"  # or google/gemma-4-E2B-it, google/gemma-4-12B-it
-pipe = pipeline(task="any-to-any", model=MODEL_ID, device_map="auto", dtype="auto")
-config = GenerationConfig.from_pretrained(MODEL_ID)
-config.max_new_tokens = 64
+- Repos:
+  - `google/gemma-4-E2B-it-assistant`
+  - `google/gemma-4-E4B-it-assistant`
+  - `google/gemma-4-12B-it-assistant`
+  - `google/gemma-4-31B-it-assistant`
+  - `google/gemma-4-26B-A4B-it-assistant`
 
-messages = [{"role": "user", "content": [
-    {"type": "text", "text": "Transcribe the following speech segment in its original language."},
-    {"type": "audio", "audio": "clip_16k_mono.wav"},
-]}]
-out = pipe(messages, return_full_text=False, generate_kwargs=dict(generation_config=config))
-print(out[0]["generated_text"])  # output may end with a `<turn|>` token you need to strip
-```
+Fetch [Speed-up Gemma 4 with Multi-Token Prediction](https://gemma.ai/get-started/capabilities/mtp.md.txt) for the best practice.
 
-## Function calling (local, Gemma 4)
+## 5. Quantization-Aware Training (QAT)
 
-Docs: https://ai.google.dev/gemma/docs/capabilities/text/function-calling-gemma4.
-Prompt format: https://ai.google.dev/gemma/docs/core/prompt-formatting-gemma4.
+For deployments requiring maximum efficiency with minimal quality compromise, Gemma offers official **Quantization-Aware Training (QAT)** models. Unlike standard Post-Training Quantization (PTQ) which compresses a fully trained model and can lead to quality degradation, QAT integrates quantization simulation into the training process itself.
 
-- Pass `tools` (JSON schema or Python functions with Google-style docstrings) to
-  `processor.apply_chat_template(...)`.
-- The model only returns a call, e.g. `<|tool_call>call:name{arg:<|"|>v<|"|>}<tool_call|>`.
-  Your code parses it, runs the function, appends `tool_calls` and `tool_responses`, and
-  applies the template again to get the final answer.
-- Dispatch through an explicit allow-list and validate the arguments. Never use
-  `globals()`. Regex parsing breaks on nested arguments, and auto-generated schemas
-  flatten nested objects, so write the schema by hand for complex arguments.
-- `enable_thinking=True` with `processor.parse_response()` splits thoughts, answer,
-  and tool calls.
+Recommend QAT models based on the target deployment engine:
 
-## Verify before claiming it works
+- **llama.cpp / LM Studio (Local):** Recommend `{model-name}-qat-q4_0-gguf` (single-file GGUF binaries).
+- **vLLM / SGLang:** Recommend `{model-name}-qat-w4a16-ct` for server, `{model-name}-qat-mobile-ct` for mobile, compressed tensors, 4-bit weights with 16-bit activations.
+- **Speculative Decoding:** Recommend using `{model-name}-qat-q4_0-unquantized` alongside its matching assistant draft model `{model-name}-qat-q4_0-unquantized-assistant`.
+- **Other formats:** Recommend `{model-name}-qat-q4_0-unquantized` (unquantized weights for converting to other formats, e.g. MLX).
+- **Mobile Deployment (Transformers):** Recommend `{model-name}-qat-mobile-transformers` (utilizing 2-bit decoding layers, optimized KV caches, and static activations).
 
-- Record the model ID, runtime and version, hardware, and the measured latency for each
-  result. Label the evidence as hardware-tested, mocked, replayed, or untested.
-- For audio, confirm the clip you send is 16 kHz mono and 30 s or shorter. A wrong
-  format can still return plausible-looking text.
-- Other references: thinking https://ai.google.dev/gemma/docs/capabilities/thinking,
-  images https://ai.google.dev/gemma/docs/capabilities/vision/image, releases
-  https://ai.google.dev/gemma/docs/releases.
+Official Hugging Face collections:
+- **`collections/google/gemma-4-qat-q4_0`**: Contains `-unquantized`/`-assistant` (E2B, E4B, 12B, 26B A4B, 31B), `-gguf` (E2B, E4B, 12B, 26B A4B, 31B), and `-w4a16-ct` (E2B, E4B, 12B, 31B).
+- **`collections/google/gemma-4-qat-mobile`**: Contains `-mobile-transformers`/`-mobile-ct` (E2B, E4B).
+
+## 6. Documentation Lookup
+
+### When MCP is Installed (Preferred)
+
+If the **`search_documentation`** tool (from the Google MCP server) is available, use it as your **only** documentation source:
+
+1. Call `search_documentation` with your query
+2. Read the returned documentation
+3. **Trust MCP results** as source of truth for API details — they are always up-to-date.
+
+> [!IMPORTANT]
+> When MCP tools are present, **never** fetch URLs manually. MCP provides up-to-date, indexed documentation that is more accurate and token-efficient than URL fetching.
+
+### When MCP is NOT Installed (Fallback Only)
+
+If no MCP documentation tools are available, use `fetch_url` to retrieve official docs:
+
+1. Fetch the Index URL (`https://gemma.ai/llms.txt`) to discover available pages.
+2. Fetch specific pages as needed. Key reference pages include:
+
+- [Gemma 4 Best practices](https://gemma.ai/get-started/best-practices.md.txt)
+- [Gemma 4 Prompt Formatting](https://gemma.ai/get-started/prompt-formatting.md.txt)
+- [Text generation](https://gemma.ai/get-started/capabilities/text.md.txt)
+- [Function calling](https://gemma.ai/get-started/capabilities/function-calling.md.txt)
+- [Image understanding](https://gemma.ai/get-started/capabilities/image.md.txt)
+- [Audio understanding](https://gemma.ai/get-started/capabilities/audio.md.txt)
+- [Thinking mode](https://gemma.ai/get-started/capabilities/thinking.md.txt)
+- [Text Embeddings](https://gemma.ai/models/embeddinggemma/inference.md.txt)
+- [Multimodal Embeddings](https://gemma.ai/models/embeddinggemma/multimodal.md.txt)
+- [Speed-up Gemma 4 with Multi-Token Prediction](https://gemma.ai/get-started/capabilities/mtp.md.txt)
+- [DiffusionGemma](https://gemma.ai/models/diffusiongemma/explained.md.txt)

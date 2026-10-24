@@ -175,7 +175,7 @@ current branch and PR; do not restart the branch workflow for each agent subtask
 |---|---|
 | `cocktail-perception` | SAM3, SAM Audio, audio/visual timing, source association, perception pipelines (project-authored) |
 | `graphify` | codebase questions when `graphify-out/` exists; building/updating the graph (see **Codebase context**) |
-| `gemma-dev` | writing or debugging code that calls or runs a Gemma model (project-authored) |
+| `gemma-dev` | building with Gemma: model choice, runtimes, prompt format, capabilities |
 | `hz-quest-verify-first` | any Meta Quest / Horizon OS claim or code (needs metavr CLI/MCP; ask before `npx`) |
 | `systematic-debugging` | any bug, test failure, or unexpected behavior, before proposing fixes |
 | `verification-before-completion` | before claiming work is complete, fixed, or passing |
