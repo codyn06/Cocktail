@@ -31,3 +31,4 @@
 *.unitypackage
 crashlytics-build.properties
 sysinfo.txt
+/.utmp/

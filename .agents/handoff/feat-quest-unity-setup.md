@@ -13,9 +13,9 @@ Owner: codyn06 / Claude Code   PR: not opened
 
 ## Verification
 - Batch-mode `-createProject` and package import on 6000.0.80f1 -> packages resolved, 0 `error CS` (mocked, editor only).
-- Android build / headset run -> untested (Android module not installed on this machine).
+- `ConfigureBatch` + `BuildBatch` -> 20 Project Setup fixes applied, APK built, manifest targets quest2|quest3s (mocked, no device).
+- Headset run -> untested (no headset connected).
 
 ## Next steps
-- Install Android Build Support for 6000.0.80f1, then run the project configuration steps in `quest/README.md`
-  and commit the resulting ProjectSettings.
-- Build and run on Quest 3S and Quest 2. Then add a hub `/events` WebSocket client.
+- Install the APK on Quest 3S and Quest 2 and confirm passthrough (color on 3S, grayscale on 2).
+- Then add a hub `/events` WebSocket client.

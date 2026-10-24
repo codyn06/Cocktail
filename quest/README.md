@@ -37,23 +37,39 @@ so device behaviour is untested until we try it on hardware.
 5. Optional: install Meta XR Simulator to test UI without a headset. Passthrough camera
    access will not work there.
 
-## One-time project configuration
+## Project configuration
 
-These steps need the Android module, so run them in the editor after machine setup.
-Commit the `ProjectSettings/` changes they produce.
+This is already committed. To re-apply it, use **Cocktail > Configure Quest**
+([Assets/Editor/QuestProjectSetup.cs](Assets/Editor/QuestProjectSetup.cs)) or run it
+in batch mode:
 
-1. Open `quest/` in Unity Hub with 6000.0.80f1.
-2. **File > Build Profiles**: switch to **Android**.
-3. **Project Settings > XR Plug-in Management**: on both the Android and Standalone
-   tabs, enable **OpenXR** and the **Meta XR** feature group.
-4. **Meta > Tools > Project Setup Tool**: apply every fix on the Android tab. It sets
-   ARM64, IL2CPP, the graphics API and the minimum API level, so we don't hard-code them.
-5. **OVRManager / Quest features**: target **Quest 3S** and **Quest 2**, and set
-   Passthrough support to Supported.
-6. Build and run once on each headset.
+```bash
+Unity.exe -batchmode -projectPath quest -executeMethod Cocktail.Editor.QuestProjectSetup.ConfigureBatch
+```
+
+It does the following:
+- Switches the build target to Android.
+- Enables the OpenXR loader and the Meta XR feature group for Android and Standalone.
+- Restricts the Meta Quest feature and `OVRProjectConfig` to **Quest 2** and **Quest 3S**,
+  and sets Passthrough support to Supported.
+- Creates `Assets/Scenes/Main.unity`: an `OVRCameraRig` with passthrough on, plus a light.
+- Applies every Meta Project Setup Tool fix for Android: min API 32, target API 34,
+  GameActivity, ASTC, the manifest and the controller profile, among others.
+
+Build a smoke-test APK to `quest/Builds/cocktail-quest.apk`:
+
+```bash
+Unity.exe -batchmode -projectPath quest -executeMethod Cocktail.Editor.QuestProjectSetup.BuildBatch
+```
+
+Install it on a headset connected by USB:
+
+```bash
+adb install -r quest/Builds/cocktail-quest.apk
+```
 
 ## Status
 
-The project and packages are scaffolded, and a batch-mode import compiles with 0 errors
-(mocked: editor only, no device). XR configuration, the Android build and anything on
-a headset are untested.
+- Configuration and APK build: done in batch mode, and the build succeeded (mocked: no
+  device). The generated manifest has `com.oculus.supportedDevices = quest2|quest3s`.
+- On a headset: untested. No headset was connected.
