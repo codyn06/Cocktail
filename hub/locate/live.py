@@ -3,6 +3,15 @@ head-movement BearingEstimator (A8) and publishes one protocol Source per separa
 
 Use as a SeparationWorker listener:  worker.listeners.append(LiveLocator(state).on_chunks)
 Only calls the A8 estimator's public API; it does not change hub/locate's other files.
+
+- source_id is the separator's stream slot (s1, s2, ...), not a person. Slots can change
+  occupant (one-talker merges, a new talker after a pause), so the tracker (D1) must decide
+  identity from bearing and voice, not from source_id.
+- bearing_deg is the estimator's world yaw: 0 = headset tracking-space forward, + = right. It
+  equals "initial forward" only if the tracking origin faced forward; confirm on the headset
+  (recentring shifts it).
+- state: tracking while the stream is heard, last_seen after LAST_SEEN_S of silence, lost after
+  LOST_S. last_observed_us is when the stream was last heard, not the latest hop.
 """
 
 from __future__ import annotations
@@ -15,6 +24,9 @@ from .estimator import BearingEstimate, BearingEstimator, LocateConfig
 
 # A8 estimator states -> how much to trust the bearing in the published Source.
 _SHOW = {"locked", "tracking", "ambiguous"}
+AMBIGUOUS_CONF_MAX = 0.5   # mirror/front-back ambiguity: show the bearing, but not confidently
+ACTIVE_MIN = 0.2           # level-frame activity above this counts as "the stream is heard"
+LAST_SEEN_S, LOST_S = 2.0, 10.0
 
 
 class LiveLocator:
@@ -26,11 +38,13 @@ class LiveLocator:
     def _reset(self):
         self.est = BearingEstimator(self.cfg)
         self._last_pose_us = None
-        self._pose_epoch = self.ingest._pose_epoch
+        self._pose_epoch = self.ingest.pose_epoch
         self.latest: dict[str, tuple] = {}  # stream_id -> (StreamChunk, BearingEstimate)
+        self.last_active_us: dict[str, int] = {}
+        self.now_us = 0
 
     def _feed_poses(self):
-        if self.ingest._pose_epoch != self._pose_epoch:  # reconnect: device clock may restart
+        if self.ingest.pose_epoch != self._pose_epoch:  # reconnect: device clock may restart
             self._reset()
         with self.ingest.poses.lock:
             poses = list(self.ingest.poses.poses)
@@ -48,6 +62,9 @@ class LiveLocator:
             for c in chunks:
                 for t_us, lv, w in zip(c.level_ts_us, c.levels_db, c.activity):
                     self.est.add_levels(c.stream_id, t_us / 1e6, lv, float(w))
+                    if w > ACTIVE_MIN:
+                        self.last_active_us[c.stream_id] = int(t_us)
+                self.now_us = max(self.now_us, int(c.level_ts_us[-1]))
                 self.latest[c.stream_id] = (c, self.est.estimate(c.stream_id, c.level_ts_us[-1] / 1e6))
 
     def estimates(self) -> dict[str, BearingEstimate]:
@@ -61,13 +78,22 @@ class LiveLocator:
         out = []
         with self.lock:
             for sid, (c, e) in self.latest.items():
+                if sid not in self.last_active_us:
+                    continue  # never heard: an empty slot is not a source
+                silent_s = (self.now_us - self.last_active_us[sid]) / 1e6
+                state = (p.TrackState.tracking if silent_s < LAST_SEEN_S else
+                         p.TrackState.last_seen if silent_s < LOST_S else p.TrackState.lost)
                 shown = e.state in _SHOW
+                conf = min(max(e.confidence, 0.0), 1.0)
+                if e.state == "ambiguous":
+                    conf = min(conf, AMBIGUOUS_CONF_MAX)
                 out.append(p.Source(
                     source_id=sid, label=c.label, label_conf=min(max(c.label_conf, 0.0), 1.0),
                     bearing_deg=e.world_deg if shown else None,
-                    bearing_conf=min(max(e.confidence, 0.0), 1.0) if shown else 0.0,
+                    bearing_conf=conf if shown else 0.0,
                     bearing_source=p.BearingSource.head_motion if shown else None,
+                    state=state,
                     level_db=float(10 * np.log10(np.mean(c.audio ** 2) + 1e-10)),
-                    last_observed_us=int(c.level_ts_us[-1]),
+                    last_observed_us=self.last_active_us[sid],
                 ))
         return out

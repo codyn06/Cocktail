@@ -28,9 +28,9 @@ def test_waits_for_poses_then_publishes_sources():
         pose(st, k, k * 20_000, 30 * np.sin(k / 10))
     loc.on_chunks([chunk("s1", 0, lv), chunk("s2", 0, lv, act=0.0)])
     src = {s.source_id: s for s in loc.sources()}
-    assert set(src) == {"s1", "s2"} and src["s1"].label == "speech"
+    assert set(src) == {"s1"} and src["s1"].label == "speech"  # s2 never heard: not a source
     assert src["s1"].last_observed_us == 50_000 + 18 * 50_000
-    assert src["s2"].bearing_deg is None              # never active: no bearing published
+    assert src["s1"].state == p.TrackState.tracking
     assert loc.est._poses[-1][0] == 59 * 0.02         # poses fed in device seconds
 
 
@@ -44,3 +44,20 @@ def test_reconnect_resets_estimator():
     pose(st, 0, 5_000, 0.0, epoch=1)
     loc.on_chunks([chunk("s1", 0, np.zeros((19, 2, 5)))])
     assert loc.est is not old and len(loc.est._poses) == 1
+
+
+def test_silent_stream_goes_last_seen_then_lost():
+    st = IngestState()
+    loc = LiveLocator(st)
+    for k in range(800):  # 16 s of poses
+        pose(st, k, k * 20_000, 30 * np.sin(k / 10))
+    lv = np.zeros((19, 2, len(BAND_CENTERS_HZ)))
+    loc.on_chunks([chunk("s1", 0, lv, act=1.0)])            # heard in the first second
+    first = loc.sources()[0]
+    for t in (1, 2, 3):                                      # then silent
+        loc.on_chunks([chunk("s1", t * 1_000_000, lv, act=0.0)])
+    s = loc.sources()[0]
+    assert s.last_observed_us == first.last_observed_us      # does not advance while silent
+    assert s.state == p.TrackState.last_seen
+    loc.on_chunks([chunk("s1", 12_000_000, lv, act=0.0)])
+    assert loc.sources()[0].state == p.TrackState.lost

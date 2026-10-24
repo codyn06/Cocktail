@@ -186,3 +186,21 @@ def test_merged_voice_stays_in_one_stream_across_a_pause():
     est, _ = run(LiveSeparator(SplitOracle()), x)
     e = {k: np.sum(est[k] ** 2) for k in ("s1", "s2")}
     assert min(e.values()) == 0
+
+
+def test_ild_diff_is_per_band_average_not_sum():
+    """Same 6 dB level difference in every band gives 6 dB (an average, not 3 x 6). Two halves
+    of one talker in different bands, each with the same 3 dB ILD, give about 0."""
+    f = np.linspace(0, 8000, 257)
+    T = 10
+    E = np.ones((2, 2, len(f), T))
+    E[0, 1] *= 10 ** (6 / 10)                      # voice 1: right mic +6 dB in every band
+    assert abs(LiveSeparator._ild_diff(E, f) - 6.0) < 1e-6
+    E = np.full((2, 2, len(f), T), 1e-12)
+    lo, hi = (f >= 1000) & (f < 2000), (f >= 4000) & (f < 8000)
+    for v, band in ((0, lo), (1, hi)):             # one talker split by frequency region
+        E[v, 0, band] = 1.0
+        E[v, 1, band] = 10 ** (3 / 10)
+    E[:, 0, lo | hi] += 1e-3                       # each half leaks a little into the other band
+    E[:, 1, lo | hi] += 1e-3 * 10 ** (3 / 10)      # with the same 3 dB ILD
+    assert LiveSeparator._ild_diff(E, f) < 1.0

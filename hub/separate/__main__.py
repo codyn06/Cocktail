@@ -31,6 +31,7 @@ try:  # direction finding (C4) if hub/locate is present
     locator = LiveLocator(state)
     worker.listeners.append(locator.on_chunks)
 except ImportError:
+    logging.getLogger("separate").exception("direction finding disabled: hub/locate failed to import")
     locator = None
 worker.start()
 app = create_app(state)
@@ -39,7 +40,9 @@ app = create_app(state)
 @app.get("/sources")
 def sources():
     """Separated, labeled sources with head-movement bearings (protocol Source objects)."""
-    return [s.model_dump() for s in locator.sources()] if locator else []
+    if locator is None:
+        return {"error": "direction finding disabled (see hub log)", "sources": []}
+    return [s.model_dump(mode="json") for s in locator.sources()]
 
 
 @app.get("/separate/status")
