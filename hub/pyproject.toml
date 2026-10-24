@@ -1,0 +1,29 @@
+[project]
+name = "cocktail-hub"
+version = "0.0.1"
+description = "Cocktail laptop hub (Python). Shared by several agents; add deps here."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "numpy",
+  "scipy",
+  "soundfile",
+  "huggingface_hub",
+  "torch",
+  "torchaudio",
+  "speechbrain",
+  "pandas",
+  "asteroid>=0.7.0",
+  "pyarrow>=26.0.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchaudio = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
