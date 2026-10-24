@@ -44,6 +44,15 @@ re-run `cd hub && uv run python -m protocol.export`.
 | G1-G4 | Metrics, echo tuning, glasses mode, README | | | todo | |
 | H1-H2 | Film and submit before 10 AM | | | todo | |
 
+## Flexible tasks
+- Owners are defaults, not walls. Anyone with free time can take a `todo` row: put your
+  name and branch in the row and set `doing` (pull first, push right away).
+- Taking over a `doing` row: ask the current owner in person first, then update the row.
+- Stuck for 20 minutes? Set the row to `blocked`, say why in Notes, and tell the team.
+  Someone else may pick it up.
+- Each task has its own folder and branch, so switching owners never means moving code.
+  Only `hub/protocol` stays gated (integration owner approves changes).
+
 ## Demo timing
 Demo work (A9 pitch, H1 filming, G4 README) starts only after the product is finished
 (Checkpoint 1 working on the 3S). Until then everyone builds the product.
