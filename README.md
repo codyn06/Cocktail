@@ -140,6 +140,27 @@ saved in `hub/sessions/`, which is gitignored. Never commit recordings.
 Replayer options: `--speed 0` sends as fast as possible, `--loop` repeats (each pass
 counts as a reconnect), and `--hub ws://<ip>:<port>` targets another machine.
 
+### Live separation (GPU)
+
+Needs the GPU environment above. The first run downloads the separation and labeling
+models (~1 GB) into `hub/checkpoints/` and the Hugging Face cache; both are gitignored.
+
+```sh
+uv run --group gpu python -m separate        # hub + live separation (replaces `python -m ingest`)
+uv run python -m mockclient.replay sessions/demo
+```
+
+http://localhost:8765/separate/status shows each separated stream with its label, level
+and compute time per 1 s hop.
+
+Score separation on a simulated session (it needs ground truth, so only `mockclient.simulate`
+sessions work). It prints the SI-SDR improvement per source, which needs to be at least +8 dB,
+and the label for each:
+
+```sh
+uv run --group gpu python -m separate.score sessions/demo
+```
+
 ### Reaching the hub from the Quest
 
 - **Same Wi-Fi or hotspot**: find the laptop IP with `ipconfig` (Windows), then open

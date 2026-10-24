@@ -15,3 +15,6 @@ __pycache__/
 
 # mock headset sessions (recorded or simulated audio; never commit)
 hub/sessions/
+
+# model weights downloaded at runtime (ClearVoice writes to ./checkpoints)
+hub/checkpoints/

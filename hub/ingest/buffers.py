@@ -26,10 +26,12 @@ class Resampler:
     def __init__(self, sr_in: int, channels: int):
         self.sr_in, self.channels = sr_in, channels
         self.factor = sr_in // HUB_SR if sr_in % HUB_SR == 0 else 0
+        self.delay = 0  # output samples by which the output lags the input (linear-phase FIR)
         if self.factor > 1:
             self.taps = signal.firwin(24 * self.factor + 1, 0.9 / self.factor)
             self.zi = np.zeros((len(self.taps) - 1, channels))
             self.phase = 0  # index of the next kept sample within the next chunk
+            self.delay = (len(self.taps) - 1) // 2 // self.factor
 
     def __call__(self, x: np.ndarray) -> np.ndarray:
         if self.factor == 1:
@@ -52,6 +54,7 @@ class AudioRing:
         self.written = 0  # total samples ever written (absolute index of the next sample)
         self.anchors: deque[tuple[int, int]] = deque(maxlen=4096)  # (abs index, device_ts_us)
         self.contiguous_since_us: int | None = None  # start of the current gap-free stretch
+        self.resets = 0  # consumers compare this to notice a reset
         self.lock = threading.RLock()
 
     def write(self, x: np.ndarray, device_ts_us: int) -> None:
@@ -84,6 +87,7 @@ class AudioRing:
             self.written = 0
             self.anchors.clear()
             self.contiguous_since_us = None
+            self.resets += 1
 
     def last(self, seconds: float) -> tuple[np.ndarray, int]:
         """Most recent audio, shape (n, channels), and the device time of its first sample."""
@@ -93,6 +97,16 @@ class AudioRing:
             first = self.written - n
             idx = np.arange(first, self.written) % cap
             return self.buf[idx].copy(), (self.ts_of(first) if n else 0)
+
+    def read(self, start: int, n: int) -> tuple[np.ndarray, int] | None:
+        """Samples [start, start + n) by absolute index and the device time of the first one;
+        None if any of them is not (or no longer) in the ring."""
+        with self.lock:
+            cap = len(self.buf)
+            if start < max(0, self.written - cap) or start + n > self.written:
+                return None
+            idx = np.arange(start, start + n) % cap
+            return self.buf[idx].copy(), self.ts_of(start)
 
     @property
     def seconds_held(self) -> float:

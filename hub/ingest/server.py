@@ -13,7 +13,7 @@ from pydantic import TypeAdapter
 
 import protocol as p
 
-from .buffers import AudioRing, LatestFrame, PoseBuffer, Resampler
+from .buffers import HUB_SR, AudioRing, LatestFrame, PoseBuffer, Resampler
 
 log = logging.getLogger("ingest")
 _pose_channel = TypeAdapter(p.PoseChannelMessage)
@@ -88,7 +88,8 @@ class IngestState:
             log.warning("audio gap %d us: zero-filled", gap)
         self._audio_epoch = h.epoch
         self._audio_next_ts_us = h.device_ts_us + h.frames * 1_000_000 // h.sample_rate
-        self.audio.write(r(x), h.device_ts_us)
+        # The resampler's output lags its input; shift the anchor so ring time = capture time.
+        self.audio.write(r(x), h.device_ts_us - r.delay * 1_000_000 // HUB_SR)
 
     def on_video(self, h: p.VideoFrame, payload: bytes) -> None:
         self.stats["video"].update(h.seq, h.epoch, h.device_ts_us)

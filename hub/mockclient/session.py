@@ -6,7 +6,8 @@ A session is a folder:
   audio.wav      multichannel mic audio (int16), first sample at start_ts_us
   pose.jsonl     one PoseSample-like object per line: device_ts_us, pos, rot_xyzw
   video/         optional JPEG frames named <device_ts_us>.jpg
-  stems/         optional dry ground-truth stems at 16 kHz (simulated sessions only)
+  stems/         optional ground truth at 16 kHz: each source alone as the mics hear it (mean
+                 over mics), same scale as audio.wav (simulated sessions only)
 """
 
 from __future__ import annotations
