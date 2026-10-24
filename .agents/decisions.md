@@ -7,6 +7,13 @@ status and device reservations do not belong here (see `AGENTS.md` > Continuity)
 ## Integration owner
 - Unassigned. Agree on one before parallel work on shared interfaces.
 
+## Hardware reservation owners
+One owner per shared device grants exclusive use (see `AGENTS.md` > Hackathon coordination).
+- Ray-Ban Meta glasses: unassigned
+- Phone: unassigned
+- Quest headset: unassigned
+- GPU machine: unassigned
+
 ## Decisions
 - No app stack chosen; no package.json; no dependencies.
 - Roles have no model names (inherit). Read-only roles may use bounded shell inspection;
