@@ -1,4 +1,4 @@
-# Repo-local tool environments (e.g. graphify venv)
+# Old repo-local tool environments (graphify is now installed globally; see AGENTS.md)
 .tools/
 
 # graphify output: rebuilt locally per checkout (see AGENTS.md "Codebase context")
