@@ -1,9 +1,8 @@
 # Handoff
 
-## Status (2026-10-23): workflow fixes verified locally; PR pending GitHub authentication
+## Status (2026-10-23): agent setup and workflow fixes merged to `main` (PR #1)
 
-- Branch: `fix/agent-workflow-blockers`; existing setup was untracked at task start.
-- Current fix and handoff owner: this Codex orchestrator. No parallel writers.
+- No active task branch for the agent setup.
 - Team integration owner for implementation: unassigned; agree before parallel work.
 - Shared device/GPU reservations: none for this configuration task.
 
@@ -36,8 +35,6 @@
 - Not tested: actual loading in Claude Code, Codex, Pi, Antigravity.
 
 ## Next steps
-- `gh auth status` reports no authenticated GitHub host. Authenticate before opening
-  the required PR; do not merge without human approval.
 - Each teammate: confirm their tool loads the roles/skills (see README "pending runtime checks").
 - Run the one-time teammate smoke checks in `.agents/README.md` for tools actually used.
 - Install Pi / metavr only with user approval if needed beyond the documentation fallback.
