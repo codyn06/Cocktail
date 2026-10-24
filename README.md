@@ -3,7 +3,8 @@
 An audio-first assistive experience built at a hackathon by a team of four. A Meta Quest 3S
 headset streams its microphones, camera and head pose to a laptop "hub", which splits the
 room's sound into separate labeled sources, works out where each one is, and sends the
-chosen sound back to the headset in 3D. Plan: [`docs/QUEST_PRD.txt`](docs/QUEST_PRD.txt).
+chosen sound back to the headset in 3D. Plan: [`docs/QUEST_PRD.txt`](docs/QUEST_PRD.txt). Architecture and decisions:
+[`ARCHITECTURE.md`](ARCHITECTURE.md).
 Live progress: [`docs/STATUS.md`](docs/STATUS.md).
 
 > **Status (2026-10-24):** the hub runs end to end on simulated data: ingest, a mock
@@ -23,6 +24,7 @@ Live progress: [`docs/STATUS.md`](docs/STATUS.md).
 | `graphify-out/` | Local code knowledge graph (gitignored, rebuilt per clone) |
 | `hub/` | Laptop hub (Python 3.12): `protocol/` wire format, `ingest/` server, `mockclient/` fake headset, `separate/` live separation |
 | `quest/` | Unity project for the Quest headset ([setup](quest/README.md)) |
+| `ARCHITECTURE.md` | System overview and architectural decisions, with their status and evidence |
 | `docs/` | Plan (`QUEST_PRD.txt`) and status board (`STATUS.md`) |
 
 ## Requirements at a glance
