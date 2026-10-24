@@ -18,3 +18,6 @@ hub/sessions/
 
 # model weights downloaded at runtime (ClearVoice writes to ./checkpoints)
 hub/checkpoints/
+
+# headset recordings for real-world locator tests (quest/tools/record_session.py)
+hub/recordings/
