@@ -24,7 +24,9 @@ replayed, untested.
 | Third | unassigned | |
 
 ## Milestones
-Deadline: 10 AM tomorrow (Sunday), including the video. Each milestone is done when its
+Target: working product by 10 AM tomorrow (Sunday). This is the best-case target, not a
+hard stop: the demo video is separate, and the deadline can be extended as the time
+approaches. Don't cut corners or rush to hit it; ask the team first. Each milestone is done when its
 "proof" works; move on as soon as it does. Everything after M3 only improves and proves it.
 
 | # | Milestone | Proof it's done | Tasks |
