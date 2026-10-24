@@ -1,35 +1,23 @@
 {
   "model": "opus",
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/graphify-session.mjs\" SessionStart",
-            "timeout": 120
-          }
-        ]
-      }
-    ],
-    "SubagentStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/graphify-session.mjs\" SubagentStart",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
+      {
+        "matcher": "Bash|Grep|Glob|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/graphify-subagent-guard.mjs\"",
+            "timeout": 10
+          }
+        ]
+      },
       {
         "matcher": "Bash|Grep",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/graphify-guard.mjs\" search",
+            "command": "graphify hook-guard search",
             "timeout": 10
           }
         ]
@@ -39,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/graphify-guard.mjs\" read",
+            "command": "graphify hook-guard read",
             "timeout": 10
           }
         ]

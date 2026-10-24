@@ -119,10 +119,10 @@
       "destination": ".agents/skills/graphify",
       "localModifications": [],
       "dependencies": [
-        "graphify CLI (PyPI graphifyy==0.9.95), installed repo-locally in .tools/graphify (gitignored); Python 3.10+"
+        "graphify CLI (PyPI graphifyy 0.9.95), installed globally with `uv tool install graphifyy` or `pipx install graphifyy`; Python 3.10+"
       ],
       "unresolvedReferences": [],
-      "notes": "SKILL.md + references/ copied unchanged; .graphify_version omitted (version recorded here). Upstream's generated CLAUDE.md section and PreToolUse hooks are not used verbatim: rules live in AGENTS.md 'Codebase context', hooks go through .claude/hooks/graphify-guard.mjs so a missing CLI or graph is a silent no-op. Docs/PDF/image extraction sends content to the assistant's model provider; code extraction is local (tree-sitter)."
+      "notes": "SKILL.md + references/ copied unchanged; .graphify_version omitted (version recorded here). Claude Code setup follows upstream: `graphify claude install` (CLAUDE.md section + `graphify hook-guard` PreToolUse hooks) and `graphify hook install` (git hooks, per clone). Project addition: .claude/hooks/graphify-subagent-guard.mjs makes subagents query the graph first. Codex/Antigravity/Pi installers not run (they write into AGENTS.md/.agents, which sync generates). Docs/PDF/image extraction sends content to the assistant's model provider; code extraction is local (tree-sitter)."
     }
   ],
   "projectSkills": [

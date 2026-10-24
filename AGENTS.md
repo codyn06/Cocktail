@@ -86,33 +86,36 @@ Trivial tasks: write a brief plan and do them directly.
 ## Codebase context (graphify)
 
 graphify builds a local knowledge graph of the repo in `graphify-out/` (gitignored,
-rebuilt per checkout). Skill: `.agents/skills/graphify/SKILL.md`.
+rebuilt per clone by git hooks). Skill: `.agents/skills/graphify/SKILL.md`. Setup follows
+the official docs (https://github.com/Graphify-Labs/graphify, https://docs.graphify.com).
 
-- Setup (repo-local, once per checkout): `python -m venv .tools/graphify`, then
-  `.tools/graphify/Scripts/pip install graphifyy==0.9.95` (`bin/pip` on macOS/Linux).
-  Build with `graphify update .` (code only: local tree-sitter, no model calls). The
-  full `/graphify .` pass also sends docs, PDFs, and images to the assistant's model
+- **Setup (once per machine):** `uv tool install graphifyy==0.9.95` (or `pipx install graphifyy==0.9.95`)
+  so `graphify` is on PATH. Installing software needs user approval.
+- **Setup (once per clone):** `graphify hook install` (post-commit/checkout/merge/rewrite
+  hooks rebuild the graph, code only; it also adds a `.gitattributes` merge-driver line,
+  which is not committed because the graph isn't), then `graphify update .` to build the first graph.
+  Run `graphify update .` after pulls too. Both are local tree-sitter, no model calls.
+  The full `/graphify .` pass also sends docs, PDFs, and images to the assistant's model
   provider; ask the user before running it on anything sensitive.
-- **Start of every session and every subagent assignment:** before any other codebase
-  exploration, make sure the graph exists and matches `git rev-parse HEAD` (the
-  "Built from commit" line in `graphify-out/GRAPH_REPORT.md`); if it is missing or
-  stale, run `graphify update .`. Then read that report's Summary and God Nodes, and
-  run `graphify query` for the task at hand. If graphify is not set up and cannot be
-  (installing needs user approval), say so and fall back to normal search. Claude Code
-  does this automatically via `SessionStart`/`SubagentStart` hooks
-  (`.claude/hooks/graphify-session.mjs`); other tools follow this rule by hand.
-- If `graphify` is not on PATH, call `.tools/graphify/Scripts/graphify`
-  (`.tools/graphify/bin/graphify` on macOS/Linux) wherever these rules say `graphify`.
 - When `graphify-out/graph.json` exists, run `graphify query "<question>"`,
   `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` before broad grep or
   file-by-file reads for codebase questions. Read raw files only for lines the graph
   located. Use `graphify-out/GRAPH_REPORT.md` only for broad architecture review.
+  If graphify is not set up, say so and fall back to normal search.
 - Orchestrators: query the graph while planning and paste the relevant output
-  (nodes, paths, file:line locations) into each assignment, so subagents start from
-  the same map instead of re-exploring. Tell subagents to query the graph too.
+  (nodes, paths, file:line locations) into each assignment, and tell subagents to
+  query the graph before exploring.
 - After changing code, run `graphify update .` to keep the graph current.
-- Claude Code: `.claude/hooks/graphify-guard.mjs` nudges toward graph queries before
-  search/read tools, and does nothing when the graph or CLI is missing.
+- Claude Code: `graphify claude install` wrote the graphify section in `CLAUDE.md` and
+  the `graphify hook-guard` PreToolUse hooks in `.claude/settings.json` (they nudge
+  toward graph queries). `.claude/hooks/graphify-subagent-guard.mjs` adds a project
+  rule: it blocks a subagent's Bash/Grep/Glob/Read calls until that subagent has run
+  `graphify query|explain|path|update` (reads inside `graphify-out/` are allowed); it does nothing when the
+  graph or CLI is missing. Without the CLI on PATH the official hooks report a
+  non-blocking hook error. Other tools follow these rules from this file.
+- Not run here: `graphify codex|antigravity|pi ... install`. They write into
+  `AGENTS.md` and `.agents/`, which conflicts with the sync-generated layout. This
+  section carries the same guidance.
 
 ## Shared rules
 
