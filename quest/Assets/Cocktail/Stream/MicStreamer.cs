@@ -141,7 +141,9 @@ namespace Cocktail.Stream
             StartUnityMic();
         }
 
-        static string ReadIntentMic()
+        static string ReadIntentMic() => ReadIntentExtra("mic"); // adb shell am start ... -e mic unity|native
+
+        static string ReadIntentExtra(string key)
         {
             if (Application.platform != RuntimePlatform.Android) return null;
             try
@@ -149,7 +151,7 @@ namespace Cocktail.Stream
                 using (var player = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
                 using (var activity = player.GetStatic<AndroidJavaObject>("currentActivity"))
                 using (var intent = activity.Call<AndroidJavaObject>("getIntent"))
-                    return intent.Call<string>("getStringExtra", "mic"); // adb shell am start ... -e mic unity|native
+                    return intent.Call<string>("getStringExtra", key);
             }
             catch { return null; }
         }
@@ -159,7 +161,16 @@ namespace Cocktail.Stream
             try
             {
                 _java = new AndroidJavaObject("com.cocktail.mic.CocktailMic");
-                string json = _java.Call<string>("start", wantNativeChannels, preferredSampleRate, chunkMs, preferUnprocessed);
+                // Test switches: adb shell am start ... -e micsrc camcorder|mic|unprocessed|voice_recognition|voice_communication|default -e micch 2
+                string srcName = ReadIntentExtra("micsrc");
+                int srcId = srcName == "camcorder" ? 5 : srcName == "mic" ? 1 : srcName == "unprocessed" ? 9
+                          : srcName == "voice_recognition" ? 6 : srcName == "voice_communication" ? 7
+                          : srcName == "default" ? 0 : -1;
+                if (srcId >= 0) { _java.Call("setForcedSource", srcId); Debug.Log("[MicStreamer] forced audio source " + srcName + " (" + srcId + ")"); }
+                int wantCh = wantNativeChannels;
+                string chExtra = ReadIntentExtra("micch");
+                if (!string.IsNullOrEmpty(chExtra) && int.TryParse(chExtra, out int parsedCh) && parsedCh > 0) wantCh = parsedCh;
+                string json = _java.Call<string>("start", wantCh, preferredSampleRate, chunkMs, preferUnprocessed);
                 NativeStatusJson = json;
                 var st = JObject.Parse(json);
                 if (!(bool)st["ok"])

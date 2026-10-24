@@ -57,9 +57,18 @@ public class CocktailMic {
      * Start capture. Tries wantChannels..1 channels, sources UNPROCESSED -> VOICE_RECOGNITION -> MIC, and rates
      * preferredRate -> 48000 -> 44100 -> 16000. Returns a JSON status string ("ok":true on success).
      */
+    /** Test switch: use only this MediaRecorder.AudioSource id (e.g. 5 = CAMCORDER); -1 = default order. */
+    private volatile int forcedSource = -1;
+
+    public void setForcedSource(int src) {
+        forcedSource = src;
+    }
+
     public synchronized String start(int wantChannels, int preferredRate, int chunkMs, boolean preferUnprocessed) {
         stop();
-        int[] sources = preferUnprocessed
+        int[] sources = forcedSource >= 0
+                ? new int[]{forcedSource}
+                : preferUnprocessed
                 ? new int[]{MediaRecorder.AudioSource.UNPROCESSED, MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC}
                 : new int[]{MediaRecorder.AudioSource.MIC};
         int[] rates = new int[]{preferredRate, 48000, 44100, 16000};
