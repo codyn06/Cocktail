@@ -1,8 +1,9 @@
 """Render a simulated session: mono stems at world bearings, heard by two ear-level mics on a
 turning head (task B4). Evidence label for anything tested this way: simulated.
 
-Acoustics are a simple spherical-head approximation (Woodworth ITD, two-band head shadow), no
-room reverb. It is intentionally independent of hub/locate's head model.
+Acoustics: spherical head, no room reverb. Woodworth ITD; head shadow per frequency band from
+the Brown & Duda (1998) one-pole form, with constants (alpha_min 0.2, theta_min 140 deg, radius
+9 cm) that deliberately differ from hub/locate's estimator so tests don't feed it its own model.
 
   uv run python -m mockclient.simulate --out sessions/synth --stem v1.wav:-50 --stem v2.wav:40 \
       --stem music.wav:150
@@ -22,6 +23,16 @@ from .session import Session
 
 C_SOUND = 343.0
 HEAD_R = 0.0875
+SHADOW_R, ALPHA_MIN, THETA_MIN = 0.09, 0.2, 140.0
+BAND_EDGES = (700.0, 1400.0, 2800.0, 5600.0)  # crossovers between the 5 shadow bands
+
+
+def shadow_gain(f_hz: float, inc_rad: np.ndarray) -> np.ndarray:
+    """Linear magnitude of the spherical-head shadow at frequency f for incidence inc (0 = facing)."""
+    th = np.degrees(inc_rad)
+    alpha = 1 + ALPHA_MIN / 2 + (1 - ALPHA_MIN / 2) * np.cos(np.radians(np.minimum(th, THETA_MIN) * 180 / THETA_MIN))
+    x = 2 * np.pi * f_hz * SHADOW_R / C_SOUND / 2  # w / (2 w0)
+    return np.sqrt((1 + (alpha * x) ** 2) / (1 + x ** 2))
 POSE_HZ = 50
 
 
@@ -50,23 +61,29 @@ def load_mono(path: str, sr: int) -> np.ndarray:
 def render(stems, bearings_deg, sr: int, yaw_deg: np.ndarray, mic_az_deg=(-90.0, 90.0)) -> np.ndarray:
     """stems: list of mono arrays at sr; yaw_deg: per-sample head yaw. Returns (n, mics)."""
     n = len(yaw_deg)
-    lo_b, lo_a = signal.butter(2, 1500, fs=sr)
     out = np.zeros((n, len(mic_az_deg)), np.float32)
+    edges = (0.0, *BAND_EDGES, sr / 2)
+    centers = [np.sqrt(max(lo, 250.0) * hi) for lo, hi in zip(edges, edges[1:])]
     idx = np.arange(n, dtype=np.float64)
     for x, b in zip(stems, bearings_deg):
         x = np.pad(x[:n], (0, max(0, n - len(x))))
-        low = signal.filtfilt(lo_b, lo_a, x)
-        high = x - low
+        # Split into bands (zero-phase so the bands sum back to x), shadow each band separately.
+        bands, rest = [], x.astype(np.float64)
+        for e in BAND_EDGES:
+            fb, fa = signal.butter(4, e, fs=sr)
+            low = signal.filtfilt(fb, fa, rest)
+            bands.append(low)
+            rest = rest - low
+        bands.append(rest)
         rel = np.radians(b - yaw_deg)  # source azimuth in the head frame, + = right
         for m, maz in enumerate(np.radians(mic_az_deg)):
             inc = np.arccos(np.clip(np.cos(rel - maz), -1, 1))  # angle between source and mic axis
             # Woodworth path length to a mic on a sphere: direct if facing, wraps around if shadowed.
             path = np.where(inc < np.pi / 2, -HEAD_R * np.cos(inc), HEAD_R * (inc - np.pi / 2))
             d = path / C_SOUND * sr
-            g_hi = 10 ** (7.0 * np.cos(inc) / 20)   # strong shadow at high frequencies
-            g_lo = 10 ** (1.5 * np.cos(inc) / 20)   # weak shadow at low frequencies
             src = idx - d - HEAD_R / C_SOUND * sr   # keep delays causal
-            out[:, m] += np.interp(src, idx, low, left=0) * g_lo + np.interp(src, idx, high, left=0) * g_hi
+            for band, fc in zip(bands, centers):
+                out[:, m] += np.interp(src, idx, band, left=0) * shadow_gain(fc, inc)
     return out
 
 

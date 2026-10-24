@@ -107,6 +107,11 @@ class IngestState:
         else:
             self.inputs.append(msg)
 
+    @property
+    def pose_epoch(self) -> int:
+        """Epoch of the poses currently held (changes on reconnect); -1 before any pose."""
+        return self._pose_epoch
+
     def status(self) -> dict:
         a = self.audio
         return {
