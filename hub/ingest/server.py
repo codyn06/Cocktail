@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -47,11 +48,16 @@ class IngestState:
     audio: AudioRing | None = None
     poses: PoseBuffer = None  # type: ignore[assignment]
     video: LatestFrame = field(default_factory=LatestFrame)
-    inputs: list[p.InputEvent] = field(default_factory=list)
+    inputs: deque = field(default_factory=lambda: deque(maxlen=1000))
+    bad_messages: int = 0
     stats: dict[str, ChannelStats] = field(
         default_factory=lambda: {k: ChannelStats() for k in ("audio", "video", "pose")}
     )
     _resampler: Resampler | None = None
+    _audio_epoch: int = -1
+    _audio_next_ts_us: int | None = None  # expected device time of the next chunk
+    _pose_epoch: int = -1
+    max_gap_fill_us: int = 2_000_000
 
     def __post_init__(self):
         self.poses = self.poses or PoseBuffer(self.seconds)
@@ -67,6 +73,21 @@ class IngestState:
             self._resampler = r = Resampler(h.sample_rate, h.channels)
         if self.audio is None or self.audio.channels != h.channels:
             self.audio = AudioRing(h.channels, self.seconds)
+        # Keep ring time honest: zero-fill short forward gaps (lost chunks); start over on a
+        # reconnect, a backward clock jump or a long gap.
+        gap = None if self._audio_next_ts_us is None else h.device_ts_us - self._audio_next_ts_us
+        if h.epoch != self._audio_epoch or (gap is not None and not -2_000 <= gap <= self.max_gap_fill_us):
+            if self._audio_epoch != -1:
+                log.warning("audio discontinuity (epoch %s->%s, gap %s us): reset", self._audio_epoch, h.epoch, gap)
+            self.audio.reset()
+            self._resampler = r = Resampler(h.sample_rate, h.channels)
+        elif gap is not None and gap > 2_000:
+            n = int(gap * self.audio.sr / 1e6)
+            self.audio.write(np.zeros((n, h.channels), np.float32), self._audio_next_ts_us)
+            self._resampler = r = Resampler(h.sample_rate, h.channels)
+            log.warning("audio gap %d us: zero-filled", gap)
+        self._audio_epoch = h.epoch
+        self._audio_next_ts_us = h.device_ts_us + h.frames * 1_000_000 // h.sample_rate
         self.audio.write(r(x), h.device_ts_us)
 
     def on_video(self, h: p.VideoFrame, payload: bytes) -> None:
@@ -75,6 +96,9 @@ class IngestState:
 
     def on_pose_channel(self, msg) -> None:
         self.stats["pose"].update(msg.seq, msg.epoch, msg.device_ts_us)
+        if msg.epoch != self._pose_epoch:
+            self.poses.reset()  # new connection: the device clock may have restarted
+            self._pose_epoch = msg.epoch
         if isinstance(msg, p.Hello):
             self.hello = msg
         elif isinstance(msg, p.PoseSample):
@@ -89,6 +113,9 @@ class IngestState:
             "audio_seconds_held": round(a.seconds_held, 3) if a else 0,
             "audio_channels": a.channels if a else 0,
             "poses_held": len(self.poses),
+            "poses_out_of_order": self.poses.out_of_order,
+            "audio_contiguous_since_us": a.contiguous_since_us if a else None,
+            "bad_messages": self.bad_messages,
             "video_received": self.video.received,
             "video_dropped": self.video.dropped,
             "latest_frame_ts_us": self.video.header.device_ts_us if self.video.header else None,
@@ -106,8 +133,12 @@ def create_app(state: IngestState | None = None) -> FastAPI:
         await ws.accept()
         try:
             while True:
-                h, payload = p.unpack(await ws.receive_bytes(), model)
-                handler(h, payload)
+                data = await ws.receive_bytes()
+                try:
+                    handler(*p.unpack(data, model))
+                except Exception:  # a bad message must not kill the stream
+                    state.bad_messages += 1
+                    log.exception("bad %s message dropped", name)
         except WebSocketDisconnect:
             log.info("%s client disconnected", name)
 
@@ -124,7 +155,12 @@ def create_app(state: IngestState | None = None) -> FastAPI:
         await ws.accept()
         try:
             while True:
-                state.on_pose_channel(_pose_channel.validate_json(await ws.receive_text()))
+                text = await ws.receive_text()
+                try:
+                    state.on_pose_channel(_pose_channel.validate_json(text))
+                except Exception:
+                    state.bad_messages += 1
+                    log.exception("bad pose-channel message dropped")
         except WebSocketDisconnect:
             log.info("pose client disconnected")
 

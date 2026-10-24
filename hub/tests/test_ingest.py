@@ -116,3 +116,47 @@ def test_render_head_shadow_and_itd(bearing):
     lag = np.argmax(signal.correlate(left, right, "full")) - (len(right) - 1)  # >0: left hears it later
     assert np.sign(ild) == np.sign(bearing) and abs(ild) > 2
     assert np.sign(lag) == np.sign(bearing) and 10 < abs(lag) < 40  # ~0.4 ms ITD at 48 kHz
+
+
+def _chunk(state, seq, ts, epoch=0, value=0.1, frames=320):
+    h = p.AudioChunk(seq=seq, device_ts_us=ts, epoch=epoch, sample_rate=16000, channels=1, frames=frames)
+    state.on_audio(h, (np.full(frames, value * 32767)).astype("<i2").tobytes())
+
+
+def test_audio_gap_is_zero_filled_and_epoch_resets():
+    st = IngestState()
+    _chunk(st, 0, 0); _chunk(st, 1, 20_000)
+    _chunk(st, 3, 60_000)                       # chunk 2 lost: 20 ms gap
+    x, ts0 = st.audio.last(10)
+    assert len(x) == 4 * 320 and ts0 == 0
+    assert np.all(x[640:960] == 0) and x[-1, 0] > 0.09   # gap is silence, timing preserved
+    assert st.audio.ts_of(960) == 60_000
+    _chunk(st, 0, 5_000, epoch=1)               # reconnect: clock restarted
+    x, ts0 = st.audio.last(10)
+    assert len(x) == 320 and ts0 == 5_000 and st.audio.contiguous_since_us == 5_000
+
+
+def test_pose_out_of_order_and_no_silent_extrapolation():
+    st = IngestState()
+    pose = lambda seq, ts, ep=0: st.on_pose_channel(
+        p.PoseSample(seq=seq, device_ts_us=ts, epoch=ep, pos=(0, 0, 0), rot_xyzw=quat_yaw_pitch(10, 0)))
+    pose(0, 100_000); pose(1, 200_000); pose(2, 150_000)
+    assert len(st.poses) == 2 and st.poses.out_of_order == 1
+    assert st.poses.at(160_000) is not None and st.poses.at(900_000) is None
+    pose(0, 1_000, ep=1)
+    assert len(st.poses) == 1
+
+
+def test_bad_message_does_not_kill_stream(hub):
+    state, url = hub
+    import websockets
+
+    async def go():
+        async with websockets.connect(url + p.WS_AUDIO_IN) as ws:
+            h = p.AudioChunk(seq=0, device_ts_us=0, epoch=0, sample_rate=16000, channels=1, frames=320)
+            await ws.send(p.pack(h, b"\x00" * 10))       # payload too short
+            await ws.send(p.pack(h.model_copy(update={"seq": 1}), b"\x00" * 640))
+            await asyncio.sleep(0.2)
+    asyncio.run(go())
+    assert state.bad_messages == 1 and state.stats["audio"].messages == 2
+    assert state.audio.seconds_held == 0.02

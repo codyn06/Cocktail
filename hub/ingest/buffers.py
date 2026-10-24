@@ -51,11 +51,14 @@ class AudioRing:
         self.buf = np.zeros((int(seconds * sr), channels), np.float32)
         self.written = 0  # total samples ever written (absolute index of the next sample)
         self.anchors: deque[tuple[int, int]] = deque(maxlen=4096)  # (abs index, device_ts_us)
-        self.lock = threading.Lock()
+        self.contiguous_since_us: int | None = None  # start of the current gap-free stretch
+        self.lock = threading.RLock()
 
     def write(self, x: np.ndarray, device_ts_us: int) -> None:
         n, cap = len(x), len(self.buf)
         with self.lock:
+            if self.contiguous_since_us is None:
+                self.contiguous_since_us = device_ts_us
             self.anchors.append((self.written, device_ts_us))
             skip = max(0, n - cap)  # a write longer than the ring keeps only its tail
             x = x[skip:]
@@ -67,11 +70,20 @@ class AudioRing:
 
     def ts_of(self, index: int) -> int:
         """Device time of an absolute sample index, from the nearest earlier chunk anchor."""
-        for i, ts in reversed(self.anchors):
-            if i <= index:
-                return ts + (index - i) * 1_000_000 // self.sr
-        i, ts = self.anchors[0]
-        return ts + (index - i) * 1_000_000 // self.sr
+        with self.lock:
+            for i, ts in reversed(self.anchors):
+                if i <= index:
+                    return ts + (index - i) * 1_000_000 // self.sr
+            i, ts = self.anchors[0]
+            return ts + (index - i) * 1_000_000 // self.sr
+
+    def reset(self) -> None:
+        """Forget everything (reconnect, clock jump, or a gap too long to zero-fill)."""
+        with self.lock:
+            self.buf[:] = 0
+            self.written = 0
+            self.anchors.clear()
+            self.contiguous_since_us = None
 
     def last(self, seconds: float) -> tuple[np.ndarray, int]:
         """Most recent audio, shape (n, channels), and the device time of its first sample."""
@@ -111,22 +123,34 @@ class PoseBuffer:
     def __init__(self, seconds: float = 10.0):
         self.window_us = int(seconds * 1e6)
         self.poses: deque[Pose] = deque()
+        self.out_of_order = 0
         self.lock = threading.Lock()
 
-    def add(self, device_ts_us: int, pos, rot_xyzw) -> Pose:
+    def reset(self) -> None:
+        with self.lock:
+            self.poses.clear()
+
+    def add(self, device_ts_us: int, pos, rot_xyzw) -> Pose | None:
+        """Append a pose; poses not newer than the last one are dropped (returns None)."""
         yaw, pitch = yaw_pitch(rot_xyzw)
         p = Pose(device_ts_us, tuple(pos), tuple(rot_xyzw), yaw, pitch)
         with self.lock:
+            if self.poses and device_ts_us <= self.poses[-1].device_ts_us:
+                self.out_of_order += 1
+                return None
             self.poses.append(p)
             while self.poses and self.poses[0].device_ts_us < device_ts_us - self.window_us:
                 self.poses.popleft()
         return p
 
-    def at(self, device_ts_us: int) -> tuple[float, float] | None:
-        """(yaw, pitch) at a device time, linearly interpolated (yaw unwrapped)."""
+    def at(self, device_ts_us: int, max_extrapolate_us: int = 50_000) -> tuple[float, float] | None:
+        """(yaw, pitch) at a device time, linearly interpolated (yaw unwrapped).
+
+        None if the time is outside the buffer by more than max_extrapolate_us."""
         with self.lock:
             ps = list(self.poses)
-        if not ps:
+        if not ps or not (ps[0].device_ts_us - max_extrapolate_us <= device_ts_us
+                          <= ps[-1].device_ts_us + max_extrapolate_us):
             return None
         if device_ts_us <= ps[0].device_ts_us:
             return ps[0].yaw_deg, ps[0].pitch_deg
