@@ -2,25 +2,6 @@
   "schemaVersion": 1,
   "components": [
     {
-      "name": "gemini-api-dev",
-      "type": "skill",
-      "repository": "https://github.com/google-gemini/gemini-skills",
-      "url": "https://github.com/google-gemini/gemini-skills/tree/ee9da52195752ca83c2fca701d96bcb5a9c08d2d/skills/gemini-api-dev",
-      "commit": "ee9da52195752ca83c2fca701d96bcb5a9c08d2d",
-      "sourcePath": "skills/gemini-api-dev",
-      "license": "Apache-2.0",
-      "licenseFiles": [
-        "LICENSE"
-      ],
-      "destination": ".agents/skills/gemini-api-dev",
-      "localModifications": [],
-      "dependencies": [
-        "Gemini SDKs (google-genai for Python, @google/genai for TypeScript) when writing code that uses the skill"
-      ],
-      "unresolvedReferences": [],
-      "notes": "Local reference references/migration.md included. Other *.md references are remote ai.google.dev doc URLs (fetched at use time)."
-    },
-    {
       "name": "systematic-debugging",
       "type": "skill",
       "repository": "https://github.com/obra/superpowers",

@@ -1,7 +1,7 @@
 # Per-task handoffs
 
 One file per task branch: `.agents/handoff/<branch-name-with-slashes-as-dashes>.md`
-(e.g. branch `feat/gemini-live-audio` -> `feat-gemini-live-audio.md`). Only that
+(e.g. branch `feat/gemma-live-audio` -> `feat-gemma-live-audio.md`). Only that
 branch's orchestrator edits it, so parallel branches never conflict.
 
 - Create it on the feature branch when a substantive task starts; commit it with the work

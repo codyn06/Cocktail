@@ -9,6 +9,8 @@ status does not belong here (see `AGENTS.md` > Continuity).
 
 ## Decisions
 - No app stack chosen; no package.json; no dependencies.
+- LLM: Gemma, not Gemini models. Use the project-authored `gemma-dev` skill; the vendored
+  `gemini-api-dev` skill was removed. Variant and runtime are undecided.
 - Roles have no model names (inherit). Read-only roles may use bounded shell inspection;
   shell restrictions are instruction-enforced, including in Claude and Pi. Direct
   edit tools remain unavailable to those roles in Claude/Pi.
@@ -25,3 +27,4 @@ status does not belong here (see `AGENTS.md` > Continuity).
   checks" and smoke checks).
 - Install Pi / metavr only with user approval if needed beyond the documentation fallback.
 - Choose the app stack, then revisit deferred skills in `sources.json`.
+- Choose the Gemma variant and runtime (hosted Gemini API, self-hosted, or on-device).

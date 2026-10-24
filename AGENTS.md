@@ -8,7 +8,7 @@ by `node .agents/scripts/sync.mjs`. Do not edit generated copies.
 
 Cocktail is a 4-person hackathon project: an audio-first assistive experience using
 Ray-Ban Meta glasses, a phone, and possibly a Quest headset as a display. Expected
-building blocks: the Gemini API, SAM3 (promptable visual segmentation), and possibly
+building blocks: Gemma (open-weight models; variant and runtime not chosen yet), SAM3 (promptable visual segmentation), and possibly
 SAM Audio (prompted audio source separation).
 
 Do not assume:
@@ -142,7 +142,7 @@ current branch and PR; do not restart the branch workflow for each agent subtask
   Branch off another feature branch only when the work depends on it, and target the
   PR at that branch.
 - **Branch types:** `feat/`, `fix/`, `docs/`, `chore/`, `refactor/`, `test/`,
-  `perf/` (e.g. `feat/gemini-live-audio`, `fix/sam3-mask-offset`).
+  `perf/` (e.g. `feat/gemma-live-audio`, `fix/sam3-mask-offset`).
 - **Commits:** [Conventional Commits](https://www.conventionalcommits.org/), e.g.
   `feat(perception): add SAM3 image prompt wrapper`. Make small focused commits, and
   never commit secrets, `.env` files, checkpoints, or large binaries.
@@ -173,7 +173,7 @@ current branch and PR; do not restart the branch workflow for each agent subtask
 |---|---|
 | `cocktail-perception` | SAM3, SAM Audio, audio/visual timing, source association, perception pipelines (project-authored) |
 | `graphify` | codebase questions when `graphify-out/` exists; building/updating the graph (see **Codebase context**) |
-| `gemini-api-dev` | writing or debugging code that calls the Gemini API |
+| `gemma-dev` | writing or debugging code that calls or runs a Gemma model (project-authored) |
 | `hz-quest-verify-first` | any Meta Quest / Horizon OS claim or code (needs metavr CLI/MCP; ask before `npx`) |
 | `systematic-debugging` | any bug, test failure, or unexpected behavior, before proposing fixes |
 | `verification-before-completion` | before claiming work is complete, fixed, or passing |
@@ -188,7 +188,7 @@ Use the project fallbacks above; do not repeatedly stop to request their install
 | `docs-scout` | read-only | verify SDK APIs, hardware capabilities, model requirements, official examples |
 | `perception-engineer` | edit | bounded audio/CV tasks (SAM3, SAM Audio, timing, source association) |
 | `device-engineer` | edit | bounded phone / glasses / Quest integration tasks |
-| `integration-engineer` | edit | bounded Gemini integration and communication/interface tasks |
+| `integration-engineer` | edit | bounded Gemma integration and communication/interface tasks |
 | `reviewer` | read-only | independent review of correctness, concurrency, latency, secrets, regressions, evidence |
 
 See `.agents/README.md` for per-tool setup, invocation, and enforcement limits.
