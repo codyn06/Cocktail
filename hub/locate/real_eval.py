@@ -84,7 +84,7 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True)
         in_win &= t_audio <= stop - 0.3
     if go and stop:  # drop frames that contain the cue beeps
         for b0, n in ((go, 2), (stop, 3)):
-            in_win &= ~((t_audio >= b0 - 0.2) & (t_audio <= b0 + 0.3 * n + 0.4))
+            in_win &= ~((t_audio >= b0 - 0.5) & (t_audio <= b0 + 0.3 * n + 3.5))  # beeps + spoken cue
     cut = np.percentile(bb[in_win], 95) - within_db if in_win.any() else np.inf
     weight = (in_win & (bb > cut)).astype(float)
 

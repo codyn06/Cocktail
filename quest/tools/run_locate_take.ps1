@@ -5,7 +5,7 @@ You keep the headset ON and stay seated. The LAPTOP is the sound source and stay
 front of you (about 1 m, speakers facing you, volume up). For each take you turn your CHAIR so
 the laptop is at a different angle from where you face; a voice tells you what to do.
 Each take: ~4 s of room noise (source off, used to subtract the room), the laptop plays
-noise, then two beeps in the headset = turn your head slowly left/right about 40 degrees
+noise, then two beeps in the headset (and a voice) = turn your head slowly left/right about 40 degrees
 each way, three beeps = stop. Then it scores the take (PASS/FAIL per check).
 
 Run from the repo root of the branch feat/locate-real-test:
@@ -93,7 +93,10 @@ foreach ($truth in $Truths) {
     if (-not $t0) { Write-Host "No audio reached the recorder in 30 s. Is the headset on and the app running?" -ForegroundColor Red; $rec | Stop-Process -Force -ErrorAction SilentlyContinue; continue }
     Start-Sleep -Seconds $NoiseUntil
     $player.PlayLooping()
-    $rec.WaitForExit(($StopAt + 12) * 1000) | Out-Null
+    # spoken cue exactly when the two beeps sound (the scorer ignores this stretch)
+    Start-Sleep -Milliseconds (($GoAt - $NoiseUntil - 0.4) * 1000)
+    if (-not $Quiet) { $null = $voice.SpeakAsync("Now. Turn your head slowly left and right, and keep going.") }
+    $rec.WaitForExit(($StopAt - $GoAt + 12) * 1000) | Out-Null
     $player.Stop()
     if (-not $rec.HasExited) { $rec | Stop-Process -Force }
     Say "Take finished."
