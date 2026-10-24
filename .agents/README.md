@@ -16,7 +16,8 @@ else listed under "Generated" is produced by `node .agents/scripts/sync.mjs`
 | `sources.json` | provenance of vendored components; `projectSkills` lists project-authored skills |
 | `scripts/sync.mjs` | generator / checker |
 | `generated-manifest.json` | generated path -> sha256 (LF-normalized) of what sync wrote |
-| `handoff.md` | current status and next steps |
+| `decisions.md` | durable team-wide decisions and open items |
+| `handoff/` | per-branch task handoffs (format in `handoff/README.md`) |
 
 Generated: `../GEMINI.md`, `../.claude/skills/`, `../.claude/agents/`, `../.agent/skills/`,
 `../.codex/agents/`, `../.pi/agents/`, `../.pi/extensions/subagent/`.
@@ -53,7 +54,7 @@ and TDD tooling; vendored skills remain unchanged.
 In each tool the team actually uses, invoke the reviewer to read `AGENTS.md` and
 report a file/line finding without edits. Then invoke the docs scout to load one
 relevant skill and retrieve one official source (or explicitly request the source
-from the orchestrator). Record tool/version, result, and limitations in the handoff.
+from the orchestrator). Record tool/version, result, and limitations in your branch handoff or PR body.
 `sync --check` verifies generated content, not runtime discovery or tool access.
 
 ## Setup and invocation
