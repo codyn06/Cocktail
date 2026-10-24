@@ -62,8 +62,8 @@ def near(s: p.Source, b: float, tol: float = 15.0) -> bool:
     return s.bearing_deg is not None and abs(wrap180(s.bearing_deg - b)) <= tol
 
 
-def by_bearing(srcs: list[p.Source], b: float) -> p.Source | None:
-    c = [s for s in srcs if near(s, b)]
+def by_bearing(srcs: list[p.Source], b: float, tol: float = 15.0) -> p.Source | None:
+    c = [s for s in srcs if near(s, b, tol)]
     return c[0] if c else None
 
 
@@ -153,8 +153,51 @@ def one_source_in_two_streams() -> list[Check]:
     return [("the same source heard in two streams counts once", len(r.at(7.5)) == 1, f"{len(r.at(7.5))} sources")]
 
 
+def talkers_crossing() -> list[Check]:
+    def frame(t, rng):  # A stands at 0 deg; B walks past A from -60 to +60 deg over 12 s
+        return [raw("s1", "speech", jit(rng, 0, 3)), raw("s2", "speech", jit(rng, -60 + 10 * t, 3))]
+    r = simulate(frame, 12)
+    end = r.at(12)
+    a, b = by_bearing(end, 0, 15), by_bearing(end, 60, 15)
+    a0 = by_bearing(r.at(2), 0, 15)
+    return [("two sources the whole time, no id appears or disappears", len(r.ids_ever()) == 2 and all(len(o) == 2 for o in r.out[10:]), f"{sorted(r.ids_ever())}"),
+            ("the one who stood still keeps its id through the crossing", a0 is not None and a is not None and a.source_id == a0.source_id, f"{getattr(a0, 'source_id', None)} -> {getattr(a, 'source_id', None)}"),
+            ("the walker ends near +60 as a different id", b is not None and a is not None and b.source_id != a.source_id, f"{getattr(b, 'source_id', None)}")]
+
+
+def duplicate_stream_without_direction() -> list[Check]:
+    def frame(t, rng):  # s2 carries the same voice but the locator has no direction for it for 4 s
+        return [raw("s1", "speech", jit(rng, 30)), raw("s2", "speech", None if t < 4 else jit(rng, 31), level=-38)]
+    r = simulate(frame, 9)
+    return [("the direction-less copy is never announced then removed (one id ever)", len(r.ids_ever()) == 1, f"{sorted(r.ids_ever())}"),
+            ("one source at the end", len(r.at(9)) == 1, f"{len(r.at(9))}")]
+
+
+def slot_reused_by_other_sound() -> list[Check]:
+    def frame(t, rng):
+        if t < 3:
+            return [raw("s1", "speech", jit(rng, 0))]
+        if 6 <= t < 9:
+            return [raw("s1", "other", None)]  # an unrelated sound lands in the same slot, no direction
+        return []
+    r = simulate(frame, 10)
+    t1 = [s for s in r.at(8) if s.source_id == "t1"]
+    return [("the paused talker keeps its own label and direction", len(t1) == 1 and t1[0].label == "speech" and near(t1[0], 0, 10), f"{[(s.label, s.bearing_deg) for s in t1]}"),
+            ("the paused talker is not 'tracking' while it is silent", len(t1) == 1 and t1[0].state != p.TrackState.tracking, f"{[s.state.value for s in t1]}")]
+
+
+def wraps_around_behind() -> list[Check]:
+    def frame(t, rng):  # directly behind: readings land on both sides of +-180
+        return [raw("s1", "speech", jit(rng, 180, 6))]
+    r = simulate(frame, 8)
+    last = r.at(8)
+    return [("one id while readings jump between +170 and -170", len(r.ids_ever()) == 1, f"{sorted(r.ids_ever())}"),
+            ("bearing is behind (within 20 deg of 180)", len(last) == 1 and abs(wrap180(last[0].bearing_deg - 180)) < 20, f"{[s.bearing_deg for s in last]}")]
+
+
 SCENES = [two_talkers_swap_slots, pause_and_return, head_turn_in_view, blip_ignored,
-          same_direction_two_labels, moving_source, bearing_arrives_late, one_source_in_two_streams]
+          same_direction_two_labels, moving_source, bearing_arrives_late, one_source_in_two_streams,
+          talkers_crossing, duplicate_stream_without_direction, slot_reused_by_other_sound, wraps_around_behind]
 
 
 def main() -> int:

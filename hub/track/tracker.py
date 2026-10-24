@@ -9,12 +9,16 @@ gives each slot a world bearing. The tracker turns that into stable `t1`, `t2`, 
 Identity comes from WORLD bearing (it does not move when the head turns) plus label, so a talker
 who pauses and comes back in a different stream slot keeps the same id. A source that goes quiet
 becomes last_seen, then lost, and is kept for reacquisition before it is forgotten.
-Pure Python, no models: it runs the same on simulated and real inputs.
+Call update() on every tick (about 10 Hz), even when nothing is heard: the last_seen and lost
+transitions only happen inside update(). Pure Python, no models: it runs the same on simulated
+and real inputs.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+import math
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -35,6 +39,7 @@ class TrackConfig:
     stream_bonus_deg: float = 15.0   # subtracted when the same stream slot matched this track before
     merge_deg: float = 12.0          # a same-label extra stream this close to a track is a duplicate
     confirm_hits: int = 3            # updates needed before a new source is announced
+    bearingless_hits: int = 15       # a source with no direction yet needs this many (and no same-label one active)
     hold_s: float = 1.5              # unheard this long: tracking -> last_seen
     lost_s: float = 8.0              # unheard this long: last_seen -> lost
     forget_s: float = 60.0           # unheard this long: dropped (the id is never reused)
@@ -56,6 +61,7 @@ class _Track:
     last_obs_us: int
     level_db: float
     hits: int = 1
+    b_hits: int = 0  # observations that carried a usable bearing
     confirmed: bool = False
     state: p.TrackState = p.TrackState.tracking
 
@@ -76,17 +82,20 @@ class Tracker:
 
     def reset(self) -> None:
         self.tracks: dict[str, _Track] = {}
-        self._next = 1
+        self._next = getattr(self, "_next", 1)  # ids are never reused, even after a clock restart
         self._last_now: int | None = None
         self._dup_of: dict[str, str] = {}  # stream slot -> track it duplicates
+        self._apart: set[frozenset] = set()  # track pairs that were clearly separate sources at some point
 
     # ------------------------------------------------------------------ matching
     def _cost(self, t: _Track, o: p.Source, has_b: bool) -> float | None:
         """Lower is better; None = not allowed to match."""
         c = self.cfg
         same_stream = t.stream == o.source_id
+        if t.state != p.TrackState.tracking and o.label != t.label:
+            return None  # a paused source only comes back as the same kind of sound
         if t.bearing is None or not has_b:
-            return 0.0 if same_stream else None  # no direction to compare: only a slot's own track
+            return 5.0 if same_stream else None  # no direction to compare: only a slot's own track
         d = abs(wrap180(t.bearing - o.bearing_deg))
         if d > c.gate_deg:
             return None
@@ -99,8 +108,9 @@ class Tracker:
             self.reset()  # device clock restarted (headset app relaunched)
         self._last_now = now_us
 
-        heard = [o for o in raw if o.level_db >= c.active_floor_db]
-        has_b = {o.source_id: o.bearing_deg is not None and o.bearing_conf >= c.min_bearing_conf for o in heard}
+        heard = [o for o in raw if math.isfinite(o.level_db) and o.level_db >= c.active_floor_db]
+        has_b = {o.source_id: o.bearing_deg is not None and math.isfinite(o.bearing_deg)
+                 and o.bearing_conf >= c.min_bearing_conf for o in heard}
         live = list(self.tracks.values())
 
         # optimal one-to-one matching of heard streams to existing tracks
@@ -128,7 +138,7 @@ class Tracker:
                 prev = self.tracks.get(self._dup_of.get(o.source_id, ""))
                 cands = [m for m in [*matched.values(), *fresh] if m.bearing is not None and m.label == o.label
                          and abs(wrap180(m.bearing - o.bearing_deg)) <= c.merge_deg]
-                if not cands and prev is not None and prev.bearing is not None and prev.label == o.label                         and abs(wrap180(prev.bearing - o.bearing_deg)) <= c.gate_deg:
+                if not cands and prev is not None and prev.bearing is not None and prev.label == o.label                         and prev.state == p.TrackState.tracking                         and abs(wrap180(prev.bearing - o.bearing_deg)) <= 2 * c.merge_deg:
                     cands = [prev]  # same slot was a duplicate of this track before: stay a duplicate
                 if cands:
                     self._dup_of[o.source_id] = cands[0].tid
@@ -136,6 +146,7 @@ class Tracker:
             fresh.append(self._spawn(o, now_us, has_b[o.source_id]))
 
         self._merge_converged()
+        self._confirm()
         for tid, t in list(self.tracks.items()):
             if t.last_obs_us == now_us:
                 continue
@@ -154,29 +165,61 @@ class Tracker:
 
     def _merge_converged(self) -> None:
         """Two same-label tracks that settle on the same bearing were one source split over two
-        stream slots: fold the younger into the older (its slot becomes a sticky duplicate)."""
+        stream slots: fold the younger into the older (its slot becomes a sticky duplicate).
+        Never merges a pair that was ever clearly apart, so two talkers who cross paths keep
+        their own ids."""
         c = self.cfg
+        self._apart = {pr for pr in self._apart if all(i in self.tracks for i in pr)}
         tr = sorted(self.tracks.values(), key=lambda t: t.first_us)
         for i, a in enumerate(tr):
             for b in tr[i + 1:]:
-                if (a.tid in self.tracks and b.tid in self.tracks and a.bearing is not None and b.bearing is not None
-                        and a.label == b.label and a.state == b.state == p.TrackState.tracking
-                        and abs(wrap180(a.bearing - b.bearing)) <= c.merge_deg / 2):
+                if a.tid not in self.tracks or b.tid not in self.tracks or a.bearing is None or b.bearing is None:
+                    continue
+                if a.state != p.TrackState.tracking or b.state != p.TrackState.tracking:
+                    continue
+                d = abs(wrap180(a.bearing - b.bearing))
+                pair = frozenset((a.tid, b.tid))
+                if d > 2 * c.merge_deg:
+                    self._apart.add(pair)
+                elif d <= c.merge_deg / 2 and a.label == b.label and pair not in self._apart:
                     self._dup_of[b.stream] = a.tid
                     a.hits += b.hits
-                    a.confirmed = a.confirmed or a.hits >= c.confirm_hits
+                    a.confirmed = a.confirmed or b.confirmed
                     del self.tracks[b.tid]
+
+    def _confirm(self) -> None:
+        """Announce a new source once it has been heard a few times. One with no direction yet is
+        held back longer, and while another same-label source is active (it may be a duplicate)."""
+        c = self.cfg
+        for t in list(self.tracks.values()):
+            if t.confirmed or t.hits < c.confirm_hits:
+                continue
+            if t.bearing is not None and t.b_hits < c.confirm_hits:
+                continue  # wait until the bearing has settled
+            if t.bearing is not None:
+                near = [o for o in self.tracks.values()
+                        if o is not t and o.confirmed and o.label == t.label and o.state == p.TrackState.tracking
+                        and o.bearing is not None and abs(wrap180(o.bearing - t.bearing)) <= c.merge_deg
+                        and frozenset((o.tid, t.tid)) not in self._apart]
+                if near:  # same sound as an announced source, seen through another stream slot
+                    self._dup_of[t.stream] = near[0].tid
+                    del self.tracks[t.tid]
+                else:
+                    t.confirmed = True
+            elif t.hits >= c.bearingless_hits and not any(
+                    o is not t and o.label == t.label and o.state == p.TrackState.tracking for o in self.tracks.values()):
+                t.confirmed = True
 
     def _observe(self, t: _Track, o: p.Source, now_us: int, has_b: bool) -> None:
         c = self.cfg
         t.stream, t.last_obs_us, t.level_db = o.source_id, now_us, o.level_db
         t.hits += 1
-        t.confirmed = t.confirmed or t.hits >= c.confirm_hits
         t.state = p.TrackState.tracking
         for k in t.label_scores:
             t.label_scores[k] *= c.label_decay
         t.label_scores[o.label] = t.label_scores.get(o.label, 0.0) + max(o.label_conf, 0.05)
         if has_b:
+            t.b_hits += 1
             if t.bearing is None:
                 t.bearing, t.bearing_conf = o.bearing_deg, o.bearing_conf
             else:
@@ -192,8 +235,7 @@ class Tracker:
             tid=tid, label_scores={o.label: max(o.label_conf, 0.05)},
             bearing=o.bearing_deg if has_b else None, bearing_conf=o.bearing_conf if has_b else 0.0,
             bearing_source=(o.bearing_source or p.BearingSource.head_motion) if has_b else None,
-            stream=o.source_id, first_us=now_us, last_obs_us=now_us, level_db=o.level_db,
-            confirmed=self.cfg.confirm_hits <= 1)
+            stream=o.source_id, first_us=now_us, last_obs_us=now_us, level_db=o.level_db, b_hits=int(has_b))
         return self.tracks[tid]
 
     # ------------------------------------------------------------------ output
