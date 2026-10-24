@@ -1,0 +1,8 @@
+# Generated copies of .agents/ (see AGENTS.md); index only the canonical sources.
+.claude/agents/
+.claude/skills/
+.agent/
+.codex/
+.pi/
+GEMINI.md
+.agents/generated-manifest.json

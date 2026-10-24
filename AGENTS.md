@@ -30,6 +30,13 @@ Do not assume:
      otherwise serialize.
    - Every assignment states: goal and context, allowed files, skills to load,
      dependencies, acceptance/verification, and what to return.
+   - Subagents start cold: they see only the assignment, not the orchestrator's
+     conversation. Make each assignment self-contained. Include the user's actual
+     requirements and constraints (quoted where wording matters), decisions already
+     made and why, relevant findings with file:line references or excerpts, approaches
+     already ruled out, and the branch handoff file path if one exists. Pass concrete
+     facts, not "as discussed" or "see above". For follow-ups, continue the same
+     subagent (e.g. Claude Code `SendMessage`) rather than starting a fresh one.
    - Out-of-scope needs are reported back to the orchestrator, not acted on.
 4. **Integrate and review**: the orchestrator inspects and integrates results itself,
    then gets an independent review proportional to risk (the `reviewer` role for
@@ -72,6 +79,37 @@ Trivial tasks: write a brief plan and do them directly.
   Global installs, gated checkpoint access/downloads, and sandbox escalation still
   require the existing approvals. Never install into a shared/global environment by default.
 
+## Codebase context (graphify)
+
+graphify builds a local knowledge graph of the repo in `graphify-out/` (gitignored,
+rebuilt per checkout). Skill: `.agents/skills/graphify/SKILL.md`.
+
+- Setup (repo-local, once per checkout): `python -m venv .tools/graphify`, then
+  `.tools/graphify/Scripts/pip install graphifyy==0.9.95` (`bin/pip` on macOS/Linux).
+  Build with `graphify update .` (code only: local tree-sitter, no model calls). The
+  full `/graphify .` pass also sends docs, PDFs, and images to the assistant's model
+  provider; ask the user before running it on anything sensitive.
+- **Start of every session and every subagent assignment:** before any other codebase
+  exploration, make sure the graph exists and matches `git rev-parse HEAD` (the
+  "Built from commit" line in `graphify-out/GRAPH_REPORT.md`); if it is missing or
+  stale, run `graphify update .`. Then read that report's Summary and God Nodes, and
+  run `graphify query` for the task at hand. If graphify is not set up and cannot be
+  (installing needs user approval), say so and fall back to normal search. Claude Code
+  does this automatically via `SessionStart`/`SubagentStart` hooks
+  (`.claude/hooks/graphify-session.mjs`); other tools follow this rule by hand.
+- If `graphify` is not on PATH, call `.tools/graphify/Scripts/graphify`
+  (`.tools/graphify/bin/graphify` on macOS/Linux) wherever these rules say `graphify`.
+- When `graphify-out/graph.json` exists, run `graphify query "<question>"`,
+  `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` before broad grep or
+  file-by-file reads for codebase questions. Read raw files only for lines the graph
+  located. Use `graphify-out/GRAPH_REPORT.md` only for broad architecture review.
+- Orchestrators: query the graph while planning and paste the relevant output
+  (nodes, paths, file:line locations) into each assignment, so subagents start from
+  the same map instead of re-exploring. Tell subagents to query the graph too.
+- After changing code, run `graphify update .` to keep the graph current.
+- Claude Code: `.claude/hooks/graphify-guard.mjs` nudges toward graph queries before
+  search/read tools, and does nothing when the graph or CLI is missing.
+
 ## Shared rules
 
 - Coordinate changes to shared interfaces, root config, and dependency files with the
@@ -81,6 +119,8 @@ Trivial tasks: write a brief plan and do them directly.
 - Report checks honestly: only claim what you actually ran, with results.
 - Label evidence: hardware-tested, mocked, replayed (recorded data), or untested.
 - Subagents return: findings/changes, checks run, uncertainty, handoff notes.
+- Subagents whose assignment lacks context they need ask the orchestrator for it
+  instead of guessing or re-deriving it from scratch.
 - The orchestrator inspects and integrates subagent output; it does not rubber-stamp.
 - Apart from the branch/PR flow in **Git workflow**, this configuration grants no
   permission to deploy, publish, message people, install
@@ -132,6 +172,7 @@ current branch and PR; do not restart the branch workflow for each agent subtask
 | Skill | Load when |
 |---|---|
 | `cocktail-perception` | SAM3, SAM Audio, audio/visual timing, source association, perception pipelines (project-authored) |
+| `graphify` | codebase questions when `graphify-out/` exists; building/updating the graph (see **Codebase context**) |
 | `gemini-api-dev` | writing or debugging code that calls the Gemini API |
 | `hz-quest-verify-first` | any Meta Quest / Horizon OS claim or code (needs metavr CLI/MCP; ask before `npx`) |
 | `systematic-debugging` | any bug, test failure, or unexpected behavior, before proposing fixes |
