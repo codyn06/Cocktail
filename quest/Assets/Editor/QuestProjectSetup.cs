@@ -3,7 +3,6 @@
 //   Unity.exe -batchmode -projectPath quest -executeMethod Cocktail.Editor.QuestProjectSetup.ConfigureBatch
 // and build a smoke-test APK with -executeMethod Cocktail.Editor.QuestProjectSetup.BuildBatch.
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using UnityEditor;
@@ -35,11 +34,18 @@ namespace Cocktail.Editor
         static readonly string[] ManifestDevices = { "quest2", "quest3s" };
 
         [MenuItem("Cocktail/Configure Quest")]
-        public static void ConfigureMenu() => _ = Configure();
+        public static async void ConfigureMenu()
+        {
+            try { await Configure(); }
+            catch (System.Exception e) { Debug.LogException(e); }
+        }
 
+        // async void must catch everything, or a throw leaves batch-mode Unity running forever.
         public static async void ConfigureBatch()
         {
-            var ok = await Configure();
+            var ok = false;
+            try { ok = await Configure(); }
+            catch (System.Exception e) { Debug.LogException(e); }
             EditorApplication.Exit(ok ? 0 : 1);
         }
 
@@ -60,19 +66,20 @@ namespace Cocktail.Editor
         {
             EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android);
 
+            var ok = true;
             foreach (var group in new[] { BuildTargetGroup.Android, BuildTargetGroup.Standalone })
             {
                 AssignOpenXR(group);
-                EnableMetaFeatures(group);
+                ok &= EnableMetaFeatures(group);
             }
-            ConfigureMetaQuestFeature();
+            ok &= ConfigureMetaQuestFeature();
             ConfigureOVRProject();
-            CreateScene();
+            ok &= CreateScene();
 
             await OVRProjectSetup.FixAllAsync(BuildTargetGroup.Android);
             AssetDatabase.SaveAssets();
-            Debug.Log("[QuestSetup] Done.");
-            return true;
+            Debug.Log(ok ? "[QuestSetup] Done." : "[QuestSetup] Finished with errors.");
+            return ok;
         }
 
         static void AssignOpenXR(BuildTargetGroup group)
@@ -80,7 +87,7 @@ namespace Cocktail.Editor
             if (!EditorBuildSettings.TryGetConfigObject(XRGeneralSettings.k_SettingsKey,
                     out XRGeneralSettingsPerBuildTarget perTarget))
             {
-                Directory.CreateDirectory("Assets/XR");
+                if (!AssetDatabase.IsValidFolder("Assets/XR")) AssetDatabase.CreateFolder("Assets", "XR");
                 perTarget = ScriptableObject.CreateInstance<XRGeneralSettingsPerBuildTarget>();
                 AssetDatabase.CreateAsset(perTarget, "Assets/XR/XRGeneralSettingsPerBuildTarget.asset");
                 EditorBuildSettings.AddConfigObject(XRGeneralSettings.k_SettingsKey, perTarget, true);
@@ -97,37 +104,50 @@ namespace Cocktail.Editor
             EditorUtility.SetDirty(settings);
         }
 
-        static void EnableMetaFeatures(BuildTargetGroup group)
+        static bool EnableMetaFeatures(BuildTargetGroup group)
         {
             FeatureHelpers.RefreshFeatures(group);
             var set = OpenXRFeatureSetManager.GetFeatureSetWithId(group, MetaFeatureSetId);
             if (set == null)
             {
-                Debug.LogWarning($"[QuestSetup] Meta XR feature group not found for {group}");
-                return;
+                Debug.LogError($"[QuestSetup] Meta XR feature group not found for {group}");
+                return false;
             }
             set.isEnabled = true;
             OpenXRFeatureSetManager.SetFeaturesFromEnabledFeatureSets(group);
+            return true;
         }
 
-        static void ConfigureMetaQuestFeature()
+        static bool ConfigureMetaQuestFeature()
         {
             var feature = OpenXRSettings.GetSettingsForBuildTargetGroup(BuildTargetGroup.Android)
                 .GetFeature<MetaQuestFeature>();
-            if (feature == null) return;
+            if (feature == null)
+            {
+                Debug.LogError("[QuestSetup] Meta Quest OpenXR feature not found");
+                return false;
+            }
             feature.enabled = true;
 
             // targetDevices is internal; edit it through serialization.
             var so = new SerializedObject(feature);
             var devices = so.FindProperty("targetDevices");
+            if (devices == null)
+            {
+                Debug.LogError("[QuestSetup] MetaQuestFeature.targetDevices not found; the SDK layout changed");
+                return false;
+            }
             for (var i = 0; i < devices.arraySize; i++)
             {
                 var device = devices.GetArrayElementAtIndex(i);
-                var name = device.FindPropertyRelative("manifestName").stringValue;
-                device.FindPropertyRelative("enabled").boolValue = ManifestDevices.Contains(name);
+                var name = device.FindPropertyRelative("manifestName");
+                var enabled = device.FindPropertyRelative("enabled");
+                if (name == null || enabled == null) return false;
+                enabled.boolValue = ManifestDevices.Contains(name.stringValue);
             }
             so.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(feature);
+            return true;
         }
 
         static void ConfigureOVRProject()
@@ -138,22 +158,34 @@ namespace Cocktail.Editor
             OVRProjectConfig.CommitProjectConfig(config);
         }
 
-        static void CreateScene()
+        static bool CreateScene()
         {
             UnityEngine.SceneManagement.Scene scene;
-            if (File.Exists(ScenePath))
+            if (AssetDatabase.LoadAssetAtPath<SceneAsset>(ScenePath) != null)
             {
                 scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
             }
             else
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
+                AssetDatabase.CreateFolder("Assets", "Scenes");
                 scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-                var rigPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(CameraRigPath);
-                PrefabUtility.InstantiatePrefab(rigPrefab);
                 var light = new GameObject("Directional Light").AddComponent<Light>();
                 light.type = LightType.Directional;
             }
+
+            // Re-add the rig if it was deleted, so a re-run repairs the scene.
+            var rig = Object.FindFirstObjectByType<OVRCameraRig>();
+            if (rig == null)
+            {
+                var rigPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(CameraRigPath);
+                if (rigPrefab == null)
+                {
+                    Debug.LogError($"[QuestSetup] Camera rig prefab missing at {CameraRigPath}");
+                    return false;
+                }
+                rig = ((GameObject)PrefabUtility.InstantiatePrefab(rigPrefab)).GetComponent<OVRCameraRig>();
+            }
+            var manager = rig.gameObject;
 
             // Visible marker so an empty passthrough scene is distinguishable from the home view.
             if (GameObject.Find("Marker Cube") == null)
@@ -164,8 +196,9 @@ namespace Cocktail.Editor
                 cube.transform.localScale = Vector3.one * 0.2f;
             }
 
-            var manager = Object.FindFirstObjectByType<OVRCameraRig>().gameObject;
-            var ovr = manager.GetComponent<OVRManager>() ?? manager.AddComponent<OVRManager>();
+            // Unity's fake-null breaks ??, so check components explicitly.
+            var ovr = manager.GetComponent<OVRManager>();
+            if (ovr == null) ovr = manager.AddComponent<OVRManager>();
             ovr.isInsightPassthroughEnabled = true;
 
             // Passthrough renders as an underlay, so the eye camera must clear to transparent
@@ -180,7 +213,12 @@ namespace Cocktail.Editor
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);
-            EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
+
+            // Keep teammates' scenes; just make sure Main is first and enabled.
+            var scenes = EditorBuildSettings.scenes.Where(s => s.path != ScenePath).ToList();
+            scenes.Insert(0, new EditorBuildSettingsScene(ScenePath, true));
+            EditorBuildSettings.scenes = scenes.ToArray();
+            return true;
         }
     }
 }

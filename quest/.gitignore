@@ -32,3 +32,11 @@
 crashlytics-build.properties
 sysinfo.txt
 /.utmp/
+
+# Per-user Meta editor tool state (DevAgent holds a local access token and LAN IP)
+/Assets/Resources/DevAgentSettings.asset*
+/Assets/Resources/OVRPlatformToolSettings.asset*
+
+# Signing
+*.keystore
+*.jks
