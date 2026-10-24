@@ -97,3 +97,16 @@ Demo work (A9 pitch, H1 filming, G4 README) starts only after the product is fin
 
   Waveformer's classes include instruments but no speech or generic "music" class, so it is a
   weak fit for the 2 talkers + music test. MossFormer2 latency = window length + compute.
+
+  C3 quality on a synthetic mix (replayed: librosa examples libri2 + libri3 + Brahms at -5 dB,
+  12 s, 16 kHz mono, no reverb; 2026-10-24). MossFormer2_SS_16K in 2 s windows / 1 s hop,
+  speaker order kept via the overlap; music = mix minus gain-fitted voices:
+
+  | Stream | SI-SDR | Improvement over mix |
+  |---|---|---|
+  | voice 1 | 16.8 dB | +18.0 dB |
+  | voice 2 | 15.2 dB | +16.3 dB |
+  | music (residual) | 8.9 dB | +17.0 dB |
+
+  Offline 12 s gives the same numbers. Caveat: clean read speech from LibriSpeech, which may overlap
+  the model's training data; expect lower on the real 3S recording (reverb, mic noise, crosstalk).
