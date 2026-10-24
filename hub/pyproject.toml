@@ -1,0 +1,13 @@
+[project]
+name = "cocktail-hub"
+version = "0.0.0"
+description = "Cocktail laptop hub (processing side)"
+requires-python = ">=3.12,<3.13"
+dependencies = ["numpy", "scipy"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
