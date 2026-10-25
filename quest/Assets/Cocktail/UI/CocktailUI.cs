@@ -352,7 +352,13 @@ namespace Cocktail.Ui
             _time += dt;
             bool fakeNow = UsingFake;
             if (fakeNow != _wasFake) { _wasFake = fakeNow; ResetForNewSource(); }
-            if (_demo != null && _demo.gameObject.activeSelf != DevMode.On) _demo.gameObject.SetActive(DevMode.On);
+            if (_demo != null)
+            {
+                // the DEV chip stays up so DevMode can be toggled with a pinch (theme.showDevToggle off removes it for the demo)
+                bool chipShown = theme.showDevToggle || DevMode.On;
+                if (_demo.gameObject.activeSelf != chipShown) _demo.gameObject.SetActive(chipShown);
+                if (_demo.Open != DevMode.On) _demo.SetOpen(DevMode.On);
+            }
             if (rig == null && _time >= _nextRigScan) { _nextRigScan = _time + 1f; rig = FindFirstObjectByType<OVRCameraRig>(); }
             ReparentRoots();
             Vector3 headPosL = _worldRoot.InverseTransformPoint(Head.position);
@@ -651,11 +657,13 @@ namespace Cocktail.Ui
 
         void TickDemo(float dt)
         {
-            if (_demo == null || !DevMode.On) return;
+            if (_demo == null || !_demo.gameObject.activeSelf) return;
             _demo.Tick(Pointer(), dt);
             if (_demo.TryGetHoverWorld(out var demoAt)) NoteTarget(Vector3.Dot(demoAt - Pointer().position, Pointer().forward));
             if (_time < _nextReadout) return;
             _nextReadout = _time + 0.25f;
+            _demo.SetLabel(0, DevMode.On ? "DEV ON" : "DEV");
+            if (!DevMode.On) return;
             _demo.SetLabel(_dData, "FAKE FALLBACK " + (useFake ? "ON" : "OFF"));
             _demo.SetLabel(_dCubes, "CUBES " + (spawnCubeSources ? "ON" : "OFF"));
             _demo.SetLabel(_dSound, "CUBE SOUND " + (cubeSound ? "ON" : "OFF"));
@@ -1033,7 +1041,7 @@ namespace Cocktail.Ui
                 if (pinching && !_pinchWas[i] && !select) { select = true; modality = "hand"; DevLog.Add("pinch", h.name + " at " + (_hoverId ?? (_hoverRowNow >= 0 ? "row " + _hoverRowNow : "nothing"))); }
                 _pinchWas[i] = pinching;
             }
-            if (select && DevMode.On && _demo != null && _demo.Press()) { }   // a pinch on a demo-panel button
+            if (select && _demo != null && _demo.gameObject.activeSelf && _demo.Press()) { }   // a pinch on a demo-panel button
             else if (select && !TrySelectGazed("head")) TrySelectListRow(modality);
             // testing fallback when hand tracking is not working: right thumbstick up/down scrolls the picker
             if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstickUp, OVRInput.Controller.RTouch)) ScrollList(-1);

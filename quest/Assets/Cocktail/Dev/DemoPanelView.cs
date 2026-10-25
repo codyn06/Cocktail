@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Cocktail.Dev;
 using TMPro;
 using UnityEngine;
 
@@ -45,7 +46,7 @@ namespace Cocktail.Ui
             _plate = new SpriteBox(transform, "Plate", UiAssets.Plate, 0);
             _readout = UiText.Make(transform, "Readout", t, 0.018f, TextAlignmentOptions.TopLeft, 2f * Bw + Gap, 0.34f, 5);
             gameObject.name = "DemoPanel";
-            AddButton("DEMO", () => SetOpen(!_open), 0, 2, -1, true);
+            AddButton("DEV", () => DevMode.Toggle(), 0, 2, -1, true);   // the chip is the DevMode switch; CocktailUI opens and closes the panel to match
             Layout();
         }
 

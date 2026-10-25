@@ -190,6 +190,7 @@ namespace Cocktail.Ui
         public float handDotSize = 0.005f, handLineWidth = 0.0015f;
         [Tooltip("Draw the hand skeleton (dots and lines). Off: only your real hands show through the passthrough.")] public bool showHandDots = false;
         [Tooltip("Developer tools: DEMO panel, test cubes and sound, fake-data fallback, diagnostics text, event log. Off in normal use; B + Y pressed together toggles it on the headset.")] public bool devMode = false;
+        [Tooltip("Keep the small DEV chip (upper left) on screen so DevMode can be switched on and off with a pinch. Turn off for the demo.")] public bool showDevToggle = true;
         [Tooltip("Opacity of the colour layer over a speaker you are pointing at (0 to 1).")] [Range(0f, 1f)] public float speakerHoverTint = 0.28f;
         [Tooltip("Dot size, and the dashed uncertainty ring (small ring = sure, large ring = unsure), in metres.")] public float speakerDotSize = 0.05f, speakerRingMin = 0.14f, speakerRingMax = 0.34f;
 
