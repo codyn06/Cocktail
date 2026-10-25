@@ -113,7 +113,7 @@ def summarize(delays_ms: list[float], n_trials: int, budget_median_ms: float = B
               budget_worst_ms: float = BUDGET_WORST_MS) -> dict:
     d = np.array(delays_ms, dtype=float)
     out = {"n_trials": n_trials, "n_valid": len(d), "n_missed": n_trials - len(d),
-           "budget_median_ms": budget_median_ms, "budget_worst_ms": budget_worst_ms}
+           "min_trials": MIN_TRIALS, "budget_median_ms": budget_median_ms, "budget_worst_ms": budget_worst_ms}
     if len(d):
         out.update(median_ms=float(np.median(d)), p90_ms=float(np.percentile(d, 90)), worst_ms=float(d.max()),
                    min_ms=float(d.min()), jitter_ms=float(statistics.pstdev(d.tolist())))
@@ -137,6 +137,7 @@ class Trial:
     index: int
     delay_ms: float | None
     ncc: float | None
+    note: str = ""
 
 
 class DelayHub:
@@ -272,7 +273,7 @@ class DelayHub:
                 await ws.send_bytes(msg)
                 seq += 1
                 self.frames_out += 1
-                if armed:
+                if armed and not self._arm.done():   # the trial may have timed out while sending
                     self._arm.set_result(t)
             nxt += FRAME_S
             await asyncio.sleep(max(0.0, nxt - time.perf_counter()))
@@ -385,12 +386,19 @@ def free_port() -> int:
 
 
 async def run_trials(hub: DelayHub, n: int, gap_s: tuple[float, float], timeout_s: float, seed: int,
-                     quiet: bool = False) -> list[Trial]:
+                     quiet: bool = False, send_timeout_s: float = 5.0) -> list[Trial]:
     rng = np.random.default_rng(seed)
     trials = []
     for i in range(n):
         await asyncio.sleep(float(rng.uniform(*gap_s)))
-        t_send = await hub.send_click()
+        try:
+            t_send = await hub.send_click(send_timeout_s)
+        except TimeoutError:   # /audio/out dropped or stalled: count the trial as lost and keep going
+            tr = Trial(i + 1, None, None, "no /audio/out frame could be sent (headset not connected or stalled)")
+            trials.append(tr)
+            if not quiet:
+                print(f"  trial {tr.index:3d}: not heard ({tr.note})", flush=True)
+            continue
         await asyncio.sleep(timeout_s)
         hit = hub.analyze(t_send)
         tr = Trial(i + 1, None if hit is None else hit[0] * 1000, None if hit is None else hit[1])
@@ -411,20 +419,19 @@ def _timer_resolution(on: bool) -> None:
 async def run(args) -> dict:
     import uvicorn
 
-    _timer_resolution(True)
-
-    hub = DelayHub(args.layer, args.layout, silence=not args.no_silence)
-    port = free_port() if args.mock else args.port
-    host = "127.0.0.1" if args.mock else "0.0.0.0"
-    server = uvicorn.Server(uvicorn.Config(hub.app, host=host, port=port, log_level="warning"))
-    serve = asyncio.create_task(server.serve())
-    while not server.started and not serve.done():
-        await asyncio.sleep(0.05)
-    if serve.done():
-        serve.result()
-    mock = None
+    mock = server = serve = None
     result: dict = {}
-    try:
+    _timer_resolution(True)
+    try:  # everything after the timer change is inside the try, so timeEndPeriod always runs
+        hub = DelayHub(args.layer, args.layout, silence=not args.no_silence)
+        port = free_port() if args.mock else args.port
+        host = "127.0.0.1" if args.mock else "0.0.0.0"
+        server = uvicorn.Server(uvicorn.Config(hub.app, host=host, port=port, log_level="warning"))
+        serve = asyncio.create_task(server.serve())
+        while not server.started and not serve.done():
+            await asyncio.sleep(0.05)
+        if serve.done():
+            serve.result()
         if args.mock:
             mock = MockHeadset(port, args.sim_up_ms, args.sim_down_ms, args.sim_prefill_frames, args.sim_device_ms,
                                args.sim_jitter_ms, args.seed, coupling=args.sim_coupling)
@@ -448,15 +455,18 @@ async def run(args) -> dict:
                          "headset acoustic loop on the hub clock (hardware-tested only if a real Quest was connected)")
         s["mode"] = "mock" if mock else "headset"
         s["layer"], s["layout"] = args.layer, args.layout
-        s["trials"] = [{"i": t.index, "delay_ms": t.delay_ms, "ncc": t.ncc} for t in trials]
+        s["trials"] = [{"i": t.index, "delay_ms": t.delay_ms, "ncc": t.ncc, **({"note": t.note} if t.note else {})}
+                       for t in trials]
         if mock:
             s["simulated_expected_ms"] = mock.expected_ms()
         result = s
     finally:
         if mock:
             await mock.stop()
-        server.should_exit = True
-        await asyncio.gather(serve, return_exceptions=True)
+        if server is not None:
+            server.should_exit = True
+        if serve is not None:
+            await asyncio.gather(serve, return_exceptions=True)
         _timer_resolution(False)
     return result
 

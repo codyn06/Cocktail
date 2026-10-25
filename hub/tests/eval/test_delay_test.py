@@ -138,3 +138,30 @@ def test_mic_that_cannot_hear_the_speaker_gives_not_heard_and_fail(tmp_path, cap
     s = json.loads(out.read_text())
     assert rc == 1 and s["n_valid"] == 0 and s["pass"] is False
     assert "no trial was heard" in text
+
+
+def test_send_timeout_loses_one_trial_not_the_run():
+    """No /audio/out client: every send times out. The trials are counted as not heard, nothing raises."""
+    import asyncio
+    hub = dt.DelayHub()
+    trials = asyncio.run(dt.run_trials(hub, 3, (0.0, 0.0), 0.01, 1, quiet=True, send_timeout_s=0.05))
+    assert [t.delay_ms for t in trials] == [None, None, None]
+    assert all("/audio/out" in t.note for t in trials)
+    s = dt.summarize([], len(trials))
+    assert s["n_missed"] == 3 and not s["pass"] and s["min_trials"] == dt.MIN_TRIALS
+
+
+def test_timer_resolution_is_always_restored(monkeypatch):
+    """A failure while setting up (here: the hub cannot be built) must still call timeEndPeriod."""
+    import argparse
+    import asyncio
+    calls = []
+    monkeypatch.setattr(dt, "_timer_resolution", lambda on: calls.append(on))
+
+    def boom(*a, **k):
+        raise RuntimeError("cannot build the hub")
+    monkeypatch.setattr(dt, "DelayHub", boom)
+    args = argparse.Namespace(layer="inner", layout="layers", no_silence=False, mock=True, port=0)
+    with pytest.raises(RuntimeError, match="cannot build"):
+        asyncio.run(dt.run(args))
+    assert calls == [True, False]
