@@ -1,0 +1,49 @@
+{
+  "schema": "cocktail-alert-rules/1",
+  "notes": [
+    "Draft rules for task A7/D2 (alerts). Thresholds are first guesses, NOT tuned on recordings.",
+    "sound_label rules read the hub sound labeler (hub/separate/models.py SoundLabeler on MIT/ast-finetuned-audioset-10-10-0.4593): per separated stream and per 1 s hop it gives coarse scores (alarm, siren, speech, music, other = max probability over the AudioSet classes mapped by COARSE) and the 527 fine class probabilities. live.py smooths scores with label_smooth=0.6 (new = 0.6 old + 0.4 now), so a sudden alarm needs about two hops to reach 0.5 or more.",
+    "'labels' are coarse labels, 'classes' are exact AudioSet display names (checked against the id2label of the checkpoint above). Either matches; the rule score at a time is the highest matching score.",
+    "keyword rules need speech text with times. Nothing in the repo transcribes speech yet; the Gemma audio path or another recognizer must supply it. 'keywords' is empty on purpose: put the wearer's name (and spellings the recognizer may produce) here, or pass --name to eval/alerts_check.py.",
+    "min_duration_s counts from the first active hop to the end of the last active hop (hop_s each); max_gap_s is the longest silence between active hops that still counts as one event; cooldown_s is the quiet time after a fire during which the same rule cannot fire again.",
+    "Output shape follows protocol.AlertFired (alert_id, label, critical, spoken_text, bearing_deg)."
+  ],
+  "hop_s": 1.0,
+  "rules": [
+    {
+      "id": "smoke_alarm",
+      "label": "smoke alarm",
+      "critical": true,
+      "spoken_text": "Smoke alarm",
+      "detector": "sound_label",
+      "labels": ["alarm"],
+      "classes": ["Smoke detector, smoke alarm", "Fire alarm"],
+      "min_conf": 0.5,
+      "min_duration_s": 2.0,
+      "max_gap_s": 1.5,
+      "cooldown_s": 30.0
+    },
+    {
+      "id": "siren",
+      "label": "siren",
+      "critical": true,
+      "spoken_text": "Siren",
+      "detector": "sound_label",
+      "labels": ["siren"],
+      "classes": ["Siren", "Civil defense siren", "Emergency vehicle", "Police car (siren)", "Ambulance (siren)", "Fire engine, fire truck (siren)"],
+      "min_conf": 0.5,
+      "min_duration_s": 2.0,
+      "max_gap_s": 1.5,
+      "cooldown_s": 30.0
+    },
+    {
+      "id": "wearer_name",
+      "label": "your name",
+      "critical": false,
+      "spoken_text": "Someone said your name",
+      "detector": "keyword",
+      "keywords": [],
+      "cooldown_s": 10.0
+    }
+  ]
+}
