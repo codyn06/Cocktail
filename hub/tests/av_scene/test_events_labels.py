@@ -98,3 +98,59 @@ def test_real_ast_smoke_cpu(monkeypatch):
     assert all(0 <= e.start_us < e.end_us <= 6_000_000 for e in events)
     assert all(e.start_us >= 1_000_000 and e.end_us <= 5_000_000 for e in events)
     assert all(e.audio_prompt and e.audio_prompt == e.audio_prompt.lower() for e in events)
+
+
+# ---- streaming detector ------------------------------------------------------------------------------
+def _signal():
+    # dog 0-7 s (straddles the 5 s block edge), silence 7-9, doorbell 9-12.5, tail dog 12.5-14
+    return np.concatenate([_tone(7, 1), np.zeros(2 * SR, np.float32), _tone(3.5, 2), _tone(1.5, 1)])
+
+
+def _events_equal(a, b):
+    assert [e.model_dump() for e in a] == [e.model_dump() for e in b]
+
+
+@pytest.mark.parametrize("block_s", [5.0, 3.3, 30.0, 0.75])
+def test_iter_detect_events_equals_batch_across_block_edges(block_s):
+    x = _signal()
+    clf = _stub({1: "Dog", 2: "Doorbell"})
+    full = ev.detect_events(x, SR, window_s=1.0, hop_s=0.5, classifier=clf)
+    assert len(full) >= 3
+    reads = []
+
+    def read_block(a, b):
+        reads.append((a, b))
+        return x[int(round(a * SR)):int(round(b * SR))]
+
+    got = list(ev.iter_detect_events(read_block, len(x) / SR, clf, block_s=block_s, window_s=1.0, hop_s=0.5))
+    _events_equal(got, full)
+    assert all(b - a <= block_s + 1e-9 for a, b in reads)
+    assert reads == sorted(reads) and reads[0][0] == 0.0           # lazy, in order, no re-reads
+
+
+def test_iter_detect_events_never_holds_more_than_a_block():
+    x = np.tile(_tone(1, 1), 60)                                   # 60 s
+    seen = []
+
+    def read_block(a, b):
+        seen.append(b - a)
+        return x[int(a * SR):int(b * SR)]
+
+    sizes = []
+    clf = _stub({1: "Dog"})
+
+    def spy(windows):
+        sizes.append(len(windows))
+        return clf(windows)
+
+    list(ev.iter_detect_events(read_block, 60.0, spy, block_s=10.0, batch=4))
+    assert max(seen) <= 10.0 and len(seen) == 6 and max(sizes) <= 4
+
+
+def test_iter_detect_events_short_and_silent_clips():
+    clf = _stub({1: "Dog"})
+    x = _tone(0.4, 1)                                              # shorter than one window
+    full = ev.detect_events(x, SR, classifier=clf)
+    got = list(ev.iter_detect_events(lambda a, b: x[int(round(a * SR)):int(round(b * SR))], 0.4, clf))
+    _events_equal(got, full)
+    assert list(ev.iter_detect_events(lambda a, b: np.zeros(int(round((b - a) * SR)), np.float32), 3.0, clf)) == []
