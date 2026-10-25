@@ -16,7 +16,7 @@ namespace Cocktail.Ui
 
         class Btn
         {
-            public string label; public Action click; public SpriteBox bg, line; public TextMeshPro text;
+            public Action click; public SpriteBox bg, line; public TextMeshPro text;
             public bool chip; public int col, span, row;
         }
 
@@ -53,10 +53,10 @@ namespace Cocktail.Ui
 
         public int AddButton(string label, Action click, int col, int span, int row, bool chip = false)
         {
-            var b = new Btn { label = label, click = click, col = col, span = span, row = row, chip = chip };
+            var b = new Btn { click = click, col = col, span = span, row = row, chip = chip };
             b.bg = new SpriteBox(transform, "Btn" + _b.Count, UiAssets.Plate, 1);
             b.line = new SpriteBox(transform, "BtnLine" + _b.Count, UiAssets.Outline, 2);
-            b.text = UiText.Make(transform, "BtnText" + _b.Count, t, 0.02f, TextAlignmentOptions.Center, span * Bw + (span - 1) * Gap, Bh, 5, true);
+            b.text = UiText.Make(transform, "BtnText" + _b.Count, t, 0.02f, TextAlignmentOptions.Center, BtnW(span), Bh, 5, true);
             UiText.Set(b.text, label);
             _b.Add(b);
             if (row + 1 > _rows) _rows = row + 1;
@@ -66,18 +66,20 @@ namespace Cocktail.Ui
         public void SetLabel(int idx, string s)
         {
             if (idx < 0 || idx >= _b.Count) return;
-            _b[idx].label = s; UiText.Set(_b[idx].text, s);
+            UiText.Set(_b[idx].text, s);
         }
 
         public void SetReadout(string s) { if (_open) UiText.Set(_readout, s); }
 
-        float ColX(Btn b) => -Bw - Gap * 0.5f + b.col * (Bw + Gap) + (b.span * Bw + (b.span - 1) * Gap) * 0.5f;
+        static float BtnW(int span) => span * Bw + (span - 1) * Gap;
+        float ColX(Btn b) => -Bw - Gap * 0.5f + b.col * (Bw + Gap) + BtnW(b.span) * 0.5f;
         float RowY(Btn b) => b.chip ? 0f : -(Bh + Gap) * (b.row + 1) - Gap;
 
         void Layout()
         {
             // the plate runs from just under the chip to below the readout lines
-            float top = -Bh * 0.5f - Gap, bottom = RowY(new Btn { row = _rows - 1 }) - Bh * 0.5f - 0.2f;
+            float lastRowY = RowY(new Btn { row = _rows - 1 });
+            float top = -Bh * 0.5f - Gap, bottom = lastRowY - Bh * 0.5f - 0.2f;
             _plate.SetActive(_open);
             if (_open)
             {
@@ -90,14 +92,14 @@ namespace Cocktail.Ui
                 bool on = b.chip || _open;
                 b.bg.SetActive(on); b.line.SetActive(on); b.text.gameObject.SetActive(on);
                 if (!on) continue;
-                float w = b.span * Bw + (b.span - 1) * Gap;
+                float w = BtnW(b.span);
                 b.bg.SetSize(w, Bh); b.line.SetSize(w, Bh);
                 b.bg.SetLocal(ColX(b), RowY(b)); b.line.SetLocal(ColX(b), RowY(b));
                 b.text.transform.localPosition = new Vector3(ColX(b), RowY(b), 0f);
                 b.text.color = t.textLight;
             }
             _readout.gameObject.SetActive(_open);
-            _readout.transform.localPosition = new Vector3(-Bw - Gap * 0.5f, RowY(new Btn { row = _rows - 1 }) - Bh * 0.5f - 2f * Gap, 0f);
+            _readout.transform.localPosition = new Vector3(-Bw - Gap * 0.5f, lastRowY - Bh * 0.5f - 2f * Gap, 0f);
             _readout.color = t.TextSecondary;
         }
 
@@ -110,8 +112,8 @@ namespace Cocktail.Ui
             {
                 var b = _b[i];
                 if (!(b.chip || _open)) continue;
-                float w = b.span * Bw + (b.span - 1) * Gap;
-                if (Hit(pointer, b.bg.transform.position, new Vector2(w, Bh) * 0.5f, out float sc) && sc < bestScore) { bestScore = sc; best = i; }
+                float w = BtnW(b.span);
+                if (Hit(pointer, b.bg.transform.position, new Vector2(w, Bh) * 0.5f, 0.01f, out float sc) && sc < bestScore) { bestScore = sc; best = i; }
             }
             _hover = best;
             for (int i = 0; i < _b.Count; i++)
@@ -135,12 +137,12 @@ namespace Cocktail.Ui
             return true;
         }
 
-        static bool Hit(Transform from, Vector3 center, Vector2 half, out float score)
+        /// <summary>Angular hit test of a pointer ray against a rectangle (half size + pad, metres) around a world point; score 0 = dead centre, hit when score &lt;= 1. Also used by CocktailUI.</summary>
+        internal static bool Hit(Transform from, Vector3 center, Vector2 half, float pad, out float score)
         {
             Vector3 local = from.InverseTransformPoint(center);
             score = float.MaxValue;
             if (local.z < 0.15f) return false;
-            float pad = 0.01f;
             float hax = Mathf.Atan2(half.x + pad, local.z), hay = Mathf.Atan2(half.y + pad, local.z);
             float dx = Mathf.Abs(Mathf.Atan2(local.x, local.z)), dy = Mathf.Abs(Mathf.Atan2(local.y, local.z));
             score = Mathf.Max(dx / hax, dy / hay);

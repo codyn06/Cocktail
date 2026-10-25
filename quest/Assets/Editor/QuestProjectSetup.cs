@@ -219,15 +219,6 @@ namespace Cocktail.Editor
             }
             var manager = rig.gameObject;
 
-            // Visible marker so an empty passthrough scene is distinguishable from the home view.
-            if (GameObject.Find("Marker Cube") == null)
-            {
-                var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                cube.name = "Marker Cube";
-                cube.transform.position = new Vector3(0f, 1.2f, 1f);
-                cube.transform.localScale = Vector3.one * 0.2f;
-            }
-
             // Unity's fake-null breaks ??, so check components explicitly.
             var ovr = manager.GetComponent<OVRManager>();
             if (ovr == null) ovr = manager.AddComponent<OVRManager>();

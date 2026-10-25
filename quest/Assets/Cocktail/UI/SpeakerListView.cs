@@ -140,7 +140,7 @@ namespace Cocktail.Ui
 
                 if (r.selected) { chosen = r.id; chosenY = y; if (_lastChosen != r.id) _flash[i] = 1f; }
             }
-            if (chosen == null) _lastChosen = null; else _lastChosen = chosen;
+            _lastChosen = chosen;
 
             // the chosen frame glides between rows and fades out when nothing is chosen
             _frameA = UiObjects.Fade(_frameA, chosen != null ? 1f : 0f, chosen != null ? t.tAppear : t.tDisappear, dt);

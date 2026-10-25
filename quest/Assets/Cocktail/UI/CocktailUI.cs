@@ -20,11 +20,12 @@ namespace Cocktail.Ui
     /// centre-eye anchor. All looks come from <see cref="UiTheme"/>; this class is logic only.
     ///
     /// Controls (do not clash with InputSender: right trigger/pinch = select, B = stop, X = replay, Y = next, left stick click = prev,
-    /// right stick click = diagnostics overlay): A (right controller, Button.One) toggles Full / Glasses HUD.
+    /// right stick click = diagnostics overlay): A (right controller, Button.One) cycles speaker-only -> full -> glasses HUD (<see cref="ToggleHudMode"/>).
     ///
-    /// Selection: head-gaze reticle; resting the gaze on a marker highlights it and fills a dwell bar; right trigger or pinch while a
+    /// Selection (full HUD): head-gaze reticle; resting the gaze on a marker highlights it and fills a dwell bar; right trigger or pinch while a
     /// marker is gazed calls <see cref="TrySelectGazed"/>, which sends InputSender.Send(select, source_id, "head", ray). InputSender's own
-    /// ray-only select fires on the same press (see report: this duplicates the select unless InputSender is changed).
+    /// ray-only select fires on the same press (this duplicates the select unless InputSender is changed).
+    /// Selection (speaker-only HUD): point at a speaker or a picker row with the hand ray (or the head when no hand is tracked) and pinch / trigger.
     /// </summary>
     [DefaultExecutionOrder(50)]
     public class CocktailUI : MonoBehaviour
@@ -44,7 +45,7 @@ namespace Cocktail.Ui
 
         sealed class Entry
         {
-            public Source src; public long tsUs; public float lastUpdate;
+            public Source src; public float lastUpdate;
             public SourceMarkerView marker, chip; public EdgeArrowView arrow;
             public Vector2 box; public bool hasBox; public float elevFallback;
             public SpeakerView speaker; public float lastSpeaking = -1000f;
@@ -52,10 +53,12 @@ namespace Cocktail.Ui
 
         readonly Dictionary<string, Entry> _entries = new Dictionary<string, Entry>();
         readonly Dictionary<string, string> _targetToSource = new Dictionary<string, string>();
-        readonly List<Entry> _tmp = new List<Entry>(), _located = new List<Entry>(), _unlocated = new List<Entry>();
+        readonly List<Entry> _located = new List<Entry>(), _unlocated = new List<Entry>();
         readonly List<string> _remove = new List<string>();
         readonly List<CompassPip> _pips = new List<CompassPip>();
         static readonly System.Comparison<Entry> ByBearing = (a, b) => (a.src.BearingDeg ?? 0f).CompareTo(b.src.BearingDeg ?? 0f);
+        // FindObjectsByType has no guaranteed order: sort so each hand keeps its _pinchWas slot across rescans; names descending puts RightHand before LeftHand, so the right hand is the pointer when both are tracked
+        static readonly System.Comparison<OVRHand> ByHandName = (a, b) => { int c = string.CompareOrdinal(b.name, a.name); return c != 0 ? c : a.GetInstanceID().CompareTo(b.GetInstanceID()); };
 
         Transform _worldRoot, _headLocked, _arrowRoot, _chipRoot, _fakeHead, _speakerWorld;
         bool _speakerOnly;
@@ -66,7 +69,6 @@ namespace Cocktail.Ui
         float _nextReadout;
         readonly Dictionary<string, int> _speakerNum = new Dictionary<string, int>();
         readonly List<SpeakerRow> _rows = new List<SpeakerRow>();
-        bool[] _midWas = new bool[0], _ringWas = new bool[0];
         StateBannerView _banner; AlertBannerView _alert; GlassesPanelView _glasses; CompassStripView _compass; RadarRingView _radar; ReticleView _reticle;
         bool _init, _subscribed;
         float _time, _realAt = -1000f, _nextRigScan;
@@ -75,7 +77,7 @@ namespace Cocktail.Ui
         // state
         HubState _state = HubState.Listening; string _stateTargetId; Mode _mode = Mode.Balanced; float _replaySeconds;
         float? _alertBearing;
-        string _hoverId, _lastHoverId; float _hoverTime;
+        string _hoverId; float _hoverTime;
         string _pendingId; float _pendingLeft;
         long _latestTs;
         OVRHand[] _hands = new OVRHand[0]; bool[] _pinchWas = new bool[0]; float _nextHandScan;
@@ -244,7 +246,6 @@ namespace Cocktail.Ui
             EnsureInit();
             if (e == null || e.Sources == null || fromFake != UsingFake) return;
             _latestTs = e.DeviceTsUs;
-            _tmp.Clear();
             string selId = ResolveSelectedSourceId();
             var sorted = new List<Source>(e.Sources);
             sorted.Sort((a, b) => b.LevelDb.CompareTo(a.LevelDb));
@@ -256,7 +257,7 @@ namespace Cocktail.Ui
                 if (kept >= theme.maxSources && !isSel) continue;
                 if (!isSel) kept++;
                 if (!_entries.TryGetValue(s.SourceId, out var en)) { en = new Entry(); _entries[s.SourceId] = en; }
-                en.src = s; en.tsUs = e.DeviceTsUs; en.lastUpdate = _time;
+                en.src = s; en.lastUpdate = _time;
             }
         }
 
@@ -281,6 +282,8 @@ namespace Cocktail.Ui
             _alertBearing = a.BearingDeg;
             _alert.Show(a, a.BearingDeg.HasValue ? UiMath.NormalizeDeg(a.BearingDeg.Value - HeadYaw()) : (float?)null);
         }
+
+        float? RelAlert(float headYaw) => _alertBearing.HasValue ? UiMath.NormalizeDeg(_alertBearing.Value - headYaw) : (float?)null;
 
         string ResolveSelectedSourceId()
         {
@@ -352,7 +355,7 @@ namespace Cocktail.Ui
             if (spk)
             {
                 TickSpeakers(dt, headPosL, headYaw);
-                _alert.Tick(dt, _alertBearing.HasValue ? UiMath.NormalizeDeg(_alertBearing.Value - headYaw) : (float?)null);   // keep alerts expiring in this mode
+                _alert.Tick(dt, RelAlert(headYaw));   // keep alerts expiring in this mode
                 return;
             }
 
@@ -422,8 +425,7 @@ namespace Cocktail.Ui
             string targetText = TargetText(selId);
             if (full) _banner.Tick(_state, targetText, _mode, _replaySeconds, dt);
             else TickGlasses(selId, targetText, headYaw);
-            float? relAlert = _alertBearing.HasValue ? UiMath.NormalizeDeg(_alertBearing.Value - headYaw) : (float?)null;
-            _alert.Tick(dt, relAlert);
+            _alert.Tick(dt, RelAlert(headYaw));
             if (full) _reticle.Tick(_hoverId != null, 0f, dt);
         }
 
@@ -450,7 +452,7 @@ namespace Cocktail.Ui
                 int num = NumberFor(s.SourceId, visible);
                 Color own = num > 0 ? SpeakerColor(num) : default;
                 bool chosen = s.SourceId == selId;
-                if (visible) _rows.Add(new SpeakerRow { id = s.SourceId, number = num, name = NameFor(s), color = own, selected = chosen, dist = s.DistanceM ?? float.MaxValue });
+                if (visible) AddRow(s, num, own, chosen);
                 // pointing at a speaker who is in view: a light colour layer over them (the pointer is the hand ray, or the head if no hand is tracked)
                 if (visible && inView)
                 {
@@ -462,11 +464,7 @@ namespace Cocktail.Ui
                 bool hovered = s.SourceId == _hoverId && inView;
                 // the chosen speaker is marked: a rectangle if in view, an edge arrow if not. A pointed-at speaker gets only the tint.
                 bool show = visible && (chosen || hovered);
-                if (show && en.speaker == null)
-                {
-                    var go = new GameObject("Speaker_" + s.SourceId); go.transform.SetParent(_speakerWorld, false);
-                    en.speaker = go.AddComponent<SpeakerView>(); en.speaker.Build(theme, _headLocked);
-                }
+                if (show && en.speaker == null) en.speaker = NewSpeaker(s.SourceId);
                 if (en.speaker == null) continue;
                 en.speaker.Tick(new SpeakerInput
                 {
@@ -485,13 +483,9 @@ namespace Cocktail.Ui
                 int num = NumberFor(s.SourceId, visible);
                 Color own = num > 0 ? SpeakerColor(num) : default;
                 bool chosen = s.SourceId == selId;
-                if (visible) _rows.Add(new SpeakerRow { id = s.SourceId, number = num, name = NameFor(s), color = own, selected = chosen, dist = s.DistanceM ?? float.MaxValue });
+                if (visible) AddRow(s, num, own, chosen);
                 bool show = visible && chosen;
-                if (show && en.speaker == null)
-                {
-                    var go = new GameObject("Speaker_" + s.SourceId); go.transform.SetParent(_speakerWorld, false);
-                    en.speaker = go.AddComponent<SpeakerView>(); en.speaker.Build(theme, _headLocked);
-                }
+                if (show && en.speaker == null) en.speaker = NewSpeaker(s.SourceId);
                 if (en.speaker != null)
                     en.speaker.Tick(new SpeakerInput { src = s, noDirection = true, color = own, visible = show, selected = chosen, dt = dt });
             }
@@ -515,6 +509,15 @@ namespace Cocktail.Ui
             _hoverRowNow = hoverRow;
             if (hoverRow >= 0) _scrollCursor = false;
             _list.Tick(_rows, hoverRow >= 0 ? hoverRow : (_scrollCursor ? _listCursor : -1), dt);
+        }
+
+        void AddRow(Source s, int num, Color own, bool chosen) => _rows.Add(new SpeakerRow { id = s.SourceId, number = num, name = NameFor(s), color = own, selected = chosen, dist = s.DistanceM ?? float.MaxValue });
+
+        SpeakerView NewSpeaker(string id)
+        {
+            var go = new GameObject("Speaker_" + id); go.transform.SetParent(_speakerWorld, false);
+            var sv = go.AddComponent<SpeakerView>(); sv.Build(theme, _headLocked);
+            return sv;
         }
 
         // ------------------------------------------------------------------ demo / test panel
@@ -842,14 +845,8 @@ namespace Cocktail.Ui
 
         bool GazeHitFrom(Transform from, Vector3 worldCenter, Vector2 half, out float score)
         {
-            Vector3 local = from.InverseTransformPoint(worldCenter);
-            score = float.MaxValue;
-            if (local.z < 0.15f) return false;
             float pad = from == Head ? 0.03f : 0.07f;   // a hand ray is harder to hold steady: a more forgiving target
-            float hax = Mathf.Atan2(half.x + pad, local.z), hay = Mathf.Atan2(half.y + pad, local.z);
-            float dx = Mathf.Abs(Mathf.Atan2(local.x, local.z)), dy = Mathf.Abs(Mathf.Atan2(local.y, local.z));
-            score = Mathf.Max(dx / hax, dy / hay);
-            return score <= 1f;
+            return DemoPanelView.Hit(from, worldCenter, half, pad, out score);
         }
 
         void UpdateHover(float dt, bool full)
@@ -946,13 +943,15 @@ namespace Cocktail.Ui
             if (Time.unscaledTime < _nextHandScan) return;
             _nextHandScan = Time.unscaledTime + 2f;
             var found = FindObjectsByType<OVRHand>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            System.Array.Sort(found, ByHandName);
             foreach (var h in found)
             {
                 HandGridSkin.Apply(h, theme);
                 // the hand's pointer pose is written in tracking-space coordinates, so it must live under the tracking space
                 if (rig != null && rig.trackingSpace != null && h.PointerPose.parent != rig.trackingSpace) h.PointerPose.SetParent(rig.trackingSpace, false);
             }
-            if (found.Length != _hands.Length) { _hands = found; _pinchWas = new bool[found.Length]; _midWas = new bool[found.Length]; _ringWas = new bool[found.Length]; } else _hands = found;
+            if (found.Length != _hands.Length) _pinchWas = new bool[found.Length];
+            _hands = found;
         }
     }
 }
