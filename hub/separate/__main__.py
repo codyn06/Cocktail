@@ -11,6 +11,7 @@ import uvicorn
 
 import protocol as p
 from ingest import IngestState, create_app
+from events import install_events
 
 from .live import LiveSeparator
 from .models import SoundLabeler, VoiceSeparator
@@ -40,6 +41,7 @@ except ImportError:
     locator = None
 worker.start()
 app = create_app(state)
+install_events(app, locator)
 
 
 @app.get("/sources")
