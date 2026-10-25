@@ -12,31 +12,41 @@ Only calls the A8 estimator's public API; it does not change hub/locate's other 
   (recentring shifts it).
 - state: tracking while the stream is heard, last_seen after LAST_SEEN_S of silence, lost after
   LOST_S. last_observed_us is when the stream was last heard, not the latest hop.
+- method: "level" (default) uses the head-shadow level estimator (A8). "tdoa" uses the
+  inter-mic delay of each stream's two mic images plus head yaw (pair.py), calibrated per device;
+  experimental, for closely spaced mics such as the Quest 3S, where "level" fails.
 """
 
 from __future__ import annotations
 
 import threading
 
+import numpy as np
+
 import protocol as p
 
 from .estimator import BearingEstimate, BearingEstimator, LocateConfig
+from .pair import PairCalibration, PairLocator, frame_delays
 
 # A8 estimator states -> how much to trust the bearing in the published Source.
 _SHOW = {"locked", "tracking", "ambiguous"}
 AMBIGUOUS_CONF_MAX = 0.5   # mirror/front-back ambiguity: show the bearing, but not confidently
 ACTIVE_MIN = 0.2           # level-frame activity above this counts as "the stream is heard"
 LAST_SEEN_S, LOST_S = 2.0, 10.0
+TDOA_WIN, TDOA_HOP = 1024, 800  # 64 ms frames every 50 ms at 16 kHz
 
 
 class LiveLocator:
-    def __init__(self, ingest, cfg: LocateConfig | None = None):
-        self.ingest, self.cfg = ingest, cfg or LocateConfig()
+    def __init__(self, ingest, cfg: LocateConfig | None = None, method: str = "level",
+                 calib: PairCalibration | None = None):
+        assert method in ("level", "tdoa")
+        self.ingest, self.cfg, self.method = ingest, cfg or LocateConfig(), method
+        self.calib = (calib or PairCalibration.default()) if method == "tdoa" else None
         self.lock = threading.Lock()
         self._reset()
 
     def _reset(self):
-        self.est = BearingEstimator(self.cfg)
+        self.est = PairLocator(self.calib) if self.method == "tdoa" else BearingEstimator(self.cfg)
         self._last_pose_us = None
         self._pose_epoch = self.ingest.pose_epoch
         self.latest: dict[str, tuple] = {}  # stream_id -> (StreamChunk, BearingEstimate)
@@ -60,12 +70,33 @@ class LiveLocator:
             if self._last_pose_us is None:
                 return  # no head pose yet: nothing to locate against
             for c in chunks:
+                if self.method == "tdoa":
+                    self._add_delays(c)
                 for t_us, lv, w in zip(c.level_ts_us, c.levels_db, c.activity):
-                    self.est.add_levels(c.stream_id, t_us / 1e6, lv, float(w))
+                    if self.method == "level":
+                        self.est.add_levels(c.stream_id, t_us / 1e6, lv, float(w))
                     if w > ACTIVE_MIN:
                         self.last_active_us[c.stream_id] = int(t_us)
                 self.now_us = max(self.now_us, int(c.level_ts_us[-1]))
                 self.latest[c.stream_id] = (c, self.est.estimate(c.stream_id, c.level_ts_us[-1] / 1e6))
+
+    def _add_delays(self, c) -> None:
+        """Inter-mic delay of this stream's two mic images, frame by frame, weighted by activity
+        and kept only for the sharper half of the GCC peaks."""
+        if c.mic_audio.shape[0] < 2 or not np.any(c.mic_audio):
+            return
+        t, tau, sharp = frame_delays(c.mic_audio[:2].T, 16000, TDOA_WIN, TDOA_HOP, self.calib.max_tau_s)
+        if len(t) == 0:
+            return
+        t_us = c.start_ts_us + t * 1e6
+        w = np.interp(t_us, c.level_ts_us, c.activity)
+        on = w > ACTIVE_MIN
+        if not on.any():
+            return
+        cut = np.median(sharp[on])
+        for ti, di, wi, si in zip(t_us, tau, w, sharp):
+            if wi > ACTIVE_MIN and si >= cut:
+                self.est.add_delay(c.stream_id, ti / 1e6, float(di), float(wi))
 
     def estimates(self) -> dict[str, BearingEstimate]:
         with self.lock:
@@ -73,8 +104,6 @@ class LiveLocator:
 
     def sources(self) -> list[p.Source]:
         """Protocol Sources: bearing_deg is world yaw (0 = initial forward, + = right)."""
-        import numpy as np
-
         out = []
         with self.lock:
             for sid, (c, e) in self.latest.items():
