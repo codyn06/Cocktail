@@ -18,6 +18,9 @@ pending/refused/unavailable are therefore indistinguishable on /events; only /re
 (the protocol has no field for it; the proposed field is NOT applied). ``voice_lock_conf`` is always None.
 ``state`` is the tracker's TrackState for the source, ``bearing_deg`` comes from the latest sources.updated.
 
+Known risk: ``now_us`` is the events device clock, which advances only when the events tick publishes. If ticks
+stall, ``now_us`` stops, so the result-age check ("result too old") and ``window_floor_us`` stop advancing.
+
 The runner (models) loads in a daemon thread started by the lifespan. Until then the runner answers
 unavailable("refinement models loading"); if loading raises, unavailable("refinement models failed to load: <type>").
 """
@@ -51,7 +54,9 @@ class RefinementState:
     models_error: str | None = None
     loop: asyncio.AbstractEventLoop | None = None
     loader: threading.Thread | None = None
+    closed: bool = False             # set first at shutdown: late worker results are dropped
     _runner: Callable[[RefineJob], RefineOutcome] | None = field(default=None, repr=False)
+    _loop_seen: bool = field(default=False, repr=False)
 
     def run(self, job: RefineJob) -> RefineOutcome:
         """Runner given to the bridge: delegates to the loaded runner, else reports why not."""
@@ -63,11 +68,17 @@ class RefinementState:
         return RefineOutcome(RefineState.unavailable, "refinement models loading")
 
     def post(self, fn: Callable[[], None]) -> None:
+        if self.closed:
+            return
         loop = self.loop
         if loop is None:
-            fn()
-        else:
+            if not self._loop_seen:   # never attached to a loop (tests): run inline
+                fn()
+            return
+        try:
             loop.call_soon_threadsafe(fn)
+        except RuntimeError:          # loop already closed
+            pass
 
     def status_payload(self) -> dict:
         out = self.bridge.status_payload()
@@ -86,6 +97,28 @@ def install_refinement(app: FastAPI, events, ingest, worker, *, runner_factory: 
     ring = SlotRing(max(8.0, config.window_s))
     worker.listeners.append(ring.on_chunks)
 
+    floor = {"v": 0, "sel": None, "slots": None, "init": False}
+    resets_seen = {"v": None}
+
+    def track_floor() -> None:
+        sel = events.selection
+        slots = tuple(sel.route(events.tracker).slots) if sel.chosen is not None else ()
+        if (sel.version, slots) != (floor["sel"], floor["slots"]):
+            if floor["init"]:
+                floor["v"] = events.latest.device_ts_us
+            floor["sel"], floor["slots"], floor["init"] = sel.version, slots, True
+
+    def reset_on_audio_reset() -> None:
+        audio = ingest.audio
+        r = (audio.resets if audio is not None else 0) or 0
+        if resets_seen["v"] is not None and r != resets_seen["v"]:
+            ring.reset()
+            tap = ingest.video
+            if hasattr(tap, "ring"):
+                with tap.lock:
+                    tap.ring.clear()
+        resets_seen["v"] = r
+
     def live() -> LiveView:
         sel = events.selection
         chosen = sel.chosen
@@ -96,7 +129,7 @@ def install_refinement(app: FastAPI, events, ingest, worker, *, runner_factory: 
             audio_resets=(audio.resets if audio is not None else 0) or 0,
             slots=tuple(route.slots) if route else (),
             source_present=chosen is not None and chosen in events.tracker.tracks,
-            now_us=events.latest.device_ts_us)
+            now_us=events.latest.device_ts_us, window_floor_us=floor["v"])
 
     def default_label(source_id: str) -> str | None:
         return next((s.label for s in events.latest.sources if s.source_id == source_id), None)
@@ -107,11 +140,25 @@ def install_refinement(app: FastAPI, events, ingest, worker, *, runner_factory: 
                               post=lambda fn: holder["st"].post(fn), executor=executor)
     st = RefinementState(bridge, ring, config)
     holder["st"] = st
+    events.tick_hooks.append(reset_on_audio_reset)
+    events.tick_hooks.append(track_floor)
     events.tick_hooks.append(bridge.tick)
 
-    def publish(status: RefineStatus) -> None:
+    shown: dict = {"key": None}
+
+    def drop_shown() -> None:
+        if shown["key"] is not None:
+            events.drop_aux(shown["key"])
+            shown["key"] = None
+
+    def publish(status: RefineStatus | None) -> None:
+        if status is None:
+            drop_shown()
+            return
         if status.state == RefineState.stale:
             return
+        if shown["key"] not in (None, f"t_{status.key.source_id}"):
+            drop_shown()
         sid = status.key.source_id
         acc = status.state == RefineState.accepted
         src = next((s for s in events.latest.sources if s.source_id == sid), None)
@@ -122,6 +169,7 @@ def install_refinement(app: FastAPI, events, ingest, worker, *, runner_factory: 
             kind="person" if acc else "speech", voice_lock_conf=None,
             assoc_conf=min(1.0, max(0.0, status.assoc_conf)) if acc else 0.0,
             state=tstate, bearing_deg=src.bearing_deg if src is not None else None)
+        shown["key"] = msg.target_id
         events.publish_aux(msg.model_dump_json(), key=msg.target_id)
 
     bridge.listeners.append(publish)
@@ -140,13 +188,15 @@ def install_refinement(app: FastAPI, events, ingest, worker, *, runner_factory: 
     async def lifespan(app):
         async with previous(app) as value:
             st.loop = asyncio.get_running_loop()
+            st._loop_seen = True
             st.loader = threading.Thread(target=load, name="refine-load", daemon=True)
             st.loader.start()
             try:
                 yield value
             finally:
-                st.loop = None
+                st.closed = True
                 await asyncio.to_thread(bridge.close)
+                st.loop = None
 
     app.router.lifespan_context = lifespan
     app.state.refinement = st

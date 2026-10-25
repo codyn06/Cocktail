@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
+
+import numpy as np
 
 from fastapi.testclient import TestClient
 
@@ -9,7 +12,8 @@ import protocol as p
 from events import install_events
 from ingest import IngestState, create_app
 from mockclient.simulate import quat_yaw_pitch
-from refine.contracts import RefineConfig, RefineJob, RefineKey, RefineOutcome, RefineState
+from ingest.buffers import AudioRing
+from refine.contracts import RefineConfig, RefineJob, RefineKey, RefineOutcome, RefineState, RefineStatus
 from refine.install import install_refinement
 from track import TrackConfig, Tracker
 
@@ -34,7 +38,7 @@ def raw(slot, bearing, ts):
 
 def fake_cut(live, job_id):
     return RefineJob(job_id=job_id, key=RefineKey(live.chosen, live.epoch, live.selection_version, live.audio_resets),
-                     slots=live.slots, capture_start_us=live.now_us - 4_000_000, capture_end_us=live.now_us,
+                     slots=live.slots, capture_start_us=max(live.now_us - 4_000_000, live.window_floor_us), capture_end_us=live.now_us,
                      mix_16k=None, slot_audio={}, frames=[])
 
 
@@ -163,4 +167,87 @@ def test_new_pose_epoch_makes_the_old_job_stale():
         assert all(m["kind"] == "speech" for m in rig.targets())
         hist = rig.st.bridge.status_payload()["history"]
         assert hist[0]["state"] == "stale" and hist[0]["reason"] == "epoch changed"
+    run(go())
+
+
+def test_deselect_drops_snapshot_so_new_client_gets_no_old_person():
+    async def go():
+        rig = Rig(runner=lambda job: RefineOutcome(RefineState.accepted, "ok", track_id="f0", score=9.0,
+                                                   assoc_conf=0.9))
+        sid = await rig.choose()
+        await rig.observe()
+        assert json.loads(rig.events.aux_snapshot[f"t_{sid}"])["kind"] == "person"
+        rig.events.selection.clear()
+        await rig.observe()
+        assert rig.events.aux_snapshot == {}
+    run(go())
+
+
+def test_snapshot_holds_only_the_live_target():
+    rig = Rig()
+    b = rig.st.bridge
+
+    def status(sid, ver):
+        return RefineStatus(1, RefineKey(sid, 0, ver, 0), RefineState.pending, "x")
+    b._notify(status("t1", 1))
+    b._notify(status("t2", 2))
+    assert list(rig.events.aux_snapshot) == ["t_t2"]
+    b._notify(None, force=True)
+    assert rig.events.aux_snapshot == {}
+
+
+def test_result_after_shutdown_is_dropped():
+    async def go():
+        rig = Rig()
+        rig.st.loop = asyncio.get_running_loop()
+        rig.st._loop_seen = True
+        calls = []
+        rig.st.closed = True
+        rig.st.post(lambda: calls.append(1))
+        rig.st.closed = False
+        rig.st.loop = None  # loop cleared, never inline once it has been set
+        rig.st.post(lambda: calls.append(2))
+        await asyncio.sleep(0.05)
+        assert calls == [] and rig.events.aux_snapshot == {}
+        rig.st._loop_seen = False
+        rig.st.post(lambda: calls.append(3))   # inline only when no loop was ever set
+        assert calls == [3]
+    run(go())
+
+
+def test_audio_reset_clears_ring_and_frame_tap():
+    async def go():
+        rig = Rig()
+        rig.ingest.audio = AudioRing(2, seconds=4)
+        rig.ingest.video.put(SimpleNamespace(device_ts_us=1), b"j")
+        await rig.observe()
+        rig.st.ring.on_chunks([SimpleNamespace(stream_id="s1", start_ts_us=0, audio=np.zeros(1600, np.float32))])
+        assert rig.st.ring.slot_ids() == ["s1"]
+        await rig.observe()
+        assert rig.st.ring.slot_ids() == ["s1"]          # no reset yet
+        rig.ingest.audio.reset()
+        await rig.observe()
+        assert rig.st.ring.slot_ids() == [] and len(rig.ingest.video.ring) == 0
+    run(go())
+
+
+def test_swap_and_swap_back_moves_the_floor_and_makes_old_window_stale():
+    async def go():
+        rig = Rig(runner=lambda job: RefineOutcome(RefineState.accepted, "ok", track_id="f0", assoc_conf=0.9))
+        await rig.choose()
+        await rig.observe()
+        base = rig.st.bridge._live_fn().window_floor_us
+        slots = [("s1",), ("s2",), ("s1",)]
+        seen = []
+        orig = rig.events.selection.route
+        for s in slots:  # route slots flap; each change must move the floor forward
+            rig.events.selection.route = lambda tr, s=s: SimpleNamespace(slots=list(s))
+            await rig.observe()
+            seen.append(rig.st.bridge._live_fn().window_floor_us)
+        rig.events.selection.route = orig
+        assert seen[1] > base and seen[2] > seen[1]
+        job = fake_cut(rig.st.bridge._live_fn(), 9)
+        job.capture_start_us = base  # window predates the swaps
+        rig.st.bridge._admit(job, RefineOutcome(RefineState.accepted, "ok", track_id="f0", assoc_conf=0.9))
+        assert rig.st.bridge.statuses()[0].reason == "route or selection changed inside the window"
     run(go())

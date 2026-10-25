@@ -129,3 +129,22 @@ def test_happy_aligned_copies_and_reset():
     ing.audio.reset()
     with pytest.raises(CutUnavailable, match="audio reset"):
         cutter(ing, ring)(live, 6)
+
+
+def test_window_floor_clamps_all_streams_consistently():
+    ing, ring, live = rig()
+    floor = live.now_us - 2_500_000  # base+1.5 s
+    job = cutter(ing, ring)(dataclasses.replace(live, window_floor_us=floor), 1)
+    assert floor <= job.capture_start_us <= floor + 1
+    n = len(job.slot_audio["s1"])
+    assert len(job.mix_16k) == n
+    assert abs(job.capture_end_us - job.capture_start_us - n * 1_000_000 // SR) <= 1
+    assert np.allclose(job.mix_16k, 2 * job.slot_audio["s1"])      # mixture and slot still sample-aligned
+    assert job.slot_audio["s1"][0] >= 1.5 * SR - 1                    # ramp value = absolute sample index
+    assert all(job.capture_start_us <= f[0] <= job.capture_end_us for f in job.frames)
+
+
+def test_window_floor_leaving_too_little_is_unavailable():
+    ing, ring, live = rig()
+    with pytest.raises(CutUnavailable, match="window too short"):
+        cutter(ing, ring)(dataclasses.replace(live, window_floor_us=live.now_us - 1_000_000), 1)

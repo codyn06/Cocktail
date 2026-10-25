@@ -187,6 +187,10 @@ class EventsState:
                 q.get_nowait()
             q.put_nowait(text)
 
+    def drop_aux(self, key: str) -> None:
+        """Forget the remembered aux message for `key` (a new client no longer receives it)."""
+        self.aux_snapshot.pop(key, None)
+
     async def run(self) -> None:
         try:
             while True:

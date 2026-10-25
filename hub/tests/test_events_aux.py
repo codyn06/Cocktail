@@ -75,3 +75,12 @@ def test_new_client_gets_sources_then_aux_snapshot_and_live_aux():
         assert second["target_id"] == "t_x"
         assert len(events.aux_clients) == 1
     assert not events.aux_clients
+
+
+def test_drop_aux_forgets_key():
+    events = EventsState(IngestState(), None)
+    events.publish_aux("a1", key="a")
+    events.publish_aux("b1", key="b")
+    events.drop_aux("a")
+    events.drop_aux("missing")
+    assert events.aux_snapshot == {"b": "b1"}

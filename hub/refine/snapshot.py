@@ -162,6 +162,14 @@ def make_cut_fn(ingest, ring: SlotRing, label_fn: Callable[[str], str | None], c
             raise CutUnavailable("window too short")
         start_us, slot_audio = win
         n = len(next(iter(slot_audio.values())))
+        if live.window_floor_us > start_us:  # drop audio from before the selection or the last route change
+            off = -(-(live.window_floor_us - start_us) * ring.sr // 1_000_000)
+            off = min(off, n)
+            start_us += -(-off * 1_000_000 // ring.sr)
+            slot_audio = {k: a[off:].copy() for k, a in slot_audio.items()}
+            n -= off
+            if n < int(config.min_window_s * ring.sr):
+                raise CutUnavailable("window too short")
         end_us = start_us + n * 1_000_000 // ring.sr
         tap = ingest.video
         if not isinstance(tap, TappedFrames):

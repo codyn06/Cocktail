@@ -278,3 +278,25 @@ def test_real_thread_worker():
     finally:
         gate.set()
         e.bridge.close()
+
+
+def test_listeners_get_none_on_deselect_and_on_key_change():
+    e = Env(defer=True)
+    e.tick()
+    e.v = replace(e.v, selection_version=2)  # key changes while pending
+    e.tick()
+    assert [s.state if s else None for s in e.events] == [RefineState.pending, None, RefineState.pending]
+    e.v = replace(e.v, chosen=None)
+    e.tick()
+    assert e.events[-1] is None
+    e.tick()
+    assert len(e.events) == 4  # no repeated None when already empty
+
+
+def test_job_cut_before_window_floor_is_stale_at_admission():
+    e = Env(defer=True)
+    e.run_to_job()
+    e.v = replace(e.v, window_floor_us=e.capture_end - 1_000_000)  # route/selection changed inside the window
+    e.posted.pop()()
+    st = e.bridge.statuses()[0]
+    assert st.state == RefineState.stale and st.reason == "route or selection changed inside the window"

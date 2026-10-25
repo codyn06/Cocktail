@@ -2,6 +2,10 @@
 
 Never changes selection, route or audio. ``tick`` runs on the event loop and never blocks; the runner runs on
 one worker thread (or inline in tests); ``_admit`` runs back on the loop via ``post``.
+
+Listeners receive a ``RefineStatus`` when the current status changes, and ``None`` when there is no longer a
+current status for the previous key (deselect, or the live key changed). A key change delivers ``None`` first,
+then the new pending status.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ class RefinementBridge:
         self._post = post or (lambda fn: fn())
         self._inline = executor == "inline"
         self._mono = mono
-        self.listeners: list[Callable[[RefineStatus], None]] = []
+        self.listeners: list[Callable[[RefineStatus | None], None]] = []
         self._lock = threading.Lock()
         self._current: RefineStatus | None = None
         self._history: list[RefineStatus] = []
@@ -56,16 +60,23 @@ class RefinementBridge:
         now = self._mono()
         if v.chosen is None:
             with self._lock:
+                had = self._current is not None
                 self._key, self._admitted, self._current = None, False, None
+            if had:
+                self._notify(None, force=True)
             return
         key = RefineKey(v.chosen, v.epoch, v.selection_version, v.audio_resets)
+        dropped = False
         with self._lock:
             if key != self._key:
+                dropped = self._current is not None
                 self._key, self._first_seen, self._last_attempt = key, now, None
                 self._admitted = False
                 changed = self._set_current(RefineStatus(0, key, RefineState.pending, "waiting for window"))
             else:
                 changed = None
+        if dropped:
+            self._notify(None, force=True)
         self._notify(changed)
         if now - self._first_seen < self.config.settle_s:
             return
@@ -133,8 +144,8 @@ class RefinementBridge:
         self._current = st
         return st if changed else None
 
-    def _notify(self, st: RefineStatus | None) -> None:
-        if st is None:
+    def _notify(self, st: RefineStatus | None, force: bool = False) -> None:
+        if st is None and not force:
             return
         for fn in list(self.listeners):
             try:
@@ -188,6 +199,8 @@ class RefinementBridge:
             return "result too old"
         if job.capture_end_us > v.now_us + FUTURE_SLACK_US:
             return "capture in the future"
+        if job.capture_start_us < v.window_floor_us:
+            return "route or selection changed inside the window"
         return None
 
     def _admit(self, job: RefineJob, outcome: RefineOutcome) -> None:

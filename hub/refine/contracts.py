@@ -54,6 +54,7 @@ class LiveView:
     slots: tuple[str, ...]        # slots carrying the chosen source now (selection.route)
     source_present: bool          # chosen id still in the tracker
     now_us: int                   # device-clock now (EventsState clock)
+    window_floor_us: int = 0      # device time the selection or route slots last changed; earlier audio is not this source's
 
 
 @dataclass
