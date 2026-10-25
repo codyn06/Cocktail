@@ -211,3 +211,161 @@ def extract_stem(bundle: SamAudioBundle, *, audio, sample_rate: int, frames: tor
                      anchor_hash=_hash(anchor_list), sample_rate=rate, n_samples=int(stem.shape[-1]),
                      raw_path=rel, errors=errors)
     return res, prompts
+
+
+# --------------------------------------------------------------------------- diagnostics (additive)
+@dataclass
+class CandidateSet:
+    """All candidates of one SAM Audio run. Waveforms are mono float32 at `rate`."""
+    targets: list[np.ndarray]
+    residuals: list[np.ndarray]
+    seeds: list[int]
+    rate: int
+    prompts: dict
+    spans: list | None            # spans predicted by the span predictor (anchors=None, predict_spans=True)
+    timings: dict
+
+
+def load_sam_audio_diagnostic(repo: str = SAM_AUDIO_REPO, device: str = "cuda", vision_batch: int = VISION_BATCH,
+                              span_predictor: bool = True, span_predictor_device: str = "cpu") -> SamAudioBundle:
+    """Like `load_sam_audio`, but optionally KEEPS the PE-A-Frame span predictor (needed for
+    `anchors=None, predict_spans=True`). Rankers stay off (their weights are not in the checkpoint;
+    score candidates externally). Diagnostics only: Phase 2 uses `load_sam_audio`.
+
+    The predictor's checkpoint is 6.1 GB (fp32). Measured on the 12 GiB RTX 5070 Ti Laptop it takes
+    GPU memory to 11.15 GiB allocated together with SAM Audio small-tv, which leaves no room for
+    activations, so it stays on `span_predictor_device` (CPU by default) and only the span prediction
+    runs there."""
+    from huggingface_hub import snapshot_download
+    from sam_audio import SAMAudio, SAMAudioProcessor
+    from sam_audio.model.config import SAMAudioConfig
+
+    folder = Path(snapshot_download(repo_id=repo))
+    raw = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+    cfg = _sanitize_config(raw)
+    if span_predictor:
+        cfg["span_predictor"] = raw["span_predictor"]
+    model = SAMAudio(SAMAudioConfig(**cfg))
+    model.load_state_dict(torch.load(folder / "checkpoint.pt", weights_only=True, map_location="cpu"))
+    cap_vision_batch(model, vision_batch)
+    sp = model._modules.pop("span_predictor", None)          # keep it off the GPU
+    model = model.eval().to(device)
+    if sp is not None:
+        model.span_predictor = sp.eval().to(span_predictor_device)
+    return SamAudioBundle(model, SAMAudioProcessor.from_pretrained(str(folder)), f"{repo}@{folder.name}")
+
+
+def _predict_spans(model, batch, fwd):
+    """`SAMAudio.predict_spans` with the span predictor allowed to live on another device."""
+    sp = model.span_predictor
+    pdev = next(sp.parameters()).device
+    inp = model.span_predictor_transform(text=batch.descriptions).to(pdev)
+    out = sp(input_features=fwd["audio_features"][:, :, :128].to(pdev), padding_mask=fwd["audio_pad_mask"].to(pdev),
+             return_spans=True, **inp)
+    batch.process_anchors([[["+"] + a for a in spans] for spans in out.spans])
+    return batch
+
+
+def _mask_tensor(masks, height: int, width: int) -> torch.Tensor:
+    """RleMask|None per frame, or a bool tensor/array (T, H, W) / (T, 1, H, W) -> (T, 1, H, W) bool."""
+    if torch.is_tensor(masks) or isinstance(masks, np.ndarray):
+        t = torch.as_tensor(masks).to(torch.bool)
+        return t.unsqueeze(1) if t.ndim == 3 else t
+    return masks_to_tensor(masks, height, width)
+
+
+def build_batch(bundle: SamAudioBundle, *, audio, sample_rate: int, frames: torch.Tensor | None, masks,
+                text: str, anchors):
+    """The processor call used by `extract_stem` / `extract_candidates`.
+    anchors: None | "full_clip" | list[(sign, start_s, end_s)]. Returns (batch, anchor_list, masked_video)."""
+    proc = bundle.processor
+    wav = resample_audio(audio, sample_rate, proc.audio_sampling_rate)
+    duration = wav.shape[-1] / proc.audio_sampling_rate
+    masked = None
+    if frames is not None:
+        if frames.ndim != 4 or len(masks) != frames.shape[0]:
+            raise ValueError("need exactly one mask entry (or None) per frame")
+        masked = apply_visual_prompt_mask(frames, _mask_tensor(masks, frames.shape[2], frames.shape[3]), proc)
+    anchor_list = [("+", 0.0, duration)] if isinstance(anchors, str) and anchors == "full_clip" else anchors
+    batch = proc(descriptions=[text], audios=[wav], masked_videos=None if masked is None else [masked],
+                 anchors=[anchor_list] if anchor_list else None)
+    return batch, anchor_list, masked
+
+
+def extract_candidates(bundle: SamAudioBundle, *, audio, sample_rate: int, frames: torch.Tensor | None, masks,
+                       text: str = DEFAULT_TEXT, anchors="full_clip", predict_spans: bool = False,
+                       n_candidates: int = 8, seed: int = 0, seeds: Sequence[int] | None = None,
+                       ode_opt: dict | None = None, free_cache: bool = True) -> CandidateSet:
+    """Return ALL `n_candidates` (<= 8) candidate waveforms of one prompt, not just one.
+
+    Upstream `separate(reranking_candidates=N)` keeps only the ranker's pick (candidate 0 when no
+    ranker is configured, which is the case here), so this re-runs its sampling loop from the same
+    encoder inputs. Memory is kept bounded as in Phase 2: vision encoder capped at VISION_BATCH frames
+    (`cap_vision_batch`), the encoders run ONCE, then each candidate is an independent B=1 ODE solve +
+    decode, run sequentially with the CUDA cache freed in between.
+
+    Noise for candidate k comes from a private generator seeded `seeds[k]` (default seed + k) on the
+    model's device, so two runs with the same clip length and `seeds` use IDENTICAL start noise: that is
+    the matched-noise pairing for prompt / mask / anchor comparisons. Candidate k equals
+    `model.separate(batch, noise=<that noise>, reranking_candidates=1)`.
+
+    frames=None runs without the visual prompt (zero video features). anchors=None with
+    predict_spans=True needs a bundle from `load_sam_audio_diagnostic(span_predictor=True)`.
+    """
+    import time
+
+    from torchdiffeq import odeint
+    from sam_audio.model.model import DFLT_ODE_OPT
+
+    if not 1 <= n_candidates <= 8:
+        raise ValueError("n_candidates must be in 1..8")
+    seed_list = list(seeds) if seeds is not None else [seed + k for k in range(n_candidates)]
+    if len(seed_list) != n_candidates:
+        raise ValueError("need one seed per candidate")
+    t0 = time.perf_counter()
+    model, proc = bundle.model, bundle.processor
+    device = next(model.parameters()).device
+    batch, anchor_list, _ = build_batch(bundle, audio=audio, sample_rate=sample_rate, frames=frames, masks=masks,
+                                        text=text, anchors=anchors)
+    batch = batch.to(device)
+    spans = None
+    with torch.inference_mode():
+        fwd = model._get_forward_args(batch, candidates=1)
+        if predict_spans and anchors is None:
+            if not hasattr(model, "span_predictor"):
+                raise RuntimeError("predict_spans=True needs a model loaded with the span predictor")
+            batch = _predict_spans(model, batch, fwd)
+            spans = [list(a) for a in batch.anchors[0]]
+            fwd.update({"anchor_ids": batch.anchor_ids, "anchor_alignment": batch.anchor_alignment})
+        t_enc = time.perf_counter() - t0
+        feats = fwd["audio_features"]
+        _, T, C2 = feats.shape
+        C = C2 // 2
+        sizes = model.audio_codec.feature_idx_to_wav_idx(batch.sizes)
+        opts = ode_opt or DFLT_ODE_OPT
+        targets, residuals, per_cand = [], [], []
+        for s in seed_list:
+            tc = time.perf_counter()
+            gen = torch.Generator(device=device).manual_seed(int(s))
+            noise = torch.randn(feats.shape, generator=gen, device=device, dtype=feats.dtype)
+
+            def vector_field(t, noisy, _f=fwd):
+                return model.forward(noisy_audio=noisy, time=t.expand(noisy.size(0)), **_f)
+
+            states = odeint(vector_field, noise, torch.tensor([0.0, 1.0], device=device), **opts)
+            gen_f = states[-1].transpose(1, 2)
+            wavs = model.audio_codec.decode(gen_f.reshape(2, C, T)).view(1, 2, -1)
+            n = int(sizes[0])
+            targets.append(wavs[0, 0, :n].float().cpu().numpy().astype(np.float32))
+            residuals.append(wavs[0, 1, :n].float().cpu().numpy().astype(np.float32))
+            del states, gen_f, wavs, noise
+            if free_cache and device.type == "cuda":
+                torch.cuda.empty_cache()
+            per_cand.append(round(time.perf_counter() - tc, 3))
+    prompts = {"text": text, "anchors": anchor_list, "predict_spans": bool(predict_spans), "visual": frames is not None,
+               "mask_polarity": mask_polarity(proc),
+               "audio_seconds": round(batch.audios.shape[-1] / proc.audio_sampling_rate, 3),
+               "frames": None if frames is None else int(frames.shape[0]), "seeds": seed_list}
+    return CandidateSet(targets, residuals, seed_list, proc.audio_sampling_rate, prompts, spans,
+                        {"encode_s": round(t_enc, 3), "per_candidate_s": per_cand,
+                         "total_s": round(time.perf_counter() - t0, 3)})
