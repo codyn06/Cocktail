@@ -82,7 +82,7 @@ async def replay(s: Session, url: str, speed: float = 1.0, epoch: int = 0, fake_
                 h = p.VideoFrame(seq=nxt("video"), device_ts_us=ts, epoch=epoch,
                                  width=fm.get("width", 1280), height=fm.get("height", 960),
                                  cam_pos=fm.get("cam_pos"), cam_rot_xyzw=fm.get("cam_rot_xyzw"),
-                                 hfov_deg=fm.get("hfov_deg", s.meta.get("camera_hfov_deg")))
+                                 hfov_deg=fm.get("hfov_deg") or s.meta.get("camera_hfov_deg"))  # a recorded null falls back
                 await wv.send(p.pack(h, data))
             sent[kind] += 1
     return sent

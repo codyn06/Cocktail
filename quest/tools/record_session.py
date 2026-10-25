@@ -51,7 +51,7 @@ def reset_state() -> None:
         "audio_frames": 0, "pose": [], "hello": None, "video_frames": 0, "last_audio_ts_us": None,
         "t_first_wall": None, "cue": None,
         "video": [],  # kept frames: (VideoFrame header, jpeg bytes)
-        "video_kept_ts": set(), "video_last_kept_ts_us": None, "video_last_ts_us": None,
+        "video_kept_ts": set(), "video_next_due_us": None, "video_last_ts_us": None,
         "video_bytes": 0, "video_skipped": 0,
     })
 
@@ -60,7 +60,7 @@ reset_state()
 
 
 def clear_video() -> None:
-    S.update({"video": [], "video_kept_ts": set(), "video_last_kept_ts_us": None, "video_bytes": 0})
+    S.update({"video": [], "video_kept_ts": set(), "video_next_due_us": None, "video_bytes": 0})
 
 
 def on_video(data: bytes) -> bool:
@@ -77,16 +77,24 @@ def on_video(data: bytes) -> bool:
         print("[video] headset clock restarted; discarding the earlier frames")
         clear_video()
     S["video_last_ts_us"] = hdr.device_ts_us
-    last = S["video_last_kept_ts_us"]
+    due = S["video_next_due_us"]
     if (hdr.codec != "jpeg"  # frames are saved as .jpg; other codecs are not decodable per frame
             or (VIDEO["max_frames"] and len(S["video"]) >= VIDEO["max_frames"])
             or hdr.device_ts_us in S["video_kept_ts"]  # the file name is the timestamp
-            or (last is not None and 0 <= hdr.device_ts_us - last < VIDEO["min_interval_us"])):
+            # fps throttle on a fixed grid: a frame is kept once it is within 10% of an interval of its due time, so
+            # camera timing jitter does not cost whole slots (asking for the camera's own rate keeps ~all frames)
+            or (due is not None and hdr.device_ts_us < due - VIDEO["min_interval_us"] // 10)):
         S["video_skipped"] += 1
         return False
     S["video"].append((hdr, jpeg))
     S["video_kept_ts"].add(hdr.device_ts_us)
-    S["video_last_kept_ts_us"] = hdr.device_ts_us
+    interval = VIDEO["min_interval_us"]
+    if not interval:
+        S["video_next_due_us"] = hdr.device_ts_us
+    elif due is None or hdr.device_ts_us > due + interval // 2:  # first frame, or a gap: restart the grid here
+        S["video_next_due_us"] = hdr.device_ts_us + interval
+    else:
+        S["video_next_due_us"] = due + interval
     S["video_bytes"] += len(jpeg)
     return True
 
@@ -201,9 +209,12 @@ async def ws_audio_out(ws: WebSocket) -> None:
 
 def save_video(out: Path) -> int:
     """Write kept frames to OUT/video/; returns how many. Frames are ordered by device timestamp."""
+    vdir = out / "video"
+    if vdir.exists():  # a re-recording must not leave the previous take's frames for Session.load to find
+        for old in [*vdir.glob("*.jpg"), vdir / "frames.jsonl"]:
+            old.unlink(missing_ok=True)
     if not S["video"]:
         return 0
-    vdir = out / "video"
     vdir.mkdir(parents=True, exist_ok=True)
     frames = sorted(S["video"], key=lambda f: f[0].device_ts_us)
     with open(vdir / "frames.jsonl", "w") as f:

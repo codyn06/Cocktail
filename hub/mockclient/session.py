@@ -57,8 +57,12 @@ class Session:
         frames = sorted((int(f.stem), f) for f in (path / "video").glob("*.jpg")) if (path / "video").exists() else []
         frame_meta = {}
         if (path / "video" / "frames.jsonl").exists():
-            rows = [json.loads(l) for l in (path / "video" / "frames.jsonl").read_text().splitlines() if l.strip()]
-            frame_meta = {int(r["device_ts_us"]): r for r in rows}
+            for line in (path / "video" / "frames.jsonl").read_text(encoding="utf-8-sig").splitlines():
+                try:  # a truncated last line (crash mid-save) or a row without a timestamp must not lose the take
+                    row = json.loads(line)
+                    frame_meta[int(row["device_ts_us"])] = row
+                except (ValueError, KeyError, TypeError):
+                    continue
         return cls(path, meta, a, sr, poses, frames, frame_meta)
 
     def save(self) -> None:

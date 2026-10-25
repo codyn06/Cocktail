@@ -21,6 +21,7 @@ Label a take by hand (watch the frames, or the recording while listening) in OUT
 from __future__ import annotations
 
 import csv
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,16 +44,16 @@ def load_talkers(take: str | Path) -> list[TalkerSpan]:
     path = Path(take)
     if path.is_dir():
         path = path / FILENAME
-    lines = [l for l in path.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    lines = [l for l in path.read_text(encoding="utf-8-sig").splitlines() if l.strip() and not l.lstrip().startswith("#")]
     spans = []
     for row in csv.DictReader(lines):
         try:
             span = TalkerSpan(float(row["start_s"]), float(row["end_s"]), row["talker_id"].strip(),
                               float(row["bearing_deg"]) if (row.get("bearing_deg") or "").strip() else None,
                               (row.get("note") or "").strip())
-        except (KeyError, TypeError, ValueError) as e:
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
             raise ValueError(f"{path}: bad row {row}: {e!r}") from e
-        if span.end_s <= span.start_s or not span.talker_id:
+        if not (math.isfinite(span.start_s) and math.isfinite(span.end_s)) or span.end_s <= span.start_s                 or not span.talker_id:
             raise ValueError(f"{path}: bad row {row}: need end_s > start_s and a talker_id")
         spans.append(span)
     return sorted(spans, key=lambda s: (s.start_s, s.end_s))

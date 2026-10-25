@@ -193,3 +193,64 @@ def test_talker_labels(tmp_path):
     (tmp_path / "bad.csv").write_text("start_s,end_s,talker_id\n2,1,x\n")
     with pytest.raises(ValueError, match="end_s > start_s"):
         load_talkers(tmp_path / "bad.csv")
+
+
+def test_resaving_into_an_existing_take_does_not_leave_the_old_frames(tmp_path):
+    take = tmp_path / "take"
+    with TestClient(rec.app) as c:
+        stream(c, 10)
+    rec.save(take, truth=None, note="first")
+    assert len(list((take / "video").glob("*.jpg"))) == 10
+    rec.reset_state()
+    rec.VIDEO.update(enabled=False)                      # second take records no video at all
+    with TestClient(rec.app) as c:
+        stream(c, 10)
+    rec.save(take, truth=None, note="second")
+    assert not list((take / "video").glob("*.jpg")) and not (take / "video" / "frames.jsonl").exists()
+    assert Session.load(take).frames == []
+    rec.reset_state()
+    rec.VIDEO.update(enabled=True, min_interval_us=0, max_frames=3, flipped=False)   # a limited third take
+    with TestClient(rec.app) as c:
+        stream(c, 10)
+    rec.save(take, truth=None, note="third")
+    s = Session.load(take)
+    assert len(s.frames) == 3 and set(s.frame_meta) == {ts for ts, _ in s.frames}
+
+
+def test_fps_throttle_at_the_camera_rate_keeps_jittery_frames():
+    rec.VIDEO.update(min_interval_us=int(1e6 / 15))      # asked for the camera's own 15 fps
+    kept = 0
+    for k in range(60):
+        ts = T0 + int(k * 66_667 + (5_000 if k % 2 else -5_000))      # +-5 ms of frame-timing jitter
+        kept += rec.on_video(video_msg(ts, k))
+    assert kept >= 58                                    # the old delta-from-last-kept rule lost about every other frame
+    rec.reset_state()
+    rec.VIDEO.update(min_interval_us=200_000)            # 5 fps asked of a 15 fps camera: still about 5 fps
+    kept5 = sum(rec.on_video(video_msg(T0 + int(k * 66_667 + (3_000 if k % 2 else -3_000)), k)) for k in range(150))
+    assert 48 <= kept5 <= 52
+
+
+def test_load_survives_a_truncated_frames_file_and_replay_falls_back_for_a_null_hfov(tmp_path):
+    with TestClient(rec.app) as c:
+        stream(c, 6)
+    take = tmp_path / "take"
+    rec.save(take, truth=None, note="")
+    fj = take / "video" / "frames.jsonl"
+    rows = fj.read_text().splitlines()
+    nulled = json.loads(rows[0])
+    nulled["hfov_deg"] = None
+    rows[0] = json.dumps(nulled)
+    fj.write_text("\n".join(rows) + '\n{"seq": 7}\n{"device_ts_us": 99, "wi')      # no timestamp; truncated tail
+    s = Session.load(take)
+    assert len(s.frame_meta) == 6 and s.frame_meta[T0]["hfov_deg"] is None
+    assert (s.frame_meta[T0].get("hfov_deg") or s.meta.get("camera_hfov_deg")) == 78.5   # replay's null fallback
+
+
+def test_talker_csv_bad_rows_are_reported_as_value_errors(tmp_path):
+    f = tmp_path / "talkers.csv"
+    for body in ("start_s,end_s\n1,2\n", "start_s,end_s,talker_id\n1,nan,a\n", "start_s,end_s,talker_id\n1,inf,a\n"):
+        f.write_text(body)
+        with pytest.raises(ValueError):
+            load_talkers(f)
+    f.write_bytes("﻿start_s,end_s,talker_id,bearing_deg,note\n1,2,ann,30,é\n".encode("utf-8"))   # Excel BOM + non-ASCII
+    assert load_talkers(f)[0].talker_id == "ann" and load_talkers(f)[0].note == "é"
