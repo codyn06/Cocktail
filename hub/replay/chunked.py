@@ -342,7 +342,11 @@ class ChunkedSpeechRunner:
     def _vfp(self) -> str:
         """Visual stage fingerprint: the chunk machinery plus the actual front-end implementation in use."""
         import av_scene.contracts as _contracts
-        objs = [__import__(__name__, fromlist=["x"]), _contracts]
+        import vision.chunk_tracker as _ct
+        import vision.face_detect as _fd
+        import vision.sam3_tracker as _s3
+        # the real front end may sit behind a lazy proxy, so fingerprint its implementation modules explicitly
+        objs = [__import__(__name__, fromlist=["x"]), _contracts, _ct, _fd, _s3]
         try:
             objs.append(type(self.visual))
         except TypeError:
@@ -520,7 +524,8 @@ class ChunkedSpeechRunner:
             for lo, hi in sorted(res.activity_us.get(tid, [])):
                 a = max(spec.own_start, spec.win_start + int(round(lo * SPEECH_SR / 1e6)))
                 b = min(spec.own_end, spec.win_start + int(round(hi * SPEECH_SR / 1e6)))
-                if b <= a or a < pos:
+                a = max(a, pos)                       # clip (not drop) an interval overlapping the previous one
+                if b <= a:
                     continue
                 if a > pos:
                     out.append((pos, a, False))

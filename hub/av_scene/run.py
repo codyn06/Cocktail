@@ -53,8 +53,9 @@ class LazyPass:
 
     def get(self):
         if self._cm is None:
-            self._cm = self._provider()
-            self._obj = self._cm.__enter__()
+            cm = self._provider()
+            self._obj = cm.__enter__()          # only remember the context once it really entered
+            self._cm = cm
             self.opened += 1
         return self._obj
 
