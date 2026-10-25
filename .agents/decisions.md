@@ -44,6 +44,15 @@ status does not belong here (see `AGENTS.md` > Continuity).
   and needs an ffmpeg found via config, `COCKTAIL_FFMPEG`/`FFMPEG_BINARY`, PATH or `imageio_ffmpeg`. Deferred to later phases:
   off-axis DRR widening, cache-hit stage skipping, viewer FrameTransform/output-latency handling, real models.
 
+- `/audio/out` takes an optional `?layout=layers|stereo` query parameter (default `layers`, the Quest). `layers` frames are unity gain because the Quest applies inner/outer dB itself; the hub applies `SetVolumes` only for `stereo` clients (or with `--out-gains-in-layers`). Approved by Cody (PR #42); no change to `hub/protocol`.
+- Chosen voice routing (hub `events/selection.py`, `out/`, PR #42): select/stop/next/prev arrive as `InputEvent` on `/ingest/pose`
+  (ingest got `input_hooks`), not as `/events` commands. The choice is kept as a Tracker id, stable through slot swaps and
+  pauses; voice memory is complementary, not the key. next/prev cycle by world bearing, left to right, wrapping, bearingless
+  last, lost tracks skipped. A slot is routed only while its track is `tracking` and no other track was heard in it more
+  recently; the room (outer) is every other slot. Hop audio waits `--out-settle-s` (0.3 s) so the route is current. The hub
+  reads private Tracker state (`tracks[id].stream`, `_dup_of`) until the track owner adds a public accessor; `hub/track` is
+  untouched. Hardware-pending: real jitter/underrun behaviour, settle/jitter/queue-cap tuning, end-to-end delay.
+
 ## Open items
 - Each teammate: confirm their tool loads the roles/skills (README "pending runtime
   checks" and smoke checks).
