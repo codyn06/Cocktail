@@ -20,7 +20,8 @@ enrolled, never mint ids. Enrollment uses only the excerpt ``own & eligible & vo
 overlap audio is never double counted and off-axis audio never changes a centroid. At most
 ``max_active`` centroids stay resident; the rest spill to ``spill_dir`` as content-addressed
 npz files (resume-safe). A new id is minted only when its enrollable excerpt is at least
-``min_enroll_s`` long (otherwise status "none", reason "insufficient_eligible_audio").
+``min_enroll_s`` long (otherwise status "none", reason "insufficient_eligible_audio" when the eligibility mask
+removed voiced owned audio, or "short_utterance" when the speech is just too short; both abstain, neither mints an id).
 """
 from __future__ import annotations
 
@@ -303,7 +304,8 @@ class IdentityStore:
             if res.active_s[k] < MIN_MATCH_S:
                 res.status[k], res.reasons[k] = "none", "insufficient_audio"
                 continue
-            info[k] = {"emb": _unit(self.embed(audio)), "excerpt": audio[voiced & own & elig]}
+            info[k] = {"emb": _unit(self.embed(audio)), "excerpt": audio[voiced & own & elig],
+                       "cut": int((voiced & own).sum() - (voiced & own & elig).sum())}   # samples eligibility removed
         rows = sorted(info)
         ids = self._all_ids()
         S = np.zeros((len(rows), len(ids)))
@@ -360,7 +362,9 @@ class IdentityStore:
                     res.enrolled_s[_sid(i)] = res.enrolled_s.get(_sid(i), 0.0) + dur
             else:
                 if dur < self.min_enroll_s:
-                    res.status[k], res.reasons[k] = "none", "insufficient_eligible_audio"
+                    # say WHY: eligibility removed audio, or the utterance is simply too short to enroll a new speaker
+                    res.status[k], res.reasons[k] = "none", ("insufficient_eligible_audio" if info[k]["cut"] > 0
+                                                              else "short_utterance")
                     continue
                 i = self._next
                 self._next += 1

@@ -431,3 +431,11 @@ def test_run_matrix_module_does_not_import_torch():
             "assert 'torch' not in sys.modules, 'torch imported'" % str(EVAL))
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_abstention_is_not_an_identity_switch_but_still_costs_recall():
+    gt = {"A": [(0, 3000)]}
+    pred = [M.Seg("unresolved", 0, 1000, None, "unmatched", "visible", "unavailable", "short utterance"),
+            M.Seg("src_0", 1000, 3000, "tA", "matched", "visible", "ok", None)]
+    assert M.identity_switches(pred, gt)["total"] == 0 and M.fragmentation(pred, gt, min_overlap_samples=1)["total"] == 0
+    assert M.source_coverage([p for p in pred if p.source_id != "unresolved"], gt) < 1.0     # abstaining is not free

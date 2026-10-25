@@ -80,10 +80,18 @@ def test_timeline_segments_keep_status_fields_separate(baseline):
     # a visible person who is not speaking is refused with a reason, and that is not hidden behind an enum
     refused = [s for s in tse if s["stem_availability"] == "unavailable"]
     assert refused and all(s["refusal_reason"] for s in refused)
-    # chunk-owned segments tile the clip: per chunk exactly the owned span
+    # per chunk and source the segments tile exactly the owned span (sub-chunk resolution, no gap, no overlap)
+    split_seen = False
     for rec in res.records:
+        by_src: dict[str, list] = {}
         for s in json.loads((rec.speech_dir / "meta.json").read_text())["segments"]:
-            assert (s["start_sample"], s["end_sample"]) == (rec.spec.own_start, rec.spec.own_end)
+            by_src.setdefault(s["source_id"], []).append((s["start_sample"], s["end_sample"]))
+        for sid, spans in by_src.items():
+            spans.sort()
+            assert spans[0][0] == rec.spec.own_start and spans[-1][1] == rec.spec.own_end, (sid, rec.spec.index)
+            assert all(a1 == b0 for (_, a1), (b0, _) in zip(spans, spans[1:]))
+            split_seen |= len(spans) > 1
+    assert split_seen                                          # somebody started or stopped speaking inside a chunk
 
 
 def test_warm_cache_invokes_no_model_and_matches(baseline, tmp_path):

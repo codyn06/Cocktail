@@ -154,14 +154,27 @@ def cmd_run(args) -> int:
     if args.overlap_s is not None:
         cfg.chunking.overlap_s = args.overlap_s
     cfg.chunking.validate()
-    media = Path(args.media)
+    out = Path(args.out)
+    progress = lambda stage, i, n: print(f"chunk {i}/{n} {stage}", flush=True)   # noqa: E731
+    if args.mock_scene:
+        from .mock_deps import build_mock
+        sw.events = False                      # mock scenes contain speech only
+        scene, source, prov = build_mock(args.mock_scene, int((cfg.chunking.window_s - cfg.chunking.overlap_s) * 16000))
+        media_id = f"mock:{args.mock_scene}"
+        tier, note = "mocked/synthetic", "Synthetic scene with fake models on CPU. Not model output, not a device claim."
+        res = run_pipeline(source, prov, cfg, out, media_id=media_id, run_id=args.run_id or out.name,
+                           cache_dir=args.cache, evidence_tier=tier, evidence_note=note, code_revision=_git_rev(),
+                           progress=progress)
+        return _report_run(res, out)
+    if not (args.media or args.media_opt):
+        raise SystemExit("give a media file, or --mock-scene SPEC")
+    media = Path(args.media or args.media_opt)
     if not media.is_file():
         raise SystemExit(f"{media} not found")
     from replay.chunked import TorchcodecSource
     ff = locate_ffmpeg(args.ffmpeg)
     source = TorchcodecSource(media, max_side=args.max_side, ffmpeg_info=ff)
     media_id = hash_file(media)
-    out = Path(args.out)
     hw: dict = {}
     try:
         import torch
@@ -174,7 +187,11 @@ def cmd_run(args) -> int:
                        cache_dir=args.cache, evidence_tier="replayed",
                        evidence_note="Recorded clip, chunked offline run. Models are hardware-run only where the run "
                                      "report says so; not real time; no device validation.",
-                       code_revision=_git_rev(), hardware=hw)
+                       code_revision=_git_rev(), hardware=hw, progress=progress)
+    return _report_run(res, out)
+
+
+def _report_run(res, out) -> int:
     r = res.report
     print(f"bundle ready: {out.resolve()}")
     print(f"  chunks computed this run: {len(r['resume']['computed'])}, restored from cache: {r['resume']['restored']}")
@@ -241,7 +258,10 @@ def main(argv=None) -> int:
     p.add_argument("--ffmpeg", default=None)
     p.set_defaults(fn=cmd_fixture)
     p = sub.add_parser("run", help="Phase 4 chunked offline pipeline on a recorded clip (GPU; not real time)")
-    p.add_argument("media")
+    p.add_argument("media", nargs="?", default=None)
+    p.add_argument("--media", dest="media_opt", default=None, help="same as the positional MEDIA")
+    p.add_argument("--mock-scene", default=None, metavar="SPEC",
+                   help="CPU-only synthetic scene + fake models (e.g. pause_return or matrix:120); evidence=mocked")
     p.add_argument("--out", required=True)
     p.add_argument("--cache", default=None, help="stage cache dir (default OUT/_cache); reuse it to resume")
     p.add_argument("--config", default=None)
@@ -257,7 +277,7 @@ def main(argv=None) -> int:
     p.add_argument("--no-tse", action="store_true")
     p.add_argument("--no-events", action="store_true")
     p.add_argument("--no-residual", action="store_true")
-    p.add_argument("--no-identity", action="store_true", help="baseline: slot order not persistent across chunks")
+    p.add_argument("--no-identity", action="store_true", help="baseline only: slot ids are NOT persistent and stems can blend speakers at chunk boundaries")
     p.add_argument("--diarization", choices=["off", "auto", "on"], default=None)
     p.set_defaults(fn=cmd_run)
     args = ap.parse_args(argv)

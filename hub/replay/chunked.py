@@ -227,7 +227,7 @@ class ChunkedSpeechRunner:
     def __init__(self, source, models: SpeechModels | None, visual: VisualFrontEnd | None, cache: StageCache,
                  cfg: AvConfig, run_dir: str | Path, *, media_id: str, identity_factory=None, yaw_provider=None,
                  counters: Counters | None = None, fault: FaultHook | None = None,
-                 visual_revisions: dict | None = None):
+                 visual_revisions: dict | None = None, progress: Callable[[str, int, int], None] | None = None):
         self.src, self.cache, self.cfg = source, cache, cfg
         self.run_dir = Path(run_dir)
         self.media_id = media_id
@@ -235,6 +235,7 @@ class ChunkedSpeechRunner:
         self.models = None if models is None else count_models(models, self.counters)
         self.visual = visual
         self.fault = fault or (lambda name, k: None)
+        self.progress = progress or (lambda stage, i, n: None)
         self.visual_revisions = visual_revisions or {}
         self.yaw_provider = yaw_provider
         self._identity_factory = identity_factory
@@ -319,7 +320,7 @@ class ChunkedSpeechRunner:
             vc = self.visual.step(frames, pts, vstate)
             (d / "visual.json").write_text(json.dumps({
                 "pts_us": [int(p) for p in pts], "n_frames": int(len(frames)),
-                "boxes": {t: [None if b is None else [float(v) for v in b] for b in bs]
+                "boxes": {t: [None if b is None else [v.item() if hasattr(v, "item") else v for v in b] for b in bs]
                           for t, bs in vc.boxes_by_track.items()}}, sort_keys=True), encoding="utf-8")
             (d / "state_out.json").write_text(json.dumps(vc.state, sort_keys=True), encoding="utf-8")
             masks = {t: [(_mask_to_dict(m)) for m in ms] for t, ms in vc.masks_by_track.items()}
@@ -331,6 +332,7 @@ class ChunkedSpeechRunner:
         if not computed:
             self.counters.chunks_restored.append(("visual", spec.index))
         self.fault("visual:after", spec.index)
+        self.progress("visual", spec.index + 1, len(self.specs))
         return key, entry
 
     def _eligibility(self, track_id, spec: ChunkSpec):
@@ -368,6 +370,7 @@ class ChunkedSpeechRunner:
         if not computed:
             self.counters.chunks_restored.append(("speech", spec.index))
         self.fault("speech:after", spec.index)
+        self.progress("speech", spec.index + 1, len(self.specs))
         return key, entry
 
     def _produce_speech(self, d: Path, meta: dict, spec: ChunkSpec, ventry: Path, state_in: PipelineState,
@@ -450,34 +453,68 @@ class ChunkedSpeechRunner:
         us = lambda s: self.src.av_map.audio_start_us + sample_to_us(s, SPEECH_SR)           # noqa: E731
         segs: list[dict] = []
 
-        def seg(sid, **kw):
-            segs.append(TimelineSegment(source_id=sid, start_sample=spec.own_start, end_sample=spec.own_end,
-                                        start_us=us(spec.own_start), end_us=us(spec.own_end),
+        def seg(sid, a0=None, a1=None, **kw):
+            a0 = spec.own_start if a0 is None else a0
+            a1 = spec.own_end if a1 is None else a1
+            segs.append(TimelineSegment(source_id=sid, start_sample=a0, end_sample=a1,
+                                        start_us=us(a0), end_us=us(a1),
                                         chunk_index=spec.index, **kw).model_dump(mode="json"))
+
+        def pieces(tid):
+            """Owned region split by the track's speaking activity -> [(a, b, active)]. A person is only claimed
+            where they are actually speaking; the rest of the chunk is NOT attributed to them (sub-chunk
+            resolution, otherwise one spoken word would highlight a whole 2 s region)."""
+            out, pos = [], spec.own_start
+            for lo, hi in sorted(res.activity_us.get(tid, [])):
+                a = max(spec.own_start, spec.win_start + int(round(lo * SPEECH_SR / 1e6)))
+                b = min(spec.own_end, spec.win_start + int(round(hi * SPEECH_SR / 1e6)))
+                if b <= a or a < pos:
+                    continue
+                if a > pos:
+                    out.append((pos, a, False))
+                out.append((a, b, True))
+                pos = b
+            if pos < spec.own_end:
+                out.append((pos, spec.own_end, False))
+            return out
         for k, vid in enumerate(voice_ids):
             a = assoc_by_voice.get(vid)
             st = slots_status[k]
-            if st == "none" and not reasons.get(k, "").startswith("insufficient_eligible"):
+            if st == "none" and reasons.get(k, "") == "insufficient_audio":
                 continue                                           # silent slot: no claim, no segment
-            if st == "none":                                       # audible but ineligible to enroll: say so, abstain
+            if st == "none":                                       # audible but cannot be enrolled: say why, abstain
+                why = ("enrollment_blocked: insufficient_eligible_audio" if reasons.get(k) == "insufficient_eligible_audio"
+                       else f"identity_not_established: {reasons.get(k, '')} (too little audio to enroll a new speaker)")
                 seg("unresolved", track_id=None, association_status=a.status if a else "unmatched",
                     visibility=a.visibility if a else "unknown", stem_availability="unavailable",
-                    refusal_reason=f"enrollment_blocked: {reasons.get(k, '')}", identity_confidence="none", slot=k)
+                    refusal_reason=why, identity_confidence="none", slot=k)
                 continue
             if slot_src[k] is None:                                # ambiguous identity: abstain, never blend
                 seg("unresolved", track_id=None, association_status="ambiguous", visibility=a.visibility if a else "unknown",
                     stem_availability="unavailable", refusal_reason=f"identity_ambiguous: {reasons.get(k, '')}".strip(": "),
                     identity_confidence="ambiguous", slot=k)
                 continue
-            seg(slot_src[k], track_id=a.track_id if a else None, association_status=a.status if a else "unmatched",
-                visibility=a.visibility if a else "unknown", stem_availability="ok",
-                refusal_reason=None, identity_confidence="new" if st == "new" else "resolved", slot=k)
+            conf = "new" if st == "new" else "resolved"
+            if a is not None and a.status == "matched" and a.track_id:
+                for p0, p1, on in pieces(a.track_id):
+                    seg(slot_src[k], p0, p1, track_id=a.track_id if on else None,
+                        association_status="matched" if on else "unmatched", visibility=a.visibility,
+                        stem_availability="ok", refusal_reason=None, identity_confidence=conf, slot=k)
+            else:
+                seg(slot_src[k], track_id=a.track_id if a else None, association_status=a.status if a else "unmatched",
+                    visibility=a.visibility if a else "unknown", stem_availability="ok",
+                    refusal_reason=None, identity_confidence=conf, slot=k)
         for tid, (stream_id, ext) in res.selection.items():
             vis_cov = res.info.get("tracks", {}).get(tid, {}).get("face_coverage", 0.0)
             visible = "visible" if vis_cov > 0 else "unknown"
             if ext.status in ("ok", "degraded") and f"tse:{tid}" in streams:
-                seg(f"tse:{tid}", track_id=tid, association_status="matched", visibility=visible,
-                    stem_availability=ext.status, refusal_reason=ext.reason if ext.status == "degraded" else None)
+                for p0, p1, on in pieces(tid):
+                    if on:
+                        seg(f"tse:{tid}", p0, p1, track_id=tid, association_status="matched", visibility=visible,
+                            stem_availability=ext.status, refusal_reason=ext.reason if ext.status == "degraded" else None)
+                    else:
+                        seg(f"tse:{tid}", p0, p1, track_id=tid, association_status="unmatched", visibility=visible,
+                            stem_availability="unavailable", refusal_reason="target inactive in this part of the chunk")
             else:
                 amb = ext.reason.startswith("ambiguous")
                 seg(f"tse:{tid}", track_id=tid, association_status="ambiguous" if amb else "unmatched",

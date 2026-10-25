@@ -237,10 +237,20 @@ def _dominant_sequence(segs: Sequence[Seg], active: Sequence[Interval], rank: Ma
     return seq
 
 
+ABSTAIN_IDS = frozenset({"unresolved"})
+
+
+def _identified(pred: Iterable) -> list:
+    """Segments that carry an acoustic identity. An ABSTENTION ("unresolved": identity ambiguous, blocked, or too
+    little audio to enroll) is not an identity, so abstaining and later resolving is not a speaker swap; abstained time
+    still counts against `source_coverage` / `active_speaker_recall`, which is what keeps abstaining from being free."""
+    return [s for s in as_segs(pred) if s.source_id not in ABSTAIN_IDS]
+
+
 def identity_switches(pred: Iterable, gt: Mapping[str, Sequence[Interval]], *, min_run_samples: int = 0) -> dict:
     """Times the predicted source id covering a ground-truth speaker changes while that speaker is active.
     Runs shorter than `min_run_samples` are ignored (boundary slivers). Gaps without a segment are skipped."""
-    segs = as_segs(pred)
+    segs = _identified(pred)
     jac = _jaccard(segs, gt)
     per, runs = {}, {}
     for g, iv in gt.items():
@@ -263,7 +273,7 @@ def fragmentation(pred: Iterable, gt: Mapping[str, Sequence[Interval]], *, min_o
     """Distinct predicted ids per ground-truth speaker beyond the first. An id counts for the one speaker it follows
     most (Jaccard), so cross-talk does not charge both speakers; ids with < `min_overlap_samples` of overlap are
     boundary slivers and are not counted."""
-    segs = as_segs(pred)
+    segs = _identified(pred)
     ov, jac = _overlap_matrix(segs, gt), _jaccard(segs, gt)
     home: dict[str, str] = {}                                          # each id belongs to the speaker it follows most
     for g, row in jac.items():

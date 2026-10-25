@@ -129,6 +129,15 @@ def test_new_id_needs_eligible_audio():
     assert out.status[0] == "none" and out.reasons[0] == "insufficient_eligible_audio"
 
 
+def test_short_utterance_abstains_without_blaming_eligibility():
+    st = new_store()
+    short = SlotInput(voice("A", 0), (0, WIN), eligible=None)
+    short.audio = short.audio.copy()
+    short.audio[SR // 2 + SR // 4:] = 0.0                      # 0.75 s of voiced owned audio < min_enroll_s
+    out = st.assign_chunk(0, {0: short})
+    assert out.status[0] == "none" and out.reasons[0] == "short_utterance" and not out.mapping and not out.new_ids
+
+
 def test_enrolled_seconds_not_duplicated():
     outs, _ = run(new_store(), [["A", "B"]] * 6)
     total = sum(sum(o.enrolled_s.values()) for o in outs)

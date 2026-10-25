@@ -118,4 +118,14 @@ def real_providers(cfg: AvConfig, *, device: str = "cuda", run_tag: str = "run",
         from separate.pyannote_diar import load_pipeline
         return load_pipeline()          # raises on gated/offline/bad token: run_pipeline records that as `failed`
 
-    return Providers(visual=visual, speech=speech, events=events, diarization=diar)
+    from vision.chunk_tracker import empty_state as _empty_visual_state
+
+    # static revisions: cache keys must be computable without loading a checkpoint (warm runs load nothing)
+    vrev = {"sam3": _ver("sam3"), "s3fd": "face_detect.FaceDetector", "concept": "person"}
+    srev = {"mossformer2": "MossFormer2_SS_16K", "talknet": "talknet",
+            "av_tse": "AV_MossFormer2_TSE" if cfg.switches.use_tse else "off",
+            "wavlm_sv": "microsoft/wavlm-base-plus-sv", "clearvoice": _ver("clearvoice"), "pkgs": _ver("torch")}
+    erev = {"sam_audio": "facebook/sam-audio-small-tv", "sam3": _ver("sam3"),
+            "ast": "MIT/ast-finetuned-audioset-10-10-0.4593", "judge": "facebook/sam-audio-judge", "clap": "laion_clap"}
+    return Providers(visual=visual, speech=speech, events=events, diarization=diar, visual_revisions=vrev,
+                     speech_revisions=srev, event_revisions=erev, visual_empty_state=_empty_visual_state)

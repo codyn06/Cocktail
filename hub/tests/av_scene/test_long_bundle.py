@@ -166,3 +166,20 @@ def test_range_server_serves_long_bundle_files_and_viewer(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_server_never_serves_run_internals_inside_the_output_folder(tmp_path):
+    from render.viewer import serve_in_thread
+    (tmp_path / "_cache").mkdir()
+    (tmp_path / "_cache" / "secret.bin").write_bytes(b"x")
+    (tmp_path / "ok.txt").write_text("fine")
+    srv, _ = serve_in_thread(tmp_path)
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=10)
+        for path, want in (("/ok.txt", 200), ("/_cache/secret.bin", 404), ("/%5Fcache/secret.bin", 404)):
+            c.request("GET", path)
+            r = c.getresponse()
+            r.read()
+            assert r.status == want, path
+    finally:
+        srv.shutdown()

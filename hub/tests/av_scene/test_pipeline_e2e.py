@@ -24,7 +24,9 @@ def providers(ef=None):
     return Providers(
         visual=lambda: contextlib.nullcontext((fk.FakeVisual(), {"fake": "v1"})),
         speech=lambda: contextlib.nullcontext(fk.speech_models()),
-        events=lambda: contextlib.nullcontext((ad, fk.fake_classifier, {"ast": "fake1"}))), ef
+        events=lambda: contextlib.nullcontext((ad, fk.fake_classifier, {"ast": "fake1"})),
+        visual_revisions={"fake": "v1"}, speech_revisions={"mf2": "r1"}, event_revisions={"ast": "fake1"},
+        visual_empty_state=fk.FakeVisual().empty_state), ef
 
 
 def go(tmp, name="out", fault=None, ef=None, cache=None, cfg=None):
@@ -207,3 +209,21 @@ def test_diarization_activity_is_clip_time_even_with_an_audio_offset():
     from av_scene.run import identity_activity
     metas = [{"segments": [{"source_id": "src_0", "stem_availability": "ok", "start_us": 5_000_000, "end_us": 7_000_000}]}]
     assert identity_activity(metas, audio_start_us=1_500_000)["src_0"] == [(3_500_000, 5_500_000)]
+
+
+def test_fully_warm_cache_loads_no_model_pass_at_all(base):
+    d, res, _ = base
+    cold = res.report["model_passes_opened"]
+    assert cold["visual"] == 1 and cold["speech"] == 1 and cold["events"] == 1          # a cold run loads each pass once
+    res2, _ = go(d, name="out_warm2", cache=d / "cache")
+    assert res2.report["model_passes_opened"] == {"visual": 0, "speech": 0, "events": 0}
+    assert not res2.counters.calls and not res2.counters.chunks_computed
+
+
+def test_partial_invalidation_loads_only_the_pass_that_has_work(base, tmp_path):
+    d, _, _ = base
+    cache = tmp_path / "cache"
+    shutil.copytree(d / "cache", cache)
+    shutil.rmtree(cache / "event_window")                                              # only the events pass has work
+    res, _ = go(tmp_path, name="p", cache=cache)
+    assert res.report["model_passes_opened"] == {"visual": 0, "speech": 0, "events": 1}

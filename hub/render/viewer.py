@@ -151,6 +151,11 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
 
     def send_head(self):
         self._range_left = None
+        # run internals (`_cache`, `_work`, ...) live inside the output folder but are not part of the bundle
+        from urllib.parse import unquote, urlsplit
+        if any(seg.startswith("_") for seg in unquote(urlsplit(self.path).path).split("/")):
+            self.send_error(404, "Not part of the bundle")
+            return None
         rng = self.headers.get("Range")
         path = self.translate_path(self.path)
         if not rng or not os.path.isfile(path):

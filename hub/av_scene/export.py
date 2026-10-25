@@ -97,6 +97,14 @@ def export_bundle(out_dir: str | Path, *, runner: ChunkedSpeechRunner, speech: S
     for sid, k in sorted(kinds.items()):
         wr.register_source(sid, k["kind"], k["role"], k["label"])
     wr.register_source("unresolved", "speech", "diagnostic", "identity ambiguous: abstained, no stem")
+    # a source that was refused in every chunk (e.g. a silent bystander's tse:<track>) has timeline rows but no audio
+    for m in metas:
+        for s in m["segments"]:
+            sid = s["source_id"]
+            if sid not in kinds and sid != "unresolved" and sid not in getattr(wr, "_sources", {}):
+                wr.register_source(sid, "tse" if sid.startswith("tse:") else "speech",
+                                   "diagnostic" if sid.startswith("tse:") else "default",
+                                   "refused in every chunk: no stem produced" if sid.startswith("tse:") else "")
 
     # ---- speech audio, one stitched segment at a time
     for rec in speech.records:
@@ -133,13 +141,17 @@ def export_bundle(out_dir: str | Path, *, runner: ChunkedSpeechRunner, speech: S
     # ---- events: sparse stems, zero-filled by omission
     segs = [s for m in metas for s in m["segments"]]
     if events is not None:
+        starts = []
         for ref in events.refs:
+            meta = json.loads((ref.entry / "event.json").read_text(encoding="utf-8"))
+            starts.append(int(round(meta["window"][0] * SAM_RATE)))
+        for i, ref in enumerate(events.refs):
             wr.register_source(ref.source_id, "event", "default", "")
             if ref.has_stem:
-                meta = json.loads((ref.entry / "event.json").read_text(encoding="utf-8"))
-                lo = meta["window"][0]
-                wr.add_audio_segment(ref.source_id, "event", "default", SAM_RATE, None, int(round(lo * SAM_RATE)),
-                                     np.load(ref.entry / "stem.npy"))
+                stem = np.load(ref.entry / "stem.npy")
+                if i + 1 < len(starts):                  # resampling can round a stem 1 sample long: never overlap
+                    stem = stem[: max(0, starts[i + 1] - starts[i])]
+                wr.add_audio_segment(ref.source_id, "event", "default", SAM_RATE, None, starts[i], stem)
         segs += events.timeline
         manifest.long_run.events_index = "timeline/index.json"
 
