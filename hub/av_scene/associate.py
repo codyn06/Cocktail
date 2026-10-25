@@ -12,9 +12,8 @@ from __future__ import annotations
 from typing import Any, Literal, Mapping
 
 import numpy as np
-from pydantic import BaseModel
 
-from .schemas import Association, ComponentScore
+from .schemas import Association, ComponentScore, Extraction
 
 FPS = 25
 MIN_CORR = 0.35
@@ -27,14 +26,6 @@ ACT_FLOOR = 1e-3               # ...and peak must exceed this absolute floor
 SWAP_MARGIN = 0.3              # evidence needed to accept a mapping change
 EMBED_SAME = 0.7               # stream embedding sim that supports identity
 MAX_SEPARABLE_TALKERS = 2      # MossFormer2_SS limit
-
-
-class Extraction(BaseModel):
-    """Local mirror of the spec'd Extraction (not yet in schemas.py)."""
-    status: Literal["ok", "degraded", "unavailable", "not_attempted"]
-    method: str = "track_stream_association"
-    stem_source_id: str | None = None
-    reason: str = ""
 
 
 def _us(frame: float, fps: int) -> int:
@@ -186,7 +177,7 @@ def select_for_track(track_id: str, associations: list[Association],
     Never falls back to the loudest/dominant stream.
     """
     def no(reason: str):
-        return None, Extraction(status="unavailable", reason=reason)
+        return None, Extraction(method="track_stream_association", status="unavailable", reason=reason)
 
     if target_active is False:
         return no("target inactive")
@@ -199,10 +190,10 @@ def select_for_track(track_id: str, associations: list[Association],
     best = max(ok, key=lambda a: a.score if a.score is not None else -1.0)
     if n_suspected_talkers is not None and n_suspected_talkers > MAX_SEPARABLE_TALKERS:
         return best.source_id, Extraction(
-            status="degraded", stem_source_id=best.source_id,
+            method="track_stream_association", status="degraded", stem_source_id=best.source_id,
             reason=f"{n_suspected_talkers} talkers suspected; separator supports "
                    f"{MAX_SEPARABLE_TALKERS}")
-    return best.source_id, Extraction(status="ok", stem_source_id=best.source_id)
+    return best.source_id, Extraction(method="track_stream_association", status="ok", stem_source_id=best.source_id)
 
 
 def continuity(prev: list[Association], curr: list[Association],

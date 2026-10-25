@@ -246,6 +246,19 @@ class SceneSource(_Model):
     visibility: Visibility = "unknown"
     association_revision: int = 0
     current_association_id: str | None = None
+    label_confidence: float | None = None          # None == no classifier ran
+    activity_us: list[tuple[int, int]] = Field(default_factory=list)
+    extraction: "Extraction | None" = None
+
+
+class Extraction(_Model):
+    """Whether a listenable stream exists for a source, and how it was made.
+
+    A visual mask or a label is never extraction evidence on its own."""
+    status: Literal["ok", "degraded", "unavailable", "not_attempted"]
+    method: str = ""                               # e.g. "mossformer2_ss+talknet", "av_tse"
+    stem_source_id: str | None = None
+    reason: str = ""
 
 
 # ---------------------------------------------------------------- audio results
@@ -315,6 +328,9 @@ class RunManifest(_Model):
     associations: list[Association] = Field(default_factory=list)
     stems: list[StemResult] = Field(default_factory=list)
     remainders: list[RemainderResult] = Field(default_factory=list)
+
+
+SceneSource.model_rebuild()
 
 
 def canonical_json(obj) -> str:
