@@ -12,6 +12,7 @@ import uvicorn
 import protocol as p
 from ingest import IngestState, create_app
 from events import install_events
+from out import AudioOutConfig, install_audio_out
 
 from .live import LiveSeparator
 from .models import SoundLabeler, VoiceSeparator
@@ -25,6 +26,10 @@ ap.add_argument("--voice-memory", action="store_true",
                 help="use optional WavLM speaker embeddings to retain voice slots across pauses")
 ap.add_argument("--locate-method", choices=["level", "tdoa"], default="level",
                 help="direction finding: level (head shadow) or tdoa (inter-mic delay, calibrated; Quest 3S)")
+ap.add_argument("--out-settle-s", type=float, default=0.3,
+                help="hold separated audio this long before /audio/out so the tracker has caught up")
+ap.add_argument("--out-gains-in-layers", action="store_true",
+                help="hub applies inner/outer dB in the Quest 'layers' layout (default: the Quest applies them)")
 ap.add_argument("--merge-ild-db", type=float, default=0.0,
                 help="one-talker merge threshold in dB; 0 = off. Calibrate per device (4.5 = simulator)")
 a = ap.parse_args()
@@ -44,7 +49,10 @@ except ImportError:
     locator = None
 worker.start()
 app = create_app(state)
-install_events(app, locator)
+events_state = install_events(app, locator)
+audio_out = install_audio_out(app, events_state, AudioOutConfig(
+    settle_s=a.out_settle_s, apply_gains_in_layers=a.out_gains_in_layers))
+worker.listeners.append(audio_out.on_chunks)
 
 
 @app.get("/sources")
