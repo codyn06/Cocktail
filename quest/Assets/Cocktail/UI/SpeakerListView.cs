@@ -82,7 +82,15 @@ namespace Cocktail.Ui
         public void Tick(IReadOnlyList<SpeakerRow> rows, int hover, float dt)
         {
             int n = rows.Count;
-            if (n == 0) { Hide(); return; }
+            if (n == 0)
+            {
+                // nobody to choose yet: an empty box (one row tall) so the picker is always on screen
+                Hide();
+                Color empty = t.lookPetrol; empty.a = t.lookPlate;
+                _plateH = 0f;
+                _plate.SetActive(true); _plate.SetSize(2f * _pad + _blockW + _nameGap + _nameW, 2f * _pad + _rowH); _plate.SetColor(empty);
+                return;
+            }
             int shown = Mathf.Min(n, MaxRows);
             int anchor = hover >= 0 ? hover : 0;
             int top = Mathf.Clamp(anchor - shown / 2, 0, n - shown);

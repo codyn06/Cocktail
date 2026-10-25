@@ -486,6 +486,10 @@ namespace Cocktail.Ui
         /// <summary>Speaking = labelled speech, tracking and loud enough.</summary>
         bool IsSpeaking(Source s) => s.Label == "speech" && s.State == TrackState.Tracking && s.LevelDb >= theme.speakingMinDb;
 
+        /// <summary>A speech source stays in the picker while the hub still knows it (tracking or last seen), not only while it is loud, and the chosen one always stays.</summary>
+        bool Listed(Entry en, Source s, string selId) =>
+            _time - en.lastSpeaking <= theme.speakerHoldSeconds || s.SourceId == selId || (s.Label == "speech" && s.State != TrackState.Lost);
+
         void TickSpeakers(float dt, Vector3 headPosL, float headYaw)
         {
             // nothing is chosen automatically: every talking speaker is a row in the picker, the wearer chooses one
@@ -498,7 +502,7 @@ namespace Cocktail.Ui
             {
                 var s = en.src;
                 if (IsSpeaking(s)) en.lastSpeaking = _time;
-                bool visible = _time - en.lastSpeaking <= theme.speakerHoldSeconds;
+                bool visible = Listed(en, s, selId);
                 float rel = UiMath.NormalizeDeg(s.BearingDeg.Value - headYaw);
                 float relElev = (s.ElevationDeg ?? en.elevFallback) - headPitch;
                 bool inView = Mathf.Abs(rel) <= theme.speakerViewHalfDeg && Mathf.Abs(relElev) <= theme.speakerViewHalfVertDeg;
@@ -532,7 +536,7 @@ namespace Cocktail.Ui
             {
                 var s = en.src;
                 if (IsSpeaking(s)) en.lastSpeaking = _time;
-                bool visible = _time - en.lastSpeaking <= theme.speakerHoldSeconds;
+                bool visible = Listed(en, s, selId);
                 int num = NumberFor(s.SourceId, visible);
                 Color own = num > 0 ? SpeakerColor(num) : default;
                 bool chosen = s.SourceId == selId;
