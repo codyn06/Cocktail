@@ -462,7 +462,7 @@ Preflight must report capabilities individually: CPU math, decoding, SAM 3 image
 
 ## 12. Build sequence, ownership and acceptance
 
-The integration orchestrator owns `av_scene/`, internal shared contracts, this specification and coordination of root configuration. Respect PRD ownership for `ingest/`, `separate/`, `locate/`, `vision/`, `who/` and `replay/`. One editing agent per worktree; at most two delegated tasks active. A shared-interface change must have an agreed integration owner before parallel implementation.
+The integration orchestrator owns `av_scene/`, internal shared contracts, this specification and coordination of root configuration. Respect PRD ownership for `ingest/`, `separate/`, `locate/`, `vision/`, `who/` and `replay/`. One editing agent per worktree; delegation concurrency follows `AGENTS.md`. A shared-interface change must have an agreed integration owner before parallel implementation.
 
 ### Phase 0 — Research and executable environment report
 

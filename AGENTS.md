@@ -40,7 +40,7 @@ Do not assume:
      return); subagents run at low effort.
    - Never block on long commands: run anything expected to take more than about
      1 minute (tests, builds, model runs, installs, evals) in the background and watch
-     it (Claude Code: `run_in_background` + `Monitor` or completion notification), not
+     it (Claude Code: `run_in_background` + `Monitor`; other tools: their background/async equivalent), not
      foreground waits or sleep-polling. Subagents follow the same rule.
    - Use the wait time: while commands or agents run, plan the next wave, spawn tasks
      whose dependencies are met, and integrate or check returned results. Idle only
