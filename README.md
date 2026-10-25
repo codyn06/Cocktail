@@ -6,6 +6,8 @@ room's sound into separate labeled sources, works out where each one is, and sen
 chosen sound back to the headset in 3D. Plan: [`docs/QUEST_PRD.txt`](docs/QUEST_PRD.txt). Architecture and decisions:
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
 Live progress: [`docs/STATUS.md`](docs/STATUS.md).
+Research and implementation proposal for autonomous audio-visual discovery:
+[`docs/AV_SOUND_DISCOVERY_SPEC.md`](docs/AV_SOUND_DISCOVERY_SPEC.md).
 
 > **Status (2026-10-24):** the hub runs end to end on simulated data: ingest, a mock
 > headset, live separation with labels, and direction finding (`GET /sources`). The Quest
@@ -235,6 +237,10 @@ powershell -ExecutionPolicy Bypass -File quest/tools/run_locate_take.ps1
 A voice tells you when to turn your head; it prints PASS/FAIL per take. The pieces can also run
 separately: `quest/tools/record_session.py` records (audio + head pose, to `hub/recordings/`,
 gitignored), and `uv run python -m locate.real_eval recordings/<take>` (from `hub/`) scores.
+
+To compare every direction method on all labeled takes at once (median / 90th-percentile
+error, front/back, seconds to lock, whether the confidence is honest), from `hub/`:
+`uv run python -m locate.bench recordings` (`--json out.json` saves the numbers).
 
 ### Quest app
 
