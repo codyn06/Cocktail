@@ -26,6 +26,10 @@ namespace Cocktail.UserInput
         [SerializeField] OVRCameraRig rig;
         [SerializeField] RayMode rayMode = RayMode.HeadGaze;
         [SerializeField] bool usePinch = true;
+        /// <summary>false = the UI sends every select itself (by source id); trigger and pinch then send nothing from here. Stop, next and prev are unaffected.</summary>
+        [System.NonSerialized] public bool autoSelect = true;
+        /// <summary>Raised after every input event sent (action, source id or null).</summary>
+        public event System.Action<ProtoAction, string> OnSent;
 
         public long Sent { get; private set; }
         public string LastSent = "-";
@@ -65,7 +69,7 @@ namespace Cocktail.UserInput
                 }
             }
 
-            if (select) SendSelect(pointer, modality);
+            if (select && autoSelect) SendSelect(pointer, modality);
             // Right controller only (one controller is enough):
             //   front trigger = select, side trigger (grip) or B = stop, A = replay,
             //   joystick flick right/left = next/prev. Left X/Y/stick-click still work if present.
@@ -140,6 +144,7 @@ namespace Cocktail.UserInput
                 RayDir = rayDir.HasValue ? new[] { rayDir.Value.x, rayDir.Value.y, rayDir.Value.z } : null,
             });
             Sent++;
+            OnSent?.Invoke(action, sourceId);
             LastSent = action + (sourceId != null ? " " + sourceId : "") + " (" + modality + ")";
             Debug.Log("[InputSender] " + LastSent);
         }
