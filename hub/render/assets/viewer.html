@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cocktail AV Inspector</title>
+<link rel="stylesheet" href="assets/viewer.css">
+</head>
+<body>
+<header>
+  <h1>Cocktail AV inspector</h1>
+  <span id="tier" class="tier" title="Evidence label for everything in this bundle">loading…</span>
+</header>
+<div id="banner" role="status"></div>
+<main>
+  <section class="stage-col" aria-label="Video">
+    <div class="stage-wrap">
+      <canvas id="stage" width="960" height="720" aria-label="Scene with mask overlays; click an object to select its sound"></canvas>
+      <video id="video" muted playsinline preload="auto" hidden></video>
+    </div>
+    <div class="transport">
+      <button id="play" type="button" aria-label="Play or pause">Play</button>
+      <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
+      <span id="time" class="mono">0.00 / 0.00 s</span>
+    </div>
+    <div id="candidates" class="candidates" hidden></div>
+    <p id="hint" class="muted">Click a highlighted or idle object to hear its stem. Overlapping masks list every candidate.</p>
+  </section>
+  <section class="panel" aria-label="Mix">
+    <fieldset>
+      <legend>Playback</legend>
+      <label><input type="radio" name="mode" value="stems" checked> Separated stems</label>
+      <label><input type="radio" name="mode" value="mixture"> Original mixture</label>
+      <label><input type="checkbox" id="residual"> Residual (projection proxy)</label>
+      <button id="reset" type="button">Reset mix</button>
+      <p class="muted small">One shared audio clock drives every stem and the picture. The embedded video soundtrack is always muted so nothing plays twice.</p>
+    </fieldset>
+    <h2>Sources</h2>
+    <ul id="sources" class="sources"></ul>
+    <h2>Evidence</h2>
+    <div id="inspector" class="inspector muted">Select a source or an object.</div>
+    <h2>Metrics</h2>
+    <div id="metrics" class="muted small">no metrics.json</div>
+  </section>
+</main>
+<script src="assets/viewer.js"></script>
+</body>
+</html>

@@ -106,3 +106,33 @@ def test_mono_shapes_unchanged_stems_and_multichannel_downmix():
         raw_waveform_remainder(s, [stem[:-1]])
     r, _ = raw_waveform_remainder(stereo, [stem])
     assert r.shape == (N,)                                                  # explicit mono, no channel broadcast
+
+
+@pytest.mark.parametrize("basis", ["projection", "power_subtraction"])
+def test_both_bases_agree_on_phase_rotation_and_omitted_source(basis):
+    s = clean_source()
+    stem = rotate_phase(s, ROTATIONS["quadrature"][0])
+    assert find_unexplained_events(s, [stem], FS, CFG, basis=basis)[0] == []
+    rng = np.random.default_rng(5)
+    burst = np.zeros(N)
+    a, b = int(1.2 * FS), int(1.5 * FS)
+    burst[a:b] = signal.sosfilt(signal.butter(6, [3000, 5500], "bandpass", fs=FS, output="sos"),
+                                rng.standard_normal(b - a)) * np.hanning(b - a)
+    burst *= 0.25 / np.max(np.abs(burst))
+    assert len(find_unexplained_events(s + burst, [stem], FS, CFG, basis=basis)[0]) == 1
+    with pytest.raises(ValueError):
+        find_unexplained_events(s, [stem], FS, CFG, basis="nope")
+
+
+def test_coherent_mask_partitions_do_not_create_unexplained_events():
+    """Stems that are soft-masked copies of the mixture add coherently (|S_k| = M_k |X|)."""
+    rng = np.random.default_rng(8)
+    a = clean_source()
+    b = signal.sosfilt(signal.butter(4, [150, 2000], "bandpass", fs=FS, output="sos"), rng.standard_normal(N)) * 0.1
+    mix = a + b
+    from replay.residual import istft, stft
+    X, A, B = stft(mix, CFG), np.abs(stft(a, CFG)) ** 2, np.abs(stft(b, CFG)) ** 2
+    Ma = A / (A + B + 1e-12)
+    sa, sb = istft(X * Ma, CFG, N), istft(X * (1 - Ma), CFG, N)
+    events, proj = find_unexplained_events(mix, [sa, sb], FS, CFG)
+    assert events == [] and proj.projection_error_db < -25.0

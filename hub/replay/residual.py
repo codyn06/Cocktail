@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from scipy import signal
+from scipy.ndimage import uniform_filter
 from scipy.optimize import lsq_linear
 
 
@@ -35,6 +36,8 @@ class ResidualConfig:
     event_threshold_db: float = -20.0   # unexplained frame energy vs. the loudest mixture frame
     event_min_s: float = 0.08
     event_merge_gap_s: float = 0.05
+    mask_exponent: float = 1.0               # 1 = amplitude-ratio masks (coherence-safe), 2 = power Wiener
+    power_smooth: tuple[int, int] = (5, 5)   # (bins, frames) averaging before comparing powers
     floor_power: float = 1e-12
 
 
@@ -75,14 +78,15 @@ def istft(z: np.ndarray, cfg: ResidualConfig, n: int) -> np.ndarray:
 
 @dataclass
 class Projection:
-    unexplained_power: np.ndarray            # (bins, frames)
+    unexplained_power: np.ndarray            # (bins, frames) max(0, |X|^2 - sum alpha |S|^2), smoothed
     residual_stft: np.ndarray                # (bins, frames) complex: X - sum M_k X
     mask_sum_max: float                      # max over bins of sum_k M_k (<= 1 by construction)
-    alpha: np.ndarray                        # (K, bands, frames) bounded gains
+    alpha: np.ndarray                        # (K, bands, frames) bounded gains used by the masks
     projection_error_db: float               # energy of R relative to energy of X
     proxy_waveform: np.ndarray               # istft of R, labelled a projection proxy
     sample_rate: int
     meta: dict = field(default_factory=dict)
+    residual_power: np.ndarray | None = None  # (bins, frames) |R|^2, smoothed: the mask-consistent remainder
 
 
 def _band_edges(n_bins: int, n_bands: int) -> np.ndarray:
@@ -125,40 +129,57 @@ def fit_gains(Px: np.ndarray, Ps: np.ndarray, cfg: ResidualConfig) -> tuple[np.n
     return per_frame, edges
 
 
+def _expand(alpha: np.ndarray, edges: np.ndarray, n_bins: int) -> np.ndarray:
+    out = np.zeros((alpha.shape[0], n_bins, alpha.shape[2]))
+    for j in range(len(edges) - 1):
+        k0, k1 = edges[j], max(edges[j + 1], edges[j] + 1)
+        out[:, k0:k1, :] = alpha[:, j:j + 1, :]
+    out[:, edges[-1]:, :] = alpha[:, -1:, :]
+    return out
+
+
 def project_remainder(x: np.ndarray, stems: list[np.ndarray], rate: int,
                       cfg: ResidualConfig | None = None) -> Projection:
     """Phase-projected STFT remainder and non-negative unexplained power for mono stems.
 
-    Wiener-style masks M_k = alpha_k |S_k|^2 / max(|X|^2, sum_j alpha_j |S_j|^2) so that
-    sum_k M_k <= 1; known-source masks are NOT normalised to sum to one, because the source
-    inventory may be incomplete."""
+    Generalised Wiener masks  M_k = alpha_k |S_k|^e / max(|X|^e, sum_j alpha_j |S_j|^e)  so that
+    sum_k M_k <= 1, then R = X - sum_k M_k X. Known-source masks are NOT normalised to sum to one,
+    because the source inventory may be incomplete.
+
+    e = `mask_exponent`. e = 2 is the power-domain Wiener form and assumes uncorrelated source
+    powers. The default e = 1 (amplitude ratio) also handles stems that are COHERENT partitions of
+    the mixture (|S_k| = M_k |X|, powers do not add), which is what mask-based separators produce.
+    `unexplained_power` is the separate power-subtraction form max(0, |X|^2 - sum alpha |S|^2) with
+    its own power-domain gains; it over-reports on coherent partitions (kept for comparison)."""
     cfg = cfg or ResidualConfig()
     xm = downmix(x)
     sm = [downmix(s) for s in stems]
     if any(len(s) != len(xm) for s in sm):
         raise ValueError("stems must be aligned and the same length as the mixture")
     X = stft(xm, cfg)
-    Px = np.abs(X) ** 2
+    Ax = np.abs(X)
+    smooth = lambda a: uniform_filter(a, cfg.power_smooth, mode="nearest")  # noqa: E731
     if not sm:
-        return Projection(Px, X, 0.0, np.zeros((0, 0, X.shape[1])), 0.0, xm.copy(), rate, {"stems": 0})
-    S = np.stack([np.abs(stft(s, cfg)) ** 2 for s in sm])
-    alpha, edges = fit_gains(Px, S, cfg)
-    A_bins = np.zeros((len(sm), Px.shape[0], Px.shape[1]))
-    for j in range(len(edges) - 1):
-        k0, k1 = edges[j], max(edges[j + 1], edges[j] + 1)
-        A_bins[:, k0:k1, :] = alpha[:, j:j + 1, :]
-    A_bins[:, edges[-1]:, :] = alpha[:, -1:, :]
-    explained = A_bins * S
+        return Projection(smooth(Ax ** 2), X, 0.0, np.zeros((0, 0, X.shape[1])), 0.0, xm.copy(), rate, {"stems": 0},
+                          smooth(Ax ** 2))
+    As = np.stack([np.abs(stft(s, cfg)) for s in sm])
+    e = cfg.mask_exponent
+    alpha, edges = fit_gains(Ax ** e, As ** e, cfg)
+    explained = _expand(alpha, edges, Ax.shape[0]) * As ** e
     total = explained.sum(axis=0)
-    denom = np.maximum(Px, total) + cfg.floor_power
-    M = explained / denom
+    M = explained / (np.maximum(Ax ** e, total) + cfg.floor_power)
     R = X * (1.0 - M.sum(axis=0))
-    unexplained = np.maximum(0.0, Px - total)
-    err = 10 * np.log10((np.abs(R) ** 2).sum() / (Px.sum() + cfg.floor_power) + 1e-30)
-    return Projection(unexplained, R, float(M.sum(axis=0).max()), alpha, float(err), istft(R, cfg, len(xm)), rate,
+    # Power subtraction: shared-bin cross terms of overlapping sources have zero mean, so compare
+    # neighbourhood averages rather than single bins.
+    alpha_p, edges_p = fit_gains(Ax ** 2, As ** 2, cfg)
+    p_un = np.maximum(0.0, smooth(Ax ** 2) - smooth((_expand(alpha_p, edges_p, Ax.shape[0]) * As ** 2).sum(axis=0)))
+    err = 10 * np.log10((np.abs(R) ** 2).sum() / ((Ax ** 2).sum() + cfg.floor_power) + 1e-30)
+    return Projection(p_un, R, float(M.sum(axis=0).max()), alpha, float(err), istft(R, cfg, len(xm)), rate,
                       {"kind": "phase_projected_stft", "stems": len(sm), "n_fft": cfg.n_fft, "hop": cfg.hop,
                        "alpha_max": cfg.alpha_max, "block_frames": cfg.block_frames, "n_bands": cfg.n_bands,
-                       "downmix": "mean_over_channels", "proxy_waveform": "istft(R) projection proxy"})
+                       "mask_exponent": e, "power_smooth": list(cfg.power_smooth),
+                       "downmix": "mean_over_channels", "proxy_waveform": "istft(R) projection proxy"},
+                      smooth(np.abs(R) ** 2))
 
 
 def _spans(e_un: np.ndarray, mixture_peak: float, cfg: ResidualConfig, rate: int) -> list[dict]:
@@ -190,18 +211,25 @@ def _spans(e_un: np.ndarray, mixture_peak: float, cfg: ResidualConfig, rate: int
             if b - a >= cfg.event_min_s]
 
 
-def find_unexplained_events(x: np.ndarray, stems: list[np.ndarray], rate: int,
-                            cfg: ResidualConfig | None = None) -> tuple[list[dict], Projection]:
-    """Convenience: project, then detect events against the loudest mixture frame."""
+def find_unexplained_events(x: np.ndarray, stems: list[np.ndarray], rate: int, cfg: ResidualConfig | None = None,
+                            basis: str = "projection") -> tuple[list[dict], Projection]:
+    """Project, then detect events against the loudest mixture frame.
+
+    basis 'projection' uses the mask-consistent remainder |R|^2 (coherence-safe); 'power_subtraction'
+    uses max(0, |X|^2 - sum alpha |S|^2). Both are spectral, never the raw waveform difference."""
     cfg = cfg or ResidualConfig()
     p = project_remainder(x, stems, rate, cfg)
     X = stft(downmix(x), cfg)
     peak = float((np.abs(X) ** 2).sum(axis=0).max())
     p.meta["mixture_frame_peak"] = peak
-    return _spans(p.unexplained_power.sum(axis=0), peak, cfg, rate), p
+    if basis not in ("projection", "power_subtraction"):
+        raise ValueError("basis must be 'projection' or 'power_subtraction'")
+    arr = p.residual_power if basis == "projection" else p.unexplained_power
+    return _spans(arr.sum(axis=0), peak, cfg, rate), p
 
 
 def save_unexplained_power(path, p: Projection, cfg: ResidualConfig) -> None:
     """Optional spectral discovery artifact (float32 to keep bundles small)."""
     np.savez_compressed(path, unexplained_power=p.unexplained_power.astype(np.float32),
+                        residual_power=(p.residual_power if p.residual_power is not None else p.unexplained_power).astype(np.float32),
                         sample_rate=p.sample_rate, n_fft=cfg.n_fft, hop=cfg.hop)

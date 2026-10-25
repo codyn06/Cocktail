@@ -35,6 +35,7 @@ from av_scene.schemas import (AudioStreamInfo, AudioViewInfo, GapInterval, Media
                               VideoStreamInfo)
 
 VIEW_RATES_HZ = (16_000, 48_000)
+PNG_SIGNATURE = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A])
 
 
 # ------------------------------------------------------------------ timeline
@@ -198,6 +199,50 @@ def write_png(path: str | Path, rgb: np.ndarray) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(png)
+
+
+def read_png(path: str | Path) -> np.ndarray:
+    """Decode an 8-bit RGB, non-interlaced PNG (all five row filters) into (H, W, 3) uint8."""
+    b = Path(path).read_bytes()
+    if b[:8] != PNG_SIGNATURE:
+        raise ValueError("not a PNG file")
+    pos, idat, w = 8, [], None
+    while pos < len(b):
+        n, tag = struct.unpack(">I4s", b[pos:pos + 8])
+        body = b[pos + 8:pos + 8 + n]
+        if tag == b"IHDR":
+            w, h, depth, ctype, _, _, interlace = struct.unpack(">IIBBBBB", body)
+            if (depth, ctype, interlace) != (8, 2, 0):
+                raise ValueError("only 8-bit RGB non-interlaced PNG is supported")
+        elif tag == b"IDAT":
+            idat.append(body)
+        pos += 12 + n
+    raw = np.frombuffer(zlib.decompress(b"".join(idat)), np.uint8).reshape(h, w * 3 + 1)
+    out = np.zeros((h, w * 3), np.uint8)
+    bpp = 3
+    for y in range(h):
+        f, row = raw[y, 0], raw[y, 1:].astype(np.int32)
+        prev = out[y - 1].astype(np.int32) if y else np.zeros(w * 3, np.int32)
+        if f == 0:
+            cur = row
+        elif f == 2:
+            cur = row + prev
+        else:
+            cur = np.zeros(w * 3, np.int32)
+            for x in range(w * 3):
+                a = cur[x - bpp] if x >= bpp else 0
+                c = prev[x - bpp] if x >= bpp else 0
+                if f == 1:
+                    pred = a
+                elif f == 3:
+                    pred = (a + prev[x]) // 2
+                else:
+                    p0 = a + prev[x] - c
+                    pa, pb, pc = abs(p0 - a), abs(p0 - prev[x]), abs(p0 - c)
+                    pred = a if pa <= pb and pa <= pc else (prev[x] if pb <= pc else c)
+                cur[x] = row[x] + pred
+        out[y] = (cur & 0xFF).astype(np.uint8)
+    return out.reshape(h, w, 3)
 
 
 # ------------------------------------------------------------------ ffmpeg discovery
