@@ -25,8 +25,9 @@ KNOWN_FAIL = {
                          "heard stream, so it prefers a swap to leaving the returner unmatched",
     "low_conf_second_talker": "bearing_conf below min_bearing_conf (0.25) counts as no direction, and a "
                               "direction-less source is never announced while another same-label one is "
-                              "active (seen in track.offline: the locator's 'ambiguous' cap kept a talker "
-                              "unannounced for a whole scene in 13 of 64 talker runs)",
+                              "active (track.offline base seed 301: the locator's 'ambiguous' cap held a "
+                              "talker at conf 0.15 and it was never announced; 13 of 64 simulated talker "
+                              "runs were unannounced, not all shown to have this cause)",
     "alternating_near_talkers": "bearing + label + slot cannot tell two talkers 10 deg apart taking "
                                 "turns in one slot: needs voice identity (Phase 4 src_n)",
 }

@@ -151,6 +151,8 @@ def run_case(d: Path, calib, swaps_s=(), cfg: TrackConfig | None = None, pair_cf
         (loc.now_us, [x.model_copy() for x in loc.sources()])))
     tr, ticks, events, k = Tracker(cfg), [], [], 0
     raw = [r for r in raw if r[0] > 0]
+    if not raw:
+        raise ValueError(f"{d}: the locator produced no sources (no head poses, or silence)")
     for now in range(raw[0][0], raw[-1][0] + 1, DT_US):
         while k + 1 < len(raw) and raw[k + 1][0] <= now:
             k += 1
@@ -169,10 +171,11 @@ def write_logs(res: dict, out: Path, key: str) -> None:
     s = res["session"]
     out.mkdir(parents=True, exist_ok=True)
     (out / f"{key}.tracker.jsonl").write_text("\n".join(res["events"]))
-    segs = []
+    segs, n_ticks = [], 0
     for k, q in enumerate(s.meta["sources"]):
         st = wavfile.read(s.path / q["stem"])[1].astype(np.float32)
         n = len(st) // TICK
+        n_ticks = max(n_ticks, n)
         e = np.sqrt(np.mean(st[: n * TICK].reshape(n, TICK) ** 2, axis=1))
         on = np.concatenate([[False], e > np.percentile(e, 90) * 10 ** (AUDIBLE_DB / 20), [False]])
         for a, b in zip(np.flatnonzero(~on[:-1] & on[1:]), np.flatnonzero(on[:-1] & ~on[1:])):
@@ -181,9 +184,9 @@ def write_logs(res: dict, out: Path, key: str) -> None:
     d = out / f"{key}.phase4" / "timeline"
     d.mkdir(parents=True, exist_ok=True)
     (d / "page_0000.json").write_text(json.dumps({"segments": segs}))
-    (d / "index.json").write_text(json.dumps({"version": 1, "sample_rate": 16000, "n_samples": n * TICK,
+    (d / "index.json").write_text(json.dumps({"version": 1, "sample_rate": 16000, "n_samples": n_ticks * TICK,
                                               "pages": [{"path": "timeline/page_0000.json", "start_us": 0,
-                                                         "end_us": int(n * TICK * 1e6 / 16000)}]}))
+                                                         "end_us": int(n_ticks * TICK * 1e6 / 16000)}]}))
 
 
 def score_case(res: dict, forget_s: float = TrackConfig.forget_s, settle_s: float = SETTLE_S) -> dict:
@@ -242,7 +245,7 @@ def score_case(res: dict, forget_s: float = TrackConfig.forget_s, settle_s: floa
             "name": q["name"], "truth": q.get("path") or q["bearing_deg"],
             "ids": sorted({tid for _, tid in seq}), "switches": sw,
             "coverage": round(covered / len(cov_ticks), 3) if cov_ticks else None,
-            "first_id_s": None if first_id is None else round((first_id - first) * DT_US / 1e6, 1),
+            "first_id_s": None if first_id is None else round(max(first_id - first, 0) * DT_US / 1e6, 1),
             "err_med": q50(err[k], 50), "err_p90": q50(err[k], 90),
             "raw_err_med": q50(raw_err[k], 50), "raw_err_p90": q50(raw_err[k], 90),
             "conf_med": None if not confs[k] else round(float(np.median(confs[k])), 2)})

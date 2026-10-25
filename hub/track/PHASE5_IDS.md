@@ -62,15 +62,20 @@ public `source_id` are not interchangeable"). No protocol change is proposed her
 12. **Abstain on position, not on existence.** A talker whose direction is unsure is still a
     source: announce it with `bearing_deg` None (or a low `bearing_conf`) rather than not at all.
     Today a reading below `min_bearing_conf` (0.25) counts as no direction, and a direction-less
-    source is never announced while another speech source is active: in the simulated suite this
-    hid a whole talker for the whole scene in 13 of 64 talker runs. With identity, rule 4 announces
+    source is never announced while another speech source is active. In the simulated suite 13 of
+    64 talker runs were never announced; the cause is confirmed for one of them (base seed 301:
+    the locator's "ambiguous" cap held that talker at confidence 0.15 for the whole scene) and
+    the scripted probe reproduces it, but the 13 are NOT broken down by cause (the fold into a
+    nearby announced track, near10/20/30, is another candidate). With identity, rule 4 announces
     it; without, after a sustained separate stream (proposal: `bearingless_hits` without the
     "no other same-label source active" condition once the stream's energy is independent).
-13. **Do not rely on bearing confidence to abstain yet.** In the suite, bearings more than 25 deg
-    wrong carried confidence 0.26-0.37 (median 0.30, n=18) and bearings within 15 deg carried
-    0.27-0.50 (median 0.36, n=21): the scales overlap. Until the locator's confidence separates them
-    (the locate work's "honest confidence" target), a confidence threshold cannot tell a wrong
-    direction from a right one, so identity rules must not depend on it.
+13. **Do not rely on bearing confidence to abstain yet.** Among ANNOUNCED tracks in the suite
+    (so already above the 0.25 floor, which truncates the range), per-run median confidence was
+    0.26-0.37 (median 0.30) for runs whose median bearing error was over 25 deg (n=18) and
+    0.27-0.50 (median 0.36) for runs within 15 deg (n=21). No separation was visible above the
+    floor, so identity rules should not depend on a confidence threshold until the locator's
+    confidence is shown to separate them (the locate work's "honest confidence" target). This is a
+    per-run, simulated statistic, not a per-reading reliability curve (that is `locate.scenes`).
 14. **Key per-source direction state by identity, not by slot.** The locator keeps one posterior
     per stream slot. When the separator swaps slots without noticing, the old talker's bearing is
     carried onto the new one and the tracker ids follow the slots (suite "swap": 2 switches and 2
@@ -106,17 +111,21 @@ sessions/pairsim-calib16.json --seeds 2`; oracle separation, 16 cases x 2 seeds,
 | pause10 / pause30 / pause70 | 1 / 0 / 1 | 0 | 0 | 14.6 / 7.8 / 16.4 |
 | swap / pause_swap | 0 / 0 | 2 / 4 | 2 / 2 | 38.0 / 39.0 |
 | cross_slow / cross_fast / cross_pause | 1 / 1 / 0 | 0 / 1 / 0 | 0 | 24.9 / 22.0 / 34.8 |
-| no_head | 1 | 1 | 0 | 9.3 (one talker 94 deg off: front/back) |
+| no_head | 1 | 1 | 0 | 9.3 (one talker 94 deg off; cause not diagnosed, a front/back flip is a hypothesis) |
 | pose_gap (10 s) | 1 | 0 | 0 | 22.7 (no worse than base for the same seeds) |
 | calib_off (+5 us) | 1 | 0 | 0 | 71.6 |
 
-Where a bearing was wrong, the locator's own raw error was about the same (the tracker neither
-caused nor fixed it), except a fast walker (15 deg/s), where the tracker's smoothing added lag
-(cross_fast seed 301: median 70 deg vs the locator's 45); identity failures came from the tracker rules above, from slot swaps reaching the
-locator, and from two talkers the locator put within `merge_deg` (near20, seed 300). Static
-talkers: median error 7.9 deg, 73% within 25 deg (26 talker runs).
+Where a bearing was wrong, the locator's own raw error was about the same in nearly every run
+(the tracker neither caused nor fixed it); the one clear exception is a fast walker (cross_fast
+seed 301: tracked median 70 deg vs the locator's 45, one run, so a hypothesis that smoothing adds
+lag). Likely sources of the identity failures, not separated by an ablation: the tracker rules
+above, slot swaps reaching the locator (the swap cases do show swapped ids and 38-60 deg errors),
+and two talkers the locator put within `merge_deg` (near20, seed 300). Bearing statistics cover
+ANNOUNCED talkers only (unannounced ones have no track, so no error): static talkers, median
+error 7.9 deg, 73% within 25 deg (26 talker runs).
 
-Pairing by timing (`track.compare_ids` against an ORACLE Phase 4 stand-in, every case): 14 talker
+Pairing by timing (`track.compare_ids` against an ORACLE Phase 4 stand-in, which is correct by
+construction, so "0 wrong" says nothing about real Phase 4 output; every case): 14 talker
 runs with a single tracker id paired, all to the right id; 0 wrong; 36 unpaired or ambiguous (no
 clean solo time and too little contrast: two talkers who keep talking); 1 paired where the
 tracker itself had used several ids; plus the 13 talkers never announced. Timing alone is
