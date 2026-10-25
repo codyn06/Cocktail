@@ -263,7 +263,16 @@ alert messages, Meta glasses version, search and rescue.
   - Cost: 8 candidates ~50 s per condition; peak 8.26 GiB; span predictor kept on CPU.
   - The installed sam_audio bb4c6999 includes the issue #98 span fix. Span prediction runs only when
     anchors is None and is driven by the text prompt.
-  - BA ordering and judge ranker results: TBD (pending run).
+  - BA ordering (B top, A bottom), prompt "person speaking", full-clip anchor: prompting A still gives
+    cand0 -28.8 dB, best -14.4 dB; prompting B +7.3 dB. Same as AB, so the bias follows the voice, not the
+    screen position. Judge ranker: not run (the full matrix was stopped at 49/94 conditions once the
+    selection question was answered; ImageBind visual ranker weights are not cached).
+  - Non-speech (Phase 1 fixture, cat chirp + off-screen knock, prompt "cat chirp"): candidates span
+    -93 to +10.6 dB SI-SDRi (cand0 -93.5 with the full-clip anchor, +10.1 with predicted spans). Useful
+    candidates exist but are seed/anchor-sensitive, so prompted non-speech extraction needs a ranker or a
+    listening check before it is trusted. For the silent person in that scene the output was -41.2 dBFS
+    against a -39.5 dBFS mixture: SAM Audio returns sound for an absent target.
+  - Speech over music, prompted A: cand0 +6.6 dB.
 
   MossFormer2_SS on the same mixtures: best-matching output stream SI-SDRi +14.5 dB for A and +17.9 dB for
   B, identical across stack/side and AB/BA layouts (same audio). Separation succeeds where SAM Audio
@@ -271,7 +280,27 @@ alert messages, Meta glasses version, search and rescue.
 
   Attribution, first run (head-crop heuristic): failed. The eval masks are whole-tile rectangles, so the
   "head box" was the whole tile, TalkNet saw no face, every track scored inactive, and the system refused
-  all selections (no wrong voice returned). Fix: S3FD face detection; rerun TBD (pending run).
+  all selections (no wrong voice returned). Fix: S3FD face detection.
+
+  Attribution after the fix (S3FD faces, TalkNet, AV-TSE matched to MossFormer2 voices; commit 1f49aab;
+  `eval/av_scene/run_speech.py --tse`, output in `hub/sessions/av_matrix/speech4/`):
+
+  | case | A | B | voices |
+  |---|---|---|---|
+  | overlap, stack/side x AB/BA (4 layouts) | ok, +16.9 dB, correct | ok, +16.9 dB, correct | both matched |
+  | A alone | ok (A's voice) | refused: target inactive | 2nd voice unmatched |
+  | B alone | refused: target inactive | ok (B's voice) | 2nd voice unmatched |
+  | nobody speaks | refused | refused | none matched |
+  | A + off-screen V3 | ok, +17.8 dB, correct | refused | V3 unmatched, `unknown` (overlaps A's speech) |
+  | only off-screen V3 | refused | refused | both `outside_view` |
+  | A + off-screen music | ok, +11.5 dB, correct | (not scored) | |
+
+  - TalkNet speaking probability with S3FD faces: 0.87 / 0.91 for the talker alone, 0.07-0.19 when silent;
+    in overlap 0.52 / 0.64 (it under-detects simultaneous speech, 3.8 s / 5.6 s active of ~7 s).
+  - SI-SDRi is not meaningful for solo cases (the mixture equals the reference); those rows are judged by
+    selection only. No listening review yet.
+  - Wall 2.7-7.9 s per 8 s case, peak 1.6 GiB (MossFormer2 + TalkNet + S3FD + AV-TSE loaded together).
+  - Limits: one speaker pair; an off-screen voice that overlaps visible speech stays `unknown`.
 
   AV-TSE (per face, still with the bad crops):
   - offscreen3, A: +4.7 dB, correct selection (margin 13.5 dB)
