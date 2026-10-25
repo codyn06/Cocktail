@@ -51,6 +51,21 @@ status does not belong here (see `AGENTS.md` > Continuity).
   `--no-video`, `--video-fps`, `--max-frames`; h264 frames are skipped. Talker ground truth is `talkers.csv`
   (`start_s,end_s,talker_id,bearing_deg,note`, seconds since the first audio sample) mapped to frames by `mockclient.talkers`.
   Untested on a real headset: frame orientation/colour, real header values and disk use.
+- Chosen-voice measurement (`separate.measure_chosen`, PR #43): SIR-style on the separator's streams, not the `/audio/out` route.
+  Each 250 ms window of the chosen stream is least-squares projected on the session's ground-truth stems; margin = target vs
+  the sum of the other stems, and sound matching no stem is reported as `unexplained_db`. The chosen stream is picked by oracle
+  (best SI-SDR vs the target after t0); `carried_by` shows when the voice sits in another stream. Sessions without stems are
+  refused. Replayed result: the 10 dB / 1 s target is met on the 2-voice scene and not met on the 3-voice scene (two voice
+  outputs plus a residual); a decision on how a third talker is held is needed before that target can pass.
+
+- `/audio/out` takes an optional `?layout=layers|stereo` query parameter (default `layers`, the Quest). `layers` frames are unity gain because the Quest applies inner/outer dB itself; the hub applies `SetVolumes` only for `stereo` clients (or with `--out-gains-in-layers`). Approved by Cody (PR #42); no change to `hub/protocol`.
+- Chosen voice routing (hub `events/selection.py`, `out/`, PR #42): select/stop/next/prev arrive as `InputEvent` on `/ingest/pose`
+  (ingest got `input_hooks`), not as `/events` commands. The choice is kept as a Tracker id, stable through slot swaps and
+  pauses; voice memory is complementary, not the key. next/prev cycle by world bearing, left to right, wrapping, bearingless
+  last, lost tracks skipped. A slot is routed only while its track is `tracking` and no other track was heard in it more
+  recently; the room (outer) is every other slot. Hop audio waits `--out-settle-s` (0.3 s) so the route is current. The hub
+  reads private Tracker state (`tracks[id].stream`, `_dup_of`) until the track owner adds a public accessor; `hub/track` is
+  untouched. Hardware-pending: real jitter/underrun behaviour, settle/jitter/queue-cap tuning, end-to-end delay.
 
 ## Open items
 - Each teammate: confirm their tool loads the roles/skills (README "pending runtime

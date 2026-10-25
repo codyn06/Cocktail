@@ -49,6 +49,9 @@ class IngestState:
     poses: PoseBuffer = None  # type: ignore[assignment]
     video: LatestFrame = field(default_factory=LatestFrame)
     inputs: deque = field(default_factory=lambda: deque(maxlen=1000))
+    # Called with each InputEvent as it arrives (hub/events uses it for select/stop/next/prev).
+    # A failing hook must not drop the event or kill the pose channel.
+    input_hooks: list = field(default_factory=list)
     bad_messages: int = 0
     stats: dict[str, ChannelStats] = field(
         default_factory=lambda: {k: ChannelStats() for k in ("audio", "video", "pose")}
@@ -106,6 +109,11 @@ class IngestState:
             self.poses.add(msg.device_ts_us, msg.pos, msg.rot_xyzw)
         else:
             self.inputs.append(msg)
+            for hook in tuple(self.input_hooks):
+                try:
+                    hook(msg)
+                except Exception:
+                    log.exception("input hook failed")
 
     @property
     def pose_epoch(self) -> int:

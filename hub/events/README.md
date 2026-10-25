@@ -12,8 +12,9 @@ with the frozen `Command` TypeAdapter and logged by type. Valid values are store
 in `app.state.events.mode`, `inner_db`, `outer_db`, and `acked_alert_ids`.
 Malformed JSON, unsupported commands, binary commands and non-finite volumes
 increment `bad_commands` without closing the socket. No new error or reply
-message is added to the frozen protocol; these settings are stored only and do
-not yet control models or audio playback.
+message is added to the frozen protocol. Volumes and mode are stored; `/audio/out`
+(`hub/out`) reads the volumes. The headset's select / stop / next / prev arrive as
+`InputEvent` on `/ingest/pose` and are applied by `events/selection.py` (see `hub/out/README.md`).
 
 ## Timing and identity
 
