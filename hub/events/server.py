@@ -10,6 +10,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from typing import Callable
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import TypeAdapter, ValidationError
@@ -60,6 +61,14 @@ class EventsState:
     latest: p.SourcesUpdated = field(
         default_factory=lambda: p.SourcesUpdated(device_ts_us=0, sources=[]))
     clients: set = field(default_factory=set)
+    # Auxiliary messages (e.g. target.updated) ride a second small per-client queue so the 10 Hz
+    # latest-only sources queue can never overwrite them. aux_clients maps a client's sources queue
+    # to its aux queue; aux_snapshot holds the latest text per key, sent to a newly connected client.
+    aux_clients: dict = field(default_factory=dict)
+    aux_snapshot: dict = field(default_factory=dict)
+    aux_maxsize: int = 16
+    # Called at the end of every tick (on the loop); exceptions are logged and swallowed.
+    tick_hooks: list[Callable[[], None]] = field(default_factory=list)
     _client_tasks: set = field(default_factory=set)
     task: asyncio.Task | None = None
     _snapshot_task: asyncio.Task | None = None
@@ -156,6 +165,21 @@ class EventsState:
             if queue.full():
                 queue.get_nowait()
             queue.put_nowait(payload)
+        for hook in tuple(self.tick_hooks):
+            try:
+                hook()
+            except Exception:
+                log.exception("tick hook failed")
+
+    def publish_aux(self, text: str, key: str | None = None) -> None:
+        """Queue `text` for every client without touching the sources queue (drop-oldest when full).
+        With `key`, also remember it as the latest aux message for that key (sent on connect)."""
+        if key is not None:
+            self.aux_snapshot[key] = text
+        for q in tuple(self.aux_clients.values()):
+            if q.full():
+                q.get_nowait()
+            q.put_nowait(text)
 
     async def run(self) -> None:
         try:
@@ -211,6 +235,7 @@ def install_events(app: FastAPI, locator=None, tracker: Tracker | None = None) -
                 await asyncio.gather(*state._client_tasks, return_exceptions=True)
                 state._client_tasks.clear()
                 state.clients.clear()
+                state.aux_clients.clear()
 
     app.router.lifespan_context = lifespan
 
@@ -222,12 +247,25 @@ def install_events(app: FastAPI, locator=None, tracker: Tracker | None = None) -
     async def events(ws: WebSocket):
         await ws.accept()
         queue = asyncio.Queue(maxsize=1)
+        aux = asyncio.Queue(maxsize=state.aux_maxsize)
         state.clients.add(queue)
+        state.aux_clients[queue] = aux
         queue.put_nowait(state.latest.model_dump_json())
+        for text in tuple(state.aux_snapshot.values())[-state.aux_maxsize:]:
+            aux.put_nowait(text)
 
         async def send():
-            while True:
-                await ws.send_text(await queue.get())
+            gets = {asyncio.ensure_future(queue.get()): queue, asyncio.ensure_future(aux.get()): aux}
+            try:
+                while True:
+                    done, _ = await asyncio.wait(gets, return_when=asyncio.FIRST_COMPLETED)
+                    for g in sorted(done, key=lambda g: gets[g] is not queue):  # sources first
+                        q = gets.pop(g)
+                        await ws.send_text(g.result())
+                        gets[asyncio.ensure_future(q.get())] = q
+            finally:
+                for g in gets:
+                    g.cancel()
 
         async def receive():
             while True:
@@ -251,6 +289,7 @@ def install_events(app: FastAPI, locator=None, tracker: Tracker | None = None) -
             log.debug("events client disconnected")
         finally:
             state.clients.discard(queue)
+            state.aux_clients.pop(queue, None)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
