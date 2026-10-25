@@ -168,3 +168,9 @@ def test_sanitize_config_drops_phase3_models():
 def test_resample_audio_mono_and_rate():
     out = sa.resample_audio(np.ones((2, 8000), np.float32), 8000)
     assert out.shape == (1, 48_000)
+
+
+def test_cap_vision_batch_overrides_upstream_default_of_300():
+    m = SimpleNamespace(vision_encoder=SimpleNamespace(batch_size=300))
+    assert sa.cap_vision_batch(m) == sa.VISION_BATCH == 8 and m.vision_encoder.batch_size == 8
+    assert sa.cap_vision_batch(m, 4) == 4

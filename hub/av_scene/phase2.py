@@ -163,7 +163,8 @@ def _tracks_from_disk(work: Path) -> tuple[list[MaskletTrack], dict[str, list[Ma
 def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speaker_xy=None, speaker_track=None,
         reuse_tracks: bool = False, concept: str = "person", text: str = sa.DEFAULT_TEXT, max_seconds: float = 10.0,
         max_side: int = 640, stride: int = 1, device: str = "cuda", probe_bystanders: int = 2,
-        ffmpeg_path: str | None = None, sam3_threshold: float = 0.25) -> RunManifest | None:
+        ffmpeg_path: str | None = None, sam3_threshold: float = 0.25,
+        vram_fraction: float | None = 0.75) -> RunManifest | None:
     t_run = time.perf_counter()
     out, work = Path(out_dir), Path(out_dir) / "_work"
     work.mkdir(parents=True, exist_ok=True)
@@ -209,7 +210,9 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
             lambda mgr, seg: _timed(mgr, "inference", lambda: tr.track_concept_images(
                 seg, (rgb[i] for i in range(T)), concept, out_dir=work, frame_pts_us=pts, run_tag=run_id,
                 min_track_frames=max(2, T // 10))),
-            reports=reports, device=device, workload={"frames": T, "size": f"{W}x{H}", "concept": concept})
+            reports=reports, device=device, vram_fraction=vram_fraction,
+            workload={"frames": T, "size": f"{W}x{H}", "concept": concept})
+        _log(work, "sam3_image: unloaded")
         tracks, records = res.tracks, res.records
         (work / "tracks.json").write_text(json.dumps({"tracks": [t.model_dump() for t in tracks]}), encoding="utf-8")
         stage("vision(sam3_image)", t0, f"{len(tracks)} track(s) from {res.frames_seen} frames; model unloaded")
@@ -241,12 +244,15 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
 
     def separate(mgr, bundle):
         with mgr.phase("inference"):
+            _log(work, f"sam_audio: model loaded, extracting speaker stem ({T} frames, {len(mix) / rate:.1f} s)")
             st, prompts = sa.extract_stem(bundle, audio=clip.audio, sample_rate=clip.audio_rate, frames=clip.frames,
                                           masks=masks, source_id=SPEAKER_ID, out_dir=work, text=text)
             diag["speaker"] = {"result": st, "prompts": prompts}
+            _log(work, "sam_audio: speaker stem done")
             # measure visual-prompt selectivity: the same text with a silent bystander's masklet as the prompt
             for t in sorted(bystanders, key=lambda t: -t.n_frames)[:probe_bystanders]:
                 bf = {r.frame_idx: r.rle for r in records[t.track_id]}
+                _log(work, f"sam_audio: bystander probe {t.track_id}")
                 bst, _ = sa.extract_stem(bundle, audio=clip.audio, sample_rate=clip.audio_rate, frames=clip.frames,
                                          masks=[bf.get(i) for i in range(T)], source_id="probe_" + t.track_id,
                                          out_dir=work, text=text)
@@ -254,8 +260,10 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
         mgr.report.output_seconds = round(len(mix) / rate, 3)
 
     run_stage("sam_audio_small_tv", lambda: sa.load_sam_audio(device=device), separate, reports=reports,
-              device=device, workload={"frames": T, "audio_s": round(len(mix) / rate, 2), "text": text,
-                                       "bystander_probes": min(probe_bystanders, len(bystanders))})
+              device=device, vram_fraction=vram_fraction,
+              workload={"frames": T, "audio_s": round(len(mix) / rate, 2), "text": text,
+                        "bystander_probes": min(probe_bystanders, len(bystanders))})
+    _log(work, "sam_audio: unloaded")
     stem_res: StemResult = diag["speaker"]["result"]
     stem = _fit(read_wav(work / stem_res.raw_path)[0][:, 0], len(mix))
     stage("separation(sam_audio_small_tv)", t0, f"stem {stem_res.n_samples} samples @ {rate} Hz; model unloaded")
@@ -372,6 +380,18 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
     return manifest
 
 
+def _log(work: Path, msg: str) -> None:
+    """Flushed + fsynced progress line: if the machine bugchecks mid-run, the last line says where."""
+    import os
+
+    line = f"{time.strftime('%H:%M:%S')} {msg}"
+    print(line, flush=True)
+    with open(work / "progress.log", "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
 def _timed(mgr, name, fn):
     with mgr.phase(name):
         return fn()
@@ -393,13 +413,16 @@ def main(argv=None) -> int:
     ap.add_argument("--sam3-threshold", type=float, default=0.25)
     ap.add_argument("--probe-bystanders", type=int, default=2)
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--vram-fraction", type=float, default=0.75,
+                    help="cap this process's CUDA memory (fraction of the card); 0 disables the cap")
     ap.add_argument("--ffmpeg", default=None)
     a = ap.parse_args(argv)
     xy = tuple(float(v) for v in a.speaker_xy.split(",")) if a.speaker_xy else None
     out = Path(a.out) if a.out else Path("sessions") / a.run_id / "av"
     m = run(a.video, out, run_id=a.run_id, speaker_xy=xy, speaker_track=a.speaker_track, reuse_tracks=a.reuse_tracks,
             concept=a.concept, text=a.text, max_seconds=a.max_seconds, max_side=a.max_side, stride=a.stride,
-            device=a.device, probe_bystanders=a.probe_bystanders, ffmpeg_path=a.ffmpeg, sam3_threshold=a.sam3_threshold)
+            device=a.device, probe_bystanders=a.probe_bystanders, ffmpeg_path=a.ffmpeg, sam3_threshold=a.sam3_threshold,
+            vram_fraction=a.vram_fraction or None)
     if m is None:
         return 2
     print(f"bundle: {out.resolve()}\nserve:  uv run python -m av_scene serve {out}")

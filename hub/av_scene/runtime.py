@@ -73,10 +73,12 @@ class ModelLifecycleManager:
 
     def __init__(self, name: str, loader: Callable[[], Any], *, device: str = "cuda",
                  workload: dict | None = None, reports: list[StageReport] | None = None,
-                 leak_tolerance_mib: float = 64.0, cleanup: Callable[[Any], None] | None = None):
+                 leak_tolerance_mib: float = 64.0, cleanup: Callable[[Any], None] | None = None,
+                 vram_fraction: float | None = None):
         self.report = StageReport(name=name, device=device, workload=dict(workload or {}))
         self._loader, self._device, self._reports = loader, device, reports
         self._leak_tol, self._cleanup = leak_tolerance_mib, cleanup
+        self._vram_fraction = vram_fraction
         self._model: Any = None
         self._held = False
 
@@ -89,6 +91,11 @@ class ModelLifecycleManager:
             if cuda:
                 torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats()
+                if self._vram_fraction is not None:
+                    # a cap makes memory pressure a catchable OOM instead of driver/hypervisor stress
+                    torch.cuda.set_per_process_memory_fraction(self._vram_fraction)
+                    total = torch.cuda.get_device_properties(0).total_memory
+                    self.report.workload["vram_cap_mib"] = round(total * self._vram_fraction / _MIB)
             t0 = time.perf_counter()
             self._model = self._loader()
             self.report.load_s = round(time.perf_counter() - t0, 3)
@@ -115,6 +122,8 @@ class ModelLifecycleManager:
         cuda = _is_cuda(self._device)
         if cuda:
             torch.cuda.synchronize()
+            if self._vram_fraction is not None:
+                torch.cuda.set_per_process_memory_fraction(1.0)
             r.peak_allocated_mib = round(torch.cuda.max_memory_allocated() / _MIB, 1)
             r.peak_reserved_mib = round(torch.cuda.max_memory_reserved() / _MIB, 1)
         r.host_rss_mib = _rss_mib()
@@ -151,6 +160,19 @@ class ModelLifecycleManager:
                 self._reports.append(r)
 
 
+def _remeasure(mgr: "ModelLifecycleManager") -> None:
+    """Final post-release reading, taken after every frame that touched the model has returned."""
+    if not _is_cuda(mgr._device):
+        return
+    r = mgr.report
+    gc.collect()
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    r.allocated_after_release_mib = round(torch.cuda.memory_allocated() / _MIB, 1)
+    r.leak_warning = (f"{r.allocated_after_release_mib} MiB still allocated after release: something still "
+                      "references the model or its session" if r.allocated_after_release_mib > mgr._leak_tol else None)
+
+
 @dataclass
 class Fallback:
     """One smaller window/backend to try after an OOM. Reported, never silent."""
@@ -178,17 +200,24 @@ def _run_under(mgr: ModelLifecycleManager, fn: Callable[[ModelLifecycleManager, 
 
 def run_stage(name: str, loader: Callable[[], Any], fn: Callable[[ModelLifecycleManager, Any], Any], *,
               reports: list[StageReport], device: str = "cuda", workload: dict | None = None,
-              fallback: Fallback | None = None, cleanup: Callable[[Any], None] | None = None) -> Any:
+              fallback: Fallback | None = None, cleanup: Callable[[Any], None] | None = None,
+              vram_fraction: float | None = None) -> Any:
     """Run `fn(manager, model)` under a lease. On OOM, discard the stage and try `fallback` once."""
-    mgr = ModelLifecycleManager(name, loader, device=device, workload=workload, reports=reports, cleanup=cleanup)
+    mgr = ModelLifecycleManager(name, loader, device=device, workload=workload, reports=reports, cleanup=cleanup,
+                                vram_fraction=vram_fraction)
     try:
-        return _run_under(mgr, fn)
+        result = _run_under(mgr, fn)
+        _remeasure(mgr)
+        return result
     except torch.cuda.OutOfMemoryError:
         if fallback is None:
             raise
     mgr = ModelLifecycleManager(f"{name}:fallback", fallback.loader or loader, device=device,
-                                workload=fallback.workload, reports=reports, cleanup=cleanup)
+                                workload=fallback.workload, reports=reports, cleanup=cleanup,
+                                vram_fraction=vram_fraction)
     mgr.report.fallback_of = name
     if fallback.note:
         mgr.report.workload = {**mgr.report.workload, "note": fallback.note}
-    return _run_under(mgr, fallback.fn)
+    result = _run_under(mgr, fallback.fn)
+    _remeasure(mgr)
+    return result

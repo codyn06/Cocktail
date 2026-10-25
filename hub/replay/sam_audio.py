@@ -131,7 +131,20 @@ class SamAudioBundle:
         return self
 
 
-def load_sam_audio(repo: str = SAM_AUDIO_REPO, device: str = "cuda") -> SamAudioBundle:
+VISION_BATCH = 8
+
+
+def cap_vision_batch(model, batch_size: int = VISION_BATCH) -> int:
+    """Chunk the visual encoder. Upstream's default is 300 frames per forward pass, and the processor
+    feeds one frame per 40 ms of audio (an 8 s clip = 200 frames through PE-Core-L14-336 at once). That
+    needs far more than a 12 GiB card and was the prime suspect for a hypervisor bugcheck (0x20001) on
+    the dev laptop; it also raised a CUDA OOM once capped. Frames are encoded independently, so
+    chunking changes memory only, not the features."""
+    model.vision_encoder.batch_size = int(batch_size)
+    return model.vision_encoder.batch_size
+
+
+def load_sam_audio(repo: str = SAM_AUDIO_REPO, device: str = "cuda", vision_batch: int = VISION_BATCH) -> SamAudioBundle:
     """Load model + processor. Downloads the checkpoint on first use (explicit action)."""
     from huggingface_hub import snapshot_download
     from sam_audio import SAMAudio, SAMAudioProcessor
@@ -141,6 +154,7 @@ def load_sam_audio(repo: str = SAM_AUDIO_REPO, device: str = "cuda") -> SamAudio
     cfg = json.loads((folder / "config.json").read_text(encoding="utf-8"))
     model = SAMAudio(SAMAudioConfig(**_sanitize_config(cfg)))
     model.load_state_dict(torch.load(folder / "checkpoint.pt", weights_only=True, map_location="cpu"))
+    cap_vision_batch(model, vision_batch)
     model = model.eval().to(device)
     return SamAudioBundle(model, SAMAudioProcessor.from_pretrained(str(folder)), f"{repo}@{folder.name}")
 
@@ -161,7 +175,7 @@ def _hash(obj) -> str:
 def extract_stem(bundle: SamAudioBundle, *, audio, sample_rate: int, frames: torch.Tensor,
                  masks: Sequence[RleMask | None], source_id: str, out_dir: str | Path,
                  text: str = DEFAULT_TEXT, anchors: list[tuple[str, float, float]] | Literal["full_clip"] | None = "full_clip",
-                 ) -> tuple[StemResult, dict]:
+                 seed: int | None = 0) -> tuple[StemResult, dict]:
     """Separate one source. Returns the StemResult and a log of the prompts that reached the model.
 
     frames: (T, 3, H, W) uint8 covering exactly the audio window; masks: one RleMask|None per frame.
@@ -181,6 +195,8 @@ def extract_stem(bundle: SamAudioBundle, *, audio, sample_rate: int, frames: tor
     batch = proc(descriptions=[text], audios=[wav], masked_videos=[masked],
                  anchors=[anchor_list] if anchor_list else None)
     device = next(model.parameters()).device
+    if seed is not None:
+        torch.manual_seed(seed)  # separate() draws its ODE start noise from the global RNG: unseeded runs differ
     with torch.inference_mode():
         result = model.separate(batch.to(device), reranking_candidates=1, predict_spans=False)
     stem = _first_waveform(result.target)
@@ -190,7 +206,7 @@ def extract_stem(bundle: SamAudioBundle, *, audio, sample_rate: int, frames: tor
     rel = f"stems/source_{source_id}.wav"
     write_wav(out_dir / rel, np.nan_to_num(stem), rate)
     prompts = {"text": text, "anchors": anchor_list, "visual": True, "mask_polarity": mask_polarity(proc),
-               "frames": int(frames.shape[0]), "audio_seconds": round(duration, 3)}
+               "frames": int(frames.shape[0]), "audio_seconds": round(duration, 3), "seed": seed}
     res = StemResult(source_id=source_id, model_revision=bundle.revision, prompt_hash=_hash([text]),
                      anchor_hash=_hash(anchor_list), sample_rate=rate, n_samples=int(stem.shape[-1]),
                      raw_path=rel, errors=errors)
