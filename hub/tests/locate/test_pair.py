@@ -171,19 +171,36 @@ def test_live_locator_rejects_a_phase_calibration():
 
 
 def test_adapt_tracks_a_source_whose_swing_and_offset_differ_from_calibration():
+    """Same noise for both arms (paired), with an outlier frame every 12th (+-250 us, far outside the
+    inlier band) so the robust weighting is exercised."""
+    from locate.pair import PairConfig
     rng = np.random.default_rng(7)
     errs = {False: [], True: []}
     for truth in (0, 40, 90, 135, 180, -45, -90, -150):
+        noise = rng.normal(0, 3e-6, 400)
+        noise[::12] += rng.choice([-250e-6, 250e-6], len(noise[::12]))
         for adapt in (False, True):
-            from locate.pair import PairConfig
             loc = PairLocator(CAL, PairConfig(adapt=adapt))
             for i, yi in enumerate(sweep(400, 40.0)):
                 loc.add_head_pose(i * 0.05, yi)
                 tau = 0.7 * CAL.delay_amp_s * np.sin(np.radians(truth - CAL.axis_deg - yi)) + CAL.offset_s + 2e-6
-                loc.add_delay("s", i * 0.05, tau + rng.normal(0, 3e-6))
+                loc.add_delay("s", i * 0.05, tau + noise[i])
             e = loc.estimate("s")
             errs[adapt].append(abs((e.world_deg - truth + 180) % 360 - 180))
-    assert np.median(errs[True]) < np.median(errs[False]) and max(errs[True]) <= 20, errs
+    assert np.median(errs[True]) < np.median(errs[False]) and max(errs[True]) <= 25, errs
+
+
+def test_adapt_off_is_the_plain_model_and_survives_silence_and_zero_delays():
+    from locate.pair import PairConfig
+    assert PairConfig().adapt is False
+    loc = PairLocator(CAL, PairConfig(adapt=True))
+    for i in range(30):  # a still head and a zero delay: no division by zero, no NaN
+        loc.add_head_pose(i * 0.05, 0.0)
+        loc.add_delay("s", i * 0.05, 0.0, sigma_s=float("inf") if i % 2 else None)
+    e = loc.estimate("s")
+    assert np.isfinite(e.world_deg) and np.isfinite(e.confidence) and 0.0 <= e.confidence <= 1.0
+    loc.add_delay("s", 500.0, 5e-6)  # long silence, then new frames
+    assert np.isfinite(loc.estimate("s").confidence)
 
 
 def _clean_locator(cfg):

@@ -46,6 +46,8 @@ class OracleSeparator:
         self.n_out = len(stems)
 
     def __call__(self, mono: np.ndarray) -> np.ndarray:
+        # one call per window, in order: a different window length or a reused instance would shift every stem
+        assert len(mono) == self.win, f"oracle built for {self.win}-sample windows, got {len(mono)}"
         a = self.k * self.hop
         self.k += 1
         out = np.zeros((self.n_out, self.win), np.float32)

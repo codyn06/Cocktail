@@ -42,3 +42,19 @@ def test_oracle_locates_a_separated_talker_on_the_live_path(tmp_path):
     s = Session.load(tmp_path / "scene")
     res = score_live.score(s, LiveSeparator(score_live.oracle_separator(s), None), 25.0, "tdoa", cal)
     assert res["talker1"]["error_deg"] <= 25, res
+
+
+def test_oracle_keeps_two_talkers_apart_and_refuses_a_wrong_window(tmp_path):
+    import numpy as np
+    import pytest
+    cal = _calib16(tmp_path)
+    pairsim.write_session(tmp_path / "scene2", [-60.0, 60.0], seed=3, secs=24.0)
+    s = Session.load(tmp_path / "scene2")
+    res = score_live.score(s, LiveSeparator(score_live.oracle_separator(s), None), 35.0, "tdoa", cal)
+    # each stream sits nearer its own talker than the other's: a swapped or shifted stem would not
+    for name, other in (("talker1", 60.0), ("talker2", -60.0)):
+        r = res[name]
+        assert abs(r["world_deg"] - r["truth_deg"]) < abs(r["world_deg"] - other), res
+    sep = score_live.oracle_separator(s)
+    with pytest.raises(AssertionError):
+        sep(np.zeros(1000, np.float32))
