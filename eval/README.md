@@ -27,3 +27,19 @@ Modes (`hub/separate/streaming.py:MODES`): fast (1.5 s window, 20 ms hop, 0 look
 balanced (2 s, 50 ms hop, 100 ms look), accurate (6 s, 1 s hop, 2 s look).
 
 Add a model: register a loader returning `(fn, n_spk, info)` in `hub/separate/bench_models.py`.
+
+## Real-recording tools (M3d / M5)
+
+Run from the repo root with `uv run --project hub python eval/<tool>.py` (no GPU needed).
+
+- `dataset_check.py <recordings folder>`: coverage grid (12 angles x 0.5/1/2 m) and PASS/FAIL per
+  take (source >= 6 dB over the room, head turning, angle labeled, no clock glitches). Exit 0 only
+  with a full grid and >= 90% passing. Record labels with `run_locate_take.ps1 -Distance 1 -Motion normal -Stimulus pink`.
+- `delay_test.py`: hub -> headset speaker -> headset mic -> hub, 40 chirps, median / p90 / worst and
+  PASS/FAIL against an assumed budget. `--mock` runs without hardware. Instructions for the headset run are at the top of the file.
+- `alerts_rules.json` + `alerts_check.py`: smoke alarm, siren and wearer's-name rules, evaluated on
+  label timelines or transcripts (or a WAV, with the gpu group).
+- `results_table.py --bench bench.json --delay delay.json`: one markdown table against the targets.
+  `examples/` holds hand-made example inputs (not measurements).
+
+Tests: `hub/tests/eval/` (they live there because pytest runs from `hub/`).
