@@ -17,6 +17,8 @@ from pydantic import TypeAdapter, ValidationError
 import protocol as p
 from track import Tracker
 
+from .selection import Selection
+
 log = logging.getLogger("events")
 _command = TypeAdapter(p.Command)
 
@@ -50,6 +52,7 @@ class EventsState:
     inner_db: float = 0.0
     outer_db: float = -12.0
     acked_alert_ids: set[str] = field(default_factory=set)
+    selection: Selection = field(default_factory=Selection)
     bad_commands: int = 0
     # Includes separator overlap, inference and scheduling latency; independent
     # of how long a track is held after its last delivered observation.
@@ -67,10 +70,25 @@ class EventsState:
     _anchor_us: int = 0
     _anchor_mono: float = field(default_factory=time.monotonic)
 
+    def __post_init__(self) -> None:
+        hooks = getattr(self.ingest, "input_hooks", None)
+        if hooks is not None:
+            hooks.append(self.on_input)
+
+    def head_yaw(self) -> float | None:
+        with self.ingest.poses.lock:
+            return self.ingest.poses.poses[-1].yaw_deg if self.ingest.poses.poses else None
+
+    def on_input(self, msg) -> None:
+        """Headset user action (select / stop / next / prev) from the pose channel."""
+        if isinstance(msg, p.InputEvent):
+            self.selection.handle(msg, self.latest.sources, self.head_yaw())
+
     def _clock(self, mono: float) -> tuple[int, float | None]:
         epoch = self.ingest.pose_epoch
         if epoch != self._epoch:
             self.tracker.reset()
+            self.selection.clear()  # tracker ids restart their history: the old choice means nothing
             self._seen.clear()
             self._clock_key = None
             self._last_device_us = None
@@ -85,6 +103,7 @@ class EventsState:
             stamp = stat.last_device_ts_us
             if self._last_device_us is not None and stamp < self._last_device_us - 2_000_000:
                 self.tracker.reset()
+                self.selection.clear()
                 self._seen.clear()
                 now = stamp
             elif self._clock_key is None:
@@ -94,9 +113,7 @@ class EventsState:
             self._anchor_us, self._anchor_mono = now, mono
             self._clock_key = key
             self._last_device_us = stamp
-        with self.ingest.poses.lock:
-            yaw = self.ingest.poses.poses[-1].yaw_deg if self.ingest.poses.poses else None
-        return now, yaw
+        return now, self.head_yaw()
 
     async def tick(self, mono: float | None = None) -> None:
         """Publish one tick; explicit monotonic seconds support deterministic replay."""
@@ -124,6 +141,7 @@ class EventsState:
             self._snapshot_task = asyncio.create_task(asyncio.to_thread(_snapshot, self.locator))
         self.latest = p.SourcesUpdated(
             device_ts_us=now, sources=self.tracker.update(now, fresh, head_yaw_deg=yaw))
+        self.selection.reconcile(self.tracker)
         payload = self.latest.model_dump_json()
         for queue in tuple(self.clients):
             if queue.full():
