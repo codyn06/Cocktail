@@ -55,6 +55,22 @@ class LocateConfig:
     lock_conf: float = 0.7
     lock_sigma_deg: float = 15.0
     ambiguous_ratio: float = 0.35
+    # Static per-mic gain to remove from the incoming levels (dB): (M,) or (M, B). Use it when the
+    # channels are known to have different sensitivity (the Quest 3S raw mics differ by ~20 dB).
+    # profile_diff=True removes any static inter-mic offset online and needs no calibration.
+    mic_gain_db: tuple | None = None
+    # Model-fit gate. The reduced chi-square of the best bearing (mean squared residual of the
+    # level channels in units of their assumed sigma) is ~1-3 when the head-shadow model describes
+    # the data. Above this limit the level model is the wrong model for this hardware/signal (e.g.
+    # co-located mics with unequal, level-dependent gain), and the bearing is withheld
+    # ("model_mismatch") unless camera/TDOA evidence supports it. None = off.
+    max_resid_chi2: float | None = None
+    # Information gate. fit_gain = (chi2 of the no-direction-cue model - chi2 at the best bearing), in
+    # the same reduced units: how much the head-shadow model explains beyond "the level just
+    # wanders". Near 0 when the mics barely differ with head direction (Quest 3S: ~5 mm apart), where the
+    # best bearing is a fit to noise. Below this limit the bearing is withheld ("model_mismatch").
+    min_fit_gain: float | None = None
+    min_gate_weight: float = 20.0         # evidence weight (activity-seconds * 20 Hz) before the gate may fire
 
 
 @dataclass
@@ -68,6 +84,8 @@ class BearingEstimate:
     alt_bearing_deg: float | None  # second hypothesis (head-relative) if any
     excitation_deg: float         # weighted yaw std in the window
     n_updates: int
+    resid_chi2: float | None = None   # level-model reduced chi-square at the peak (None = not computed)
+    fit_gain: float | None = None     # chi-square drop of the peak vs the no-direction-cue model
 
 
 class _Src:
@@ -106,6 +124,15 @@ class BearingEstimator:
         r = c.head_radius_m
         m = np.deg2rad(c.mic_az_deg)
         self.mic_pos = np.stack([r * np.cos(m), r * np.sin(m), np.zeros_like(m)], axis=1)
+        g = c.mic_gain_db
+        self._mic_gain = None
+        if g is not None:
+            g = np.asarray(g, float)
+            if g.ndim == 1:
+                g = g[:, None] * np.ones((1, self.B))
+            if g.shape != (self.M, self.B):
+                raise ValueError(f"mic_gain_db shape {g.shape} != ({self.M},) or ({self.M},{self.B})")
+            self._mic_gain = g
         self._poses = deque(maxlen=2000)   # (t, unwrapped yaw, pitch)
         self._src: dict[str, _Src] = {}
         self._gcache = (None, None)
@@ -172,6 +199,8 @@ class BearingEstimator:
             L = L[None, :]
         if L.shape != (self.M, self.B):
             raise ValueError(f"levels shape {L.shape} != ({self.M},{self.B})")
+        if self._mic_gain is not None:
+            L = L - self._mic_gain
         s = self._get(source_id)
         yaw, pitch = self._pose_at(t)
         if s.last_t is not None:
@@ -194,15 +223,35 @@ class BearingEstimator:
         s.yw += w; s.ym += w * yaw; s.ymm += w * yaw * yaw
         s.n += 1
 
-    def _level_loglik(self, s):
-        if s.W < 1e-6:
-            return np.zeros(self.cfg.n_az)
+    def _level_sse(self, s):
         W = s.W
         Syy_c = np.where(self.profiled, s.Syy - s.Sy ** 2 / W, s.Syy)            # (C,)
         SyG_c = np.where(self.profiled, s.SyG - s.Sy * s.SG / W, s.SyG)          # (N,C)
         SGG_c = np.where(self.profiled, s.SGG - s.SG ** 2 / W, s.SGG)
-        sse = Syy_c - 2 * SyG_c + SGG_c
-        return -0.5 * self.cfg.neff_ratio * (sse * self.inv_var).sum(axis=1)
+        return Syy_c - 2 * SyG_c + SGG_c
+
+    def _level_loglik(self, s):
+        if s.W < 1e-6:
+            return np.zeros(self.cfg.n_az)
+        return -0.5 * self.cfg.neff_ratio * (self._level_sse(s) * self.inv_var).sum(axis=1)
+
+    def resid_chi2(self, s, k):
+        """Reduced chi-square of bearing bin k: mean over channels of residual power / sigma^2 per unit
+        evidence weight (profiled channels lose one degree of freedom each, ignored: W is large)."""
+        if s.W < 1e-6:
+            return 0.0
+        return float((self._level_sse(s)[k] * self.inv_var).sum() / (s.W * self.C))
+
+    def fit_stats(self, s, k):
+        """(reduced chi2 at bin k, chi2 drop versus a model with no direction cue)."""
+        if s.W < 1e-6:
+            return 0.0, 0.0
+        W = s.W
+        sse_null = np.where(self.profiled, s.Syy - s.Sy ** 2 / W, s.Syy)
+        den = W * self.C
+        chi2 = float((self._level_sse(s)[k] * self.inv_var).sum() / den)
+        null = float((sse_null * self.inv_var).sum() / den)
+        return chi2, null - chi2
 
     # ------------------------------------------------------ external evidence
     def _add_ext(self, source_id, t, loglik):
@@ -302,9 +351,16 @@ class BearingEstimator:
             state = "locked"
         else:
             state = "tracking"
+        chi2 = gain = None
+        if s.n > 0:
+            chi2, gain = self.fit_stats(s, k)
+            if not have_ext and s.W >= self.cfg.min_gate_weight and (
+                    (self.cfg.max_resid_chi2 is not None and chi2 > self.cfg.max_resid_chi2)
+                    or (self.cfg.min_fit_gain is not None and gain < self.cfg.min_fit_gain)):
+                state = "model_mismatch"
         world = float(wrap180(self.az[k]))
         return BearingEstimate(source_id, float(wrap180(self.az[k] - yaw)), world, conf, sig,
-                               state, alt, exc, s.n)
+                               state, alt, exc, s.n, chi2, gain)
 
     def estimates(self, t=None):
         return {sid: self.estimate(sid, t) for sid in self._src}

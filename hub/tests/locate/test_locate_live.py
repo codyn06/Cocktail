@@ -75,3 +75,34 @@ def test_headset_with_four_mic_channels_uses_the_two_the_locator_models():
     loc.on_chunks([chunk("s1", 0, lv)])
     src = {s.source_id: s for s in loc.sources()}
     assert set(src) == {"s1"} and src["s1"].state == p.TrackState.tracking
+
+
+def test_mic_channels_selects_which_delivered_channels_are_used():
+    st = IngestState()
+    loc = LiveLocator(st, mic_channels=(1, 0))        # swapped order of the two live channels
+    for k in range(60):
+        pose(st, k, k * 20_000, 30 * np.sin(k / 10))
+    lv = np.zeros((19, 4, len(BAND_CENTERS_HZ)))
+    lv[:, 0, :] = 10.0
+    lv[:, 1, :] = 30.0
+    lv[:, 2:, :] = 99.0
+    loc._feed_poses()                                   # settle the pose epoch (it resets the estimator once)
+    seen = []
+    orig = loc.est.add_levels
+    loc.est.add_levels = lambda sid, t, L, w=1.0: (seen.append(np.asarray(L).copy()), orig(sid, t, L, w))[1]
+    loc.on_chunks([chunk("s1", 0, lv)])
+    assert seen and seen[0].shape == (2, len(BAND_CENTERS_HZ))
+    assert (seen[0][0] == 30.0).all() and (seen[0][1] == 10.0).all()
+
+
+def test_withheld_state_publishes_no_bearing():
+    from locate.estimator import LocateConfig
+    st = IngestState()
+    loc = LiveLocator(st, cfg=LocateConfig(min_fit_gain=1e9, min_gate_weight=1.0))   # gate always fires
+    for k in range(60):
+        pose(st, k, k * 20_000, 30 * np.sin(k / 10))
+    rng = np.random.default_rng(0)
+    loc.on_chunks([chunk("s1", 0, rng.normal(0, 1, (19, 2, len(BAND_CENTERS_HZ))))])
+    s = loc.sources()[0]
+    assert loc.estimates()["s1"].state == "model_mismatch"
+    assert s.bearing_deg is None and s.bearing_conf == 0.0

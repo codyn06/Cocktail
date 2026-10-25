@@ -37,12 +37,17 @@ class SimSource:
     az_deg: float
     tilt_db_per_oct: float = -3.0
     gate: bool = True   # speech-like on/off gating
+    speed_dps: float = 0.0   # azimuth drift (deg/s): a walking talker
+
+    def az_at(self, t):
+        return self.az_deg + self.speed_dps * t
 
 
 class SimWorld:
     def __init__(self, sources, freqs=(500.0, 1000.0, 2000.0, 4000.0, 8000.0), seed=0,
                  mic_az=(-95.0, 95.0), radius=0.10, alpha_min=0.15, theta_min=140.0,
-                 noise_db=1.5, spec_var_db=3.0, mic_offset_db=1.0):
+                 noise_db=1.5, spec_var_db=3.0, mic_offset_db=1.0, mic_band_offset_db=None,
+                 ild_level_slope=0.0):
         self.rng = np.random.default_rng(seed)
         self.sources = sources
         self.freqs = np.asarray(freqs)
@@ -51,6 +56,12 @@ class SimWorld:
         self.noise_db = noise_db
         self.spec_var_db = spec_var_db
         self.mic_off = self.rng.normal(0, mic_offset_db, len(mic_az))
+        # Fixed per-mic, per-band response offsets (M,B) in dB, e.g. the measured Quest 3S ch0-vs-ch1 gap.
+        self.mic_band_off = (np.zeros((len(mic_az), len(freqs))) if mic_band_offset_db is None
+                             else np.asarray(mic_band_offset_db, float))
+        # Mic 0 sits near its noise floor: its level rises only `ild_level_slope` dB per dB of the source
+        # level instead of 1 (0 = linear, 0.5 = measured on the 3S take: ch0 rose ~16 dB for 30 dB of ch1).
+        self.ild_level_slope = ild_level_slope
         self.radius = radius
         self.mic_pos = np.array([[radius * np.cos(np.deg2rad(a)), radius * np.sin(np.deg2rad(a)), 0.0]
                                  for a in mic_az])
@@ -61,7 +72,7 @@ class SimWorld:
         self._noise = np.zeros((n, len(mic_az), B))  # AR per-mic noise
         self._on = [True] * n
 
-    def step_levels(self, yaw, pitch):
+    def step_levels(self, yaw, pitch, t=0.0):
         """One 20 Hz frame -> list of (levels (M,B), activity)."""
         rng = self.rng
         out = []
@@ -74,11 +85,14 @@ class SimWorld:
                     self._on[i] = not self._on[i]
             else:
                 self._on[i] = True
-            u = source_dir_head_frame(s.az_deg, yaw, pitch)
+            u = source_dir_head_frame(s.az_at(t), yaw, pitch)
             inc = mic_incidence_deg(u, self.mic_az)               # (M,)
             g = self.gt(inc)                                       # (M,B)
             spec = s.tilt_db_per_oct * np.log2(self.freqs / 1000.0)
-            L = g + spec + self._gain[i] + self._spec[i] + self._noise[i] + self.mic_off[:, None]
+            L = g + spec + self._gain[i] + self._spec[i] + self._noise[i] + self.mic_off[:, None] + self.mic_band_off
+            if self.ild_level_slope:
+                ref = (self._gain[i] + self._spec[i]).mean()
+                L[0] = L[0] - self.ild_level_slope * ref
             out.append((L, 1.0 if self._on[i] else 0.0))
         return out
 
@@ -88,13 +102,15 @@ class SimWorld:
 
 
 def run_scenario(az_list, amp_deg, T=30.0, seed=0, camera=None, tdoa_sigma_s=None,
-                 cfg=None, eval_every=0.5):
+                 cfg=None, eval_every=0.5, world_kw=None, speeds=None):
     """Simulate and run the estimator. camera: None or dict(fov_deg=100, conf=0.8,
     sigma_deg=4, rate_hz=4) -> adds camera bearings when the source is in view.
     tdoa_sigma_s: if set, adds noisy TDOA for the mic pair at 5 Hz.
     Returns dict(t, err[n_src,len(t)], state, conf, est, truth_rel)."""
     rng = np.random.default_rng(seed + 12345)
-    world = SimWorld([SimSource(a, tilt_db_per_oct=rng.uniform(-6, 0)) for a in az_list], seed=seed)
+    world = SimWorld([SimSource(a, tilt_db_per_oct=rng.uniform(-6, 0), speed_dps=(speeds[i] if speeds else 0.0))
+                      for i, a in enumerate(az_list)], seed=seed,
+                      **(world_kw or {}))
     est = BearingEstimator(cfg or LocateConfig())
     tp, yaw, pitch = head_trajectory(T, amp_deg, rng)
     n = len(az_list)
@@ -107,7 +123,7 @@ def run_scenario(az_list, amp_deg, T=30.0, seed=0, camera=None, tdoa_sigma_s=Non
         est.add_head_pose(t, yaw[k], pitch[k])
         if t >= next_feat:
             next_feat += 1 / FEAT_HZ
-            for i, (L, act) in enumerate(world.step_levels(yaw[k], pitch[k])):
+            for i, (L, act) in enumerate(world.step_levels(yaw[k], pitch[k], t)):
                 est.add_levels(f"s{i}", t, L, weight=act)
         if camera and t >= next_cam:
             next_cam += 1 / camera.get("rate_hz", 4)
@@ -127,7 +143,7 @@ def run_scenario(az_list, amp_deg, T=30.0, seed=0, camera=None, tdoa_sigma_s=Non
             row_e, row_s, row_c, row_b = [], [], [], []
             for i, a in enumerate(az_list):
                 e = est.estimate(f"s{i}", t)
-                truth = float(wrap180(a - yaw[k]))
+                truth = float(wrap180(world.sources[i].az_at(t) - yaw[k]))
                 row_e.append(abs(float(wrap180(e.bearing_deg - truth))))
                 row_s.append(e.state); row_c.append(e.confidence); row_b.append(e.bearing_deg)
             times.append(t); errs.append(row_e); states.append(row_s); confs.append(row_c); ests.append(row_b)
