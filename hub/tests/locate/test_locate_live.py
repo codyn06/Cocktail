@@ -9,7 +9,7 @@ from separate.live import BAND_CENTERS_HZ, StreamChunk
 
 def chunk(sid, t0_us, levels, act=1.0):
     n = levels.shape[0]
-    return StreamChunk(sid, "speech", 0.9, t0_us, np.full(16000, 0.01, np.float32), np.zeros((2, 16000)),
+    return StreamChunk(sid, "speech", 0.9, t0_us, np.full(16000, 0.01, np.float32), np.zeros((levels.shape[1], 16000)),
                        t0_us + 50_000 + np.arange(n) * 50_000, levels, np.full(n, act))
 
 
@@ -61,3 +61,17 @@ def test_silent_stream_goes_last_seen_then_lost():
     assert s.state == p.TrackState.last_seen
     loc.on_chunks([chunk("s1", 12_000_000, lv, act=0.0)])
     assert loc.sources()[0].state == p.TrackState.lost
+
+
+def test_headset_with_four_mic_channels_uses_the_two_the_locator_models():
+    # the Quest app asks for 4 native mic channels first; the locator models 2. Extra channels used to raise
+    # "levels shape (4, 5) != (2, 5)" in every hop, so no source was ever located.
+    st = IngestState()
+    loc = LiveLocator(st)
+    for k in range(60):
+        pose(st, k, k * 20_000, 30 * np.sin(k / 10))
+    lv = np.zeros((19, 4, len(BAND_CENTERS_HZ)))
+    lv[:, 2:, :] = 99.0                                # the channels beyond the first two must not be read
+    loc.on_chunks([chunk("s1", 0, lv)])
+    src = {s.source_id: s for s in loc.sources()}
+    assert set(src) == {"s1"} and src["s1"].state == p.TrackState.tracking

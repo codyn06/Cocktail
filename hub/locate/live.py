@@ -96,6 +96,10 @@ class LiveLocator:
                     self._add_delays(c, key)
                 for t_us, lv, w in zip(c.level_ts_us, c.levels_db, c.activity):
                     if self.method == "level":
+                        # the headset may deliver more mic channels than the estimator models (the Quest app asks for 4
+                        # native channels first): use the first M, the same two the delay path already uses
+                        if lv.ndim == 2 and lv.shape[0] > self.est.M:
+                            lv = lv[:self.est.M]
                         self.est.add_levels(key, t_us / 1e6, lv, float(w))
                     if w > ACTIVE_MIN:
                         self.last_active_us[c.stream_id] = int(t_us)
