@@ -93,13 +93,13 @@ def make_session(root: Path, sid: int) -> Session:
     return simulate(d / "session", specs, duration_s=DUR)
 
 
-def score_scene(sess: Session, live: LiveSeparator) -> dict:
+def score_scene(sess: Session, live: LiveSeparator, out_dir: Path | None = None) -> dict:
     live.reset()
     mix, est, labels = run_session(sess, live)
     n = min(len(mix), *(len(v) for v in est.values()))
     lab = {sid: max(set(v), key=v.count) for sid, v in labels.items()}
-    od = sess.path.parent / "out"  # what to listen to: the mix and every output stream
-    od.mkdir(exist_ok=True)
+    od = out_dir or (sess.path.parent / "out")  # mix and every output stream
+    od.mkdir(parents=True, exist_ok=True)
     peak = max(np.abs(mix[:n]).max(), 1e-9)
     wavfile.write(od / "mix.wav", SR, (mix[:n] / peak * 0.9).astype(np.float32))
     for sid, e in est.items():  # same scale as the mix, so a quiet stream really is quiet
@@ -134,24 +134,64 @@ def score_scene(sess: Session, live: LiveSeparator) -> dict:
             seq.append(max(est, key=lambda s: abs(np.dot(est[s][k * H : (k + 1) * H], seg))))
         swaps[nm] = int(sum(a != b for a, b in zip(seq, seq[1:])))
     shared = {sid: v for sid, v in claimed.items() if len(v) > 1}
-    return {"sources": out, "unclaimed_stream_db": unclaimed, "shared_streams": shared, "swaps": swaps}
+    result = {"sources": out, "unclaimed_stream_db": unclaimed, "shared_streams": shared, "swaps": swaps,
+              "stream_energy_dbfs": {sid: round(float(10 * np.log10(np.mean(e[:n] ** 2) + 1e-12)), 1)
+                                     for sid, e in est.items()}}
+    compute = np.asarray(live.compute_ms, dtype=np.float32)
+    result["step_compute_ms"] = {
+        "mean": round(float(compute.mean()), 2) if len(compute) else None,
+        "p95": round(float(np.percentile(compute, 95)), 2) if len(compute) else None,
+        "max": round(float(compute.max()), 2) if len(compute) else None,
+        "hop_budget_ms": round(live.H / SR * 1000, 1),
+    }
+    if live.voice_memory is not None:
+        trace = list(live.voice_memory.trace)
+        timings = np.asarray([item["embedding_ms"] for item in trace], dtype=np.float32)
+        result["voice_memory"] = {
+            "embedding_ms_mean": round(float(timings.mean()), 2) if len(timings) else 0.0,
+            "embedding_ms_p95": round(float(np.percentile(timings, 95)), 2) if len(timings) else 0.0,
+            "embedding_ms_max": round(float(timings.max()), 2) if len(timings) else 0.0,
+            "similarity_events": [{"device_ts_us": x["device_ts_us"], "scores": x["scores"],
+                                   "reason": x["reason"]}
+                                  for x in trace if x["scores"]],
+            "trace": trace,
+        }
+    return result
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", help="comma-separated scene numbers")
     ap.add_argument("--out", default="sessions/suite", type=Path)
+    ap.add_argument("--sessions-root", type=Path,
+                    help="reuse saved sceneNN/session recordings instead of downloading librosa examples")
     ap.add_argument("--no-labels", action="store_true")
+    ap.add_argument("--voice-memory", action="store_true",
+                    help="enable optional WavLM speaker embeddings and report identity/latency metrics")
     a = ap.parse_args()
     from .models import SoundLabeler, VoiceSeparator
 
     # The simulator's ear-level mics: the one-talker merge threshold calibrated for them.
-    live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler(), merge_ild_db=SIM_MERGE_ILD_DB)
+    live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler(),
+                         merge_ild_db=SIM_MERGE_ILD_DB, voice_memory=a.voice_memory)
+    try:
+        import torch
+        if a.voice_memory and torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+    except ImportError:
+        torch = None
     ids = [int(x) for x in a.only.split(",")] if a.only else list(SCENES)
     results = {}
     for sid in ids:
         title = SCENES[sid][0]
-        r = score_scene(make_session(a.out, sid), live)
+        if a.sessions_root:
+            session_path = a.sessions_root / f"scene{sid:02d}" / "session"
+            if not (session_path / "session.json").exists():
+                raise FileNotFoundError(f"saved session not found: {session_path}")
+            sess = Session.load(session_path)
+        else:
+            sess = make_session(a.out, sid)
+        r = score_scene(sess, live, a.out / f"scene{sid:02d}" / "out")
         results[sid] = {"title": title, **r}
         print(f"\n## {sid}. {title}", flush=True)
         for nm, s in r["sources"].items():
@@ -162,6 +202,12 @@ def main():
         if r["unclaimed_stream_db"]:
             print(f"  unused streams (dB vs mix, lower = quieter): {r['unclaimed_stream_db']}", flush=True)
     (a.out / "results.json").write_text(json.dumps(results, indent=1))
+    if a.voice_memory and torch is not None and torch.cuda.is_available():
+        memory = {"allocated_mb": round(torch.cuda.memory_allocated() / 1024**2, 1),
+                  "peak_allocated_mb": round(torch.cuda.max_memory_allocated() / 1024**2, 1),
+                  "reserved_mb": round(torch.cuda.memory_reserved() / 1024**2, 1)}
+        (a.out / "cuda_memory.json").write_text(json.dumps(memory, indent=1))
+        print(f"CUDA memory: {memory}")
     print(f"\nwrote {a.out / 'results.json'}")
 
 

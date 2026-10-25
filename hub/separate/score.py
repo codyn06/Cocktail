@@ -70,11 +70,14 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("session")
     ap.add_argument("--no-labels", action="store_true")
+    ap.add_argument("--voice-memory", action="store_true",
+                    help="enable optional WavLM speaker embeddings to retain slots across pauses")
     ap.add_argument("--target-db", type=float, default=8.0)
     a = ap.parse_args()
     from .models import SoundLabeler, VoiceSeparator
 
-    live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler())
+    live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler(),
+                         voice_memory=a.voice_memory)
     res = score(Session.load(a.session), live)
     for nm, r in res.items():
         ok = "PASS" if r["improvement_db"] >= a.target_db else "FAIL"

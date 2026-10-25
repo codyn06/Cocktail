@@ -5,6 +5,7 @@ import protocol as p
 from ingest import IngestState
 from separate import BAND_CENTERS_HZ, LiveSeparator, SeparationWorker
 from separate.score import sisdr
+from separate.voice_memory import VoiceMemory, VoiceMemoryConfig
 
 SR = 16000
 rng = np.random.default_rng(0)
@@ -235,3 +236,100 @@ def test_faint_leftover_does_not_pull_a_voice_into_the_empty_slot():
     n = len(est["s1"])
     assert sisdr(est["s1"][: 3 * SR], you[: 3 * SR]) > 20
     assert sisdr(est["s1"][3 * SR : n], you[3 * SR : n]) > 10   # still you after the onset
+
+
+def test_voice_memory_splits_turn_taking_speakers_after_pause():
+    """Baseline bug: a two-output separator can put both turn-taking speakers in slot one."""
+    n = 18 * SR
+    a = np.sin(2 * np.pi * 300 * np.arange(n) / SR).astype(np.float32) * 0.1
+    b = np.sin(2 * np.pi * 700 * np.arange(n) / SR).astype(np.float32) * 0.1
+    a[5 * SR : 13 * SR] = 0
+    b[:7 * SR] = 0
+    b[12 * SR :] = 0
+
+    class TurnTakingOracle:
+        n_out = 2
+        pos = 0
+
+        def __call__(self, _mix):
+            i = self.pos
+            self.pos += SR
+            # MossFormer can return one turn-taking person in the same raw
+            # output slot. Voice memory must assign identities across the gap.
+            return np.stack([a[i : i + 2 * SR] + b[i : i + 2 * SR],
+                             np.zeros(2 * SR, np.float32)])
+
+    class ToneEncoder:
+        def __call__(self, audios):
+            vectors = []
+            for audio in audios:
+                freq = np.fft.rfftfreq(len(audio), 1 / SR)
+                power = np.abs(np.fft.rfft(audio))
+                peak = freq[np.argmax(power)]
+                vectors.append([1.0, 0.0] if peak < 500 else [0.0, 1.0])
+            return np.asarray(vectors, np.float32)
+
+    mix = a + b
+    audio = np.stack([mix, mix], axis=1)
+    live = LiveSeparator(TurnTakingOracle(), voice_memory=True, speaker_encoder=ToneEncoder())
+    outputs, _ = run(live, audio)
+    assignment = {}
+    for name, reference, intervals in [('man', a, [(0, 5), (13, 18)]),
+                                       ('woman', b, [(7, 12)])]:
+        scores = {sid: sum(np.sum(outputs[sid][start * SR : end * SR] ** 2)
+                           for start, end in intervals) for sid in outputs}
+        assignment[name] = max(scores, key=scores.get)
+    assert assignment['man'] != assignment['woman'], assignment
+    for name, intervals in [('man', [(0, 5), (13, 18)]), ('woman', [(7, 12)])]:
+        expected = assignment[name]
+        for start, end in intervals:
+            for sec in range(start, end):
+                hop_scores = {sid: np.sum(outputs[sid][sec * SR : (sec + 1) * SR] ** 2)
+                              for sid in outputs}
+                assert max(hop_scores, key=hop_scores.get) == expected, (name, sec, hop_scores)
+    assert live.last_gates.get('voice_memory', {}).get('mapping')
+
+
+def test_voice_memory_encoder_failure_does_not_stop_separation():
+    class FailingEncoder:
+        def __call__(self, _audios):
+            raise RuntimeError("model unavailable")
+
+    class SpeechOracle:
+        n_out = 2
+
+        def __call__(self, _mix):
+            x = np.ones(2 * SR, np.float32) * 0.05
+            return np.stack([x, np.zeros_like(x)])
+
+    live = LiveSeparator(SpeechOracle(), voice_memory=True, speaker_encoder=FailingEncoder())
+    audio = np.ones((live.W + 3 * live.H, 2), np.float32) * 0.05
+    outputs, _ = run(live, audio)
+    assert len(outputs["s1"]) > 0
+    assert "RuntimeError: model unavailable" in live.last_gates["voice_memory"].get("embedding_error", "")
+
+
+def test_voice_memory_does_not_learn_uncertain_voice_into_confident_profile():
+    class ProfileEncoder:
+        def __call__(self, audios):
+            result = []
+            for audio in audios:
+                rms = np.sqrt(np.mean(np.asarray(audio) ** 2))
+                result.append([1.0, 0.0] if rms < 0.15 else [0.7, 0.71414286])
+            return np.asarray(result, np.float32)
+
+    memory = VoiceMemory(ProfileEncoder(), VoiceMemoryConfig(profile_min_s=0.1,
+                                                              profile_update_s=0.1), hop_samples=SR)
+    memory.profiles = [np.array([1.0, 0.0], np.float32), np.array([0.0, 1.0], np.float32)]
+    memory._raw_to_slot = [1, 0]
+    memory._silent_s = [2.0, 2.0]
+    memory._profile_active_s = [1.0, 1.0]
+    memory._next_update_s = [0.1, 0.1]
+    voices = np.stack([np.full(2 * SR, 0.1, np.float32),
+                       np.full(2 * SR, 0.2, np.float32)])
+
+    _, diagnostic = memory.reorder(voices, 0)
+
+    assert diagnostic["slot_mapping"] == {0: 0, 1: 1}
+    assert memory._learning_blocked == [False, True]
+    assert np.allclose(memory.profiles[1], [0.0, 1.0])

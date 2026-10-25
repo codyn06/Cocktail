@@ -193,6 +193,19 @@ uv run --group gpu python -m separate.score sessions/demo
 ```
 
 Add `--no-labels` to either command to skip the labeling model.
+Add `--voice-memory` to the live hub, scorer, or scenario suite to opt into WavLM speaker
+embeddings. Voice profiles are learned from active speech and consulted when a stream returns
+after a pause; low-confidence matches keep the separator's current order. The first use loads
+`microsoft/wavlm-base-plus-sv` from Hugging Face. Its model card links a license whose scope for
+the checkpoint weights is unclear, so do not redistribute the downloaded weights.
+
+Replay a saved recording (including `sessions/live1`) and write the mix, per-stream WAVs,
+embedding similarities, per-hop energy, compute timing, and CUDA memory metrics without
+ground-truth stems:
+
+```sh
+uv run --group gpu python -m separate.replay sessions/live1 --out sessions/live1/out_voicememory
+```
 
 More scoring on simulated sessions:
 
@@ -201,8 +214,13 @@ uv run --group gpu --with librosa python -m separate.suite   # 11 scenes: 1-3 vo
 uv run --group gpu python -m locate.score_live sessions/demo  # direction error per source vs truth
 ```
 
+`separate.suite --sessions-root <folder>` reuses previously generated `sceneNN/session`
+recordings when librosa's example clips are unavailable offline. Combine it with
+`--voice-memory` to compare the baseline and remembered stream assignments on the same inputs.
+
 The suite writes each scene's mix and output streams as WAVs to `hub/sessions/suite/sceneNN/out/`
-for listening.
+for listening. `--voice-memory` adds identity similarity traces and per-hop compute timing to
+`results.json`, with CUDA memory in `cuda_memory.json`.
 
 ### Real-world direction test (Quest 3S)
 

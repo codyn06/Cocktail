@@ -26,9 +26,12 @@ Output latency: a hop is final one hop after it ends (window end), plus compute 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 
 import numpy as np
 from scipy import signal
+
+from .voice_memory import VoiceMemory, VoiceMemoryConfig, WavLMSpeakerEncoder
 
 SR = 16000
 N_FFT, HOP_FFT = 512, 128
@@ -66,7 +69,9 @@ def band_levels(x: np.ndarray) -> np.ndarray:
 class LiveSeparator:
     def __init__(self, separator, labeler=None, win_s: float = 2.0, hop_s: float = 1.0,
                  label_every: int = 1, label_smooth: float = 0.6, swap_margin: float = 0.1,
-                 floor_db: float = -60.0, merge_ild_db: float = 0.0, speech_min: float = 0.2):
+                 floor_db: float = -60.0, merge_ild_db: float = 0.0, speech_min: float = 0.2,
+                 voice_memory: bool | VoiceMemory = False, speaker_encoder=None,
+                 voice_memory_config: VoiceMemoryConfig | None = None):
         self.sep, self.labeler = separator, labeler
         self.W, self.H = int(win_s * SR), int(hop_s * SR)
         assert self.W == 2 * self.H, "overlap-add assumes 50 % overlap"
@@ -76,7 +81,15 @@ class LiveSeparator:
         self.label_every, self.label_smooth = label_every, label_smooth
         self.swap_margin, self.floor_db = swap_margin, floor_db
         self.merge_ild_db, self.speech_min = merge_ild_db, speech_min
+        if voice_memory is True:
+            encoder = speaker_encoder or WavLMSpeakerEncoder()
+            self.voice_memory = VoiceMemory(encoder, voice_memory_config, self.H)
+        elif isinstance(voice_memory, VoiceMemory):
+            self.voice_memory = voice_memory
+        else:
+            self.voice_memory = None
         self.last_gates: dict = {}  # what the gates did on the latest window (for status pages)
+        self.compute_ms: list[float] = []
         self.reset()
 
     def reset(self):
@@ -85,7 +98,10 @@ class LiveSeparator:
         self._scores: list[dict[str, float]] = [{} for _ in range(self.n_streams)]
         self._steps = 0
         self.last_gates = {}
+        self.compute_ms.clear()
         self._voice_slot = None  # voice slot that last held a merged single source
+        if self.voice_memory is not None:
+            self.voice_memory.reset()
 
     def _separate_window(self, x: np.ndarray) -> np.ndarray:
         """x: (W, mics) -> (streams, 1 + mics, W): mono estimate then per-mic images."""
@@ -185,14 +201,36 @@ class LiveSeparator:
         """x: (W, mics) window whose first sample is at start_ts_us; windows must advance by
         exactly one hop. Returns the finished first hop of this window for every stream
         (the very first window's first hop is emitted unblended)."""
+        started = time.perf_counter()
         assert x.shape[0] == self.W
         out = self._separate_window(x)
+        p = None
         if self.labeler is not None:
             p = self.labeler.probs([out[k, 0].astype(np.float32) for k in range(self.n_streams)])
             if self.speech_min > 0:
                 self._speech_gate(out, p)
-            if self._steps % self.label_every == 0:
-                self._update_labels(p)
+        if self.voice_memory is not None:
+            remapped, diagnostic = self.voice_memory.reorder(out[:2], start_ts_us)
+            out[:2] = remapped
+            # Keep overlap-add and smoothed labels in logical-slot order, while
+            # _separate_window retains its own raw separator order for matching.
+            permutation = diagnostic["logical_permutation"]
+            if self._prev is not None:
+                previous = self._prev[:2].copy()
+                for old_slot, new_slot in permutation.items():
+                    self._prev[new_slot] = previous[old_slot]
+            old_scores = self._scores[:2]
+            self._scores[:2] = [None, None]
+            for old_slot, new_slot in permutation.items():
+                self._scores[new_slot] = old_scores[old_slot]
+            if p is not None:
+                p_reordered = p.copy()
+                for raw_slot, logical_slot in diagnostic["slot_mapping"].items():
+                    p_reordered[logical_slot] = p[raw_slot]
+                p = p_reordered
+            self.last_gates["voice_memory"] = diagnostic
+        if self.labeler is not None and self._steps % self.label_every == 0:
+            self._update_labels(p)
         self._steps += 1
         faded = out * self.fade
         head = faded[..., : self.H] + self._prev if self._prev is not None else out[..., : self.H]
@@ -217,4 +255,7 @@ class LiveSeparator:
             chunks.append(StreamChunk(self.ids[k], label, float(conf), start_ts_us, head[k, 0].copy(),
                                       head[k, 1:].copy(), level_ts, lv_all[:, k], activity,
                                       scores=dict(sorted(s.items(), key=lambda kv: -kv[1])[:3])))
+        self.compute_ms.append((time.perf_counter() - started) * 1000)
+        if len(self.compute_ms) > 600:
+            del self.compute_ms[:-600]
         return chunks
