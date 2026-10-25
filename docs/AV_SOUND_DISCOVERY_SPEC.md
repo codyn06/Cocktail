@@ -311,7 +311,7 @@ Align and trim returned samples, preserve a controlled gain convention, and use 
 Keep three different residual concepts:
 
 - **Per-query model residual:** the remainder predicted for one target extraction; it still contains other selected sources.
-- **Arithmetic reconstruction remainder:** original mix minus the sum of aligned, gain-managed selected stems. It can contain cancellation and model error as well as unmodeled sound.
+- **Arithmetic reconstruction remainder:** a declared mono analysis mixture minus the sum of aligned, gain-managed mono stems. The current SAM Audio processor averages input channels; preserve that downmix rule in the manifest. Keep the original multichannel master separately. Multichannel playback/remainders require an explicitly validated channel reconstruction; never implicitly broadcast mono stems across the array. The remainder can contain cancellation and model error as well as unmodeled sound. See the [processor channel handling](https://github.com/facebookresearch/sam-audio/blob/main/sam_audio/processor.py).
 - **Unexplained acoustic events:** activity in the remainder that survives semantic/activity checks and cannot be attributed confidently.
 
 Do not sum per-query residuals. Do not treat any high-energy remainder as proof of an off-screen object. Independently generated targets are not guaranteed to add back to the mixture. Retain raw outputs; optionally produce a separately labeled mixture-consistent playback set after evaluating whether correction damages target purity.
@@ -481,7 +481,7 @@ Maintain separate fixture-unit and learned end-to-end suites. Split recordings b
 | Person enters after frame zero | Onset prompting discovers and stitches the new track. |
 | Occlusion, camera motion, scene cut | Track breaks and mask age handled explicitly. |
 | Same direction, different speakers | Bearing duplicate heuristic does not erase distinct supported identities. |
-| Mono, program stereo, calibrated array | Spatial capabilities enabled only for the valid input mode. |
+| Mono, program stereo, calibrated array | Spatial capabilities enabled only for the valid input mode; distinct left/right-content fixture asserts declared mono downmix, exact output shapes and no implicit channel broadcasting. |
 | VFR, dropped frames, audio gap, epoch reset | No fabricated timing evidence or cross-epoch association. |
 | Long clip, OOM, interrupted export | Bounded resources, explicit partial result and resumable stages. |
 
