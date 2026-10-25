@@ -1,0 +1,66 @@
+# Defaults for the Phase 1 deterministic AV pipeline (read with tomllib).
+# Values are project defaults or physical approximations, not measurements.
+
+[media]
+ffmpeg = ""                 # explicit ffmpeg path; empty = COCKTAIL_FFMPEG / FFMPEG_BINARY / PATH / imageio_ffmpeg
+
+[acoustics]
+ambient_temperature_c = 20.0
+temperature_provenance = "assumed"   # "assumed" or "measured"
+r_min_m = 0.5
+
+[timing]
+# delta_audio_ms / delta_mask_ms are measured against t_visual_truth, positive = late.
+gate_early_ms = 15.0        # allowed lead: delta >= -gate_early_ms - q
+gate_late_ms = 45.0         # allowed lag:  delta <= +gate_late_ms + q   (includes the 0-35 ms ToF once)
+# delta_skew_ms = t_mask_onset - t_audio_onset is bounded symmetrically: |delta_skew_ms| <= skew_base_ms + q
+skew_base_ms = 20.0
+
+[spatial]
+wdo_min_weight = 0.1        # WDO dominance floor, applied before post-PHAT weighting
+nfft = 1024
+hop = 512
+interp = 16
+narrowband_ratio = 1.0      # occupied bandwidth < ratio * centre frequency => narrowband
+onset_window_ms = 20.0      # onset-precedence window (10-30 ms)
+onset_sustain_weight = 0.2
+
+[envelope]
+weighting = "k"
+rms_window_ms = 40.0
+attack_ms = 30.0
+release_ms = 180.0
+activate_dbfs_k = -45.0
+sustain_dbfs_k = -51.0
+tail_hold_ms = 150.0
+peak_drop_db = 12.0
+reopen_lockout_ms = 600.0
+onset_rise_db = 6.0
+lf_cutoff_hz = 100.0
+lf_fraction_max = 0.7
+
+[residual]
+n_fft = 1024
+hop = 256
+alpha_max = 1.5
+block_frames = 8
+n_bands = 16
+event_threshold_db = -20.0
+event_min_s = 0.08
+
+[anchors]
+merge_gap_us = 150000
+trim_us = 50000
+min_duration_us = 500000
+
+[matcher]
+accept_threshold = 0.55
+reject_threshold = 0.25
+margin = 0.10
+tof_min_ms = 0.0
+tof_max_ms = 35.0
+clock_uncertainty_ms = 5.0
+
+[off_axis]
+yaw_limit_deg = 60.0
+unknown_pose = "allow"      # explicit learning policy when the face pose was never observed
