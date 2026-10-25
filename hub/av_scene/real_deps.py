@@ -86,9 +86,9 @@ def real_providers(cfg: AvConfig, *, device: str = "cuda", run_tag: str = "run",
         from .events import ast_classifier
 
         def load():
-            return load_sam3_image("person", device=device), sa.load_sam_audio(device=device), ast_classifier(device)
+            return load_sam3_image("person", device=device), sa.load_sam_audio(device=device), None
 
-        with ModelLifecycleManager("events_sam3_samaudio_ast", load, device=device, reports=reports,
+        with ModelLifecycleManager("events_sam3_samaudio", load, device=device, reports=reports,
                                    vram_fraction=vram_fraction) as (sam3, bundle, clf):
             judge = JudgeRanker(backend="judge", device="cpu")
             clap = JudgeRanker(backend="clap", device="cpu")
@@ -128,4 +128,5 @@ def real_providers(cfg: AvConfig, *, device: str = "cuda", run_tag: str = "run",
     erev = {"sam_audio": "facebook/sam-audio-small-tv", "sam3": _ver("sam3"),
             "ast": "MIT/ast-finetuned-audioset-10-10-0.4593", "judge": "facebook/sam-audio-judge", "clap": "laion_clap"}
     return Providers(visual=visual, speech=speech, events=events, diarization=diar, visual_revisions=vrev,
-                     speech_revisions=srev, event_revisions=erev, visual_empty_state=_empty_visual_state)
+                     speech_revisions=srev, event_revisions=erev, visual_empty_state=_empty_visual_state,
+                     event_classifier=lambda: __import__("av_scene.events", fromlist=["x"]).ast_classifier("cpu"))

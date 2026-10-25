@@ -170,3 +170,21 @@ def test_blocked_enrollment_policy_abstains_with_a_visible_reason(tmp_path):
     assert un and all(s["stem_availability"] == "unavailable" and s["refusal_reason"].startswith("enrollment_blocked")
                       for s in un)
     assert not res.state.enrolled_s
+
+
+def test_looped_source_tiles_a_short_clip_with_bounded_reads():
+    from replay.chunked import ArraySource, LoopedSource
+    rate, n = 16000, 3 * 16000
+    audio = (np.arange(n, dtype=np.float32) / n)[None]                      # ramp: any seam or misalignment shows
+    pts = [i * 40_000 for i in range(75)]                                   # 25 fps over 3 s
+    frames = lambda i0, i1: np.stack([np.full((4, 4, 3), i % 75, np.uint8) for i in range(i0, i1)]) if i1 > i0 else np.zeros((0, 4, 4, 3), np.uint8)  # noqa: E731
+    base = ArraySource(audio, rate, pts, frames)
+    lp = LoopedSource(base, 10.0)
+    assert lp.n_audio_samples == 10 * rate and lp.video_pts_us()[:3] == [0, 40_000, 80_000]
+    p = lp.video_pts_us()
+    assert p == sorted(p) and p[75] == 3_000_000 and p[-1] < 10_000_000 and len(p) == 250
+    x = lp.read_audio(2 * rate, 5 * rate, rate)                             # crosses the first loop seam at 3 s
+    assert x.shape == (1, 3 * rate) and np.allclose(x[0, rate:], audio[0, :2 * rate]) and np.allclose(x[0, :rate], audio[0, 2 * rate:])
+    f = lp.read_frames(70, 80)                                              # crosses the video seam
+    assert [int(v[0, 0, 0]) for v in f] == [70, 71, 72, 73, 74, 0, 1, 2, 3, 4]
+    assert max(e - s for k, s, e in base.reads if k == "audio") <= 3 * rate  # every base read stays within the base clip

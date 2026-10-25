@@ -175,6 +175,12 @@ def cmd_run(args) -> int:
     ff = locate_ffmpeg(args.ffmpeg)
     source = TorchcodecSource(media, max_side=args.max_side, ffmpeg_info=ff)
     media_id = hash_file(media)
+    note_extra = ""
+    if args.loop_seconds:
+        from replay.chunked import LoopedSource
+        source = LoopedSource(source, args.loop_seconds)
+        media_id = f"{media_id}:loop{int(args.loop_seconds)}"
+        note_extra = f" LOOPED to {args.loop_seconds:g} s: duration-matched only, the content repeats."
     hw: dict = {}
     try:
         import torch
@@ -186,7 +192,7 @@ def cmd_run(args) -> int:
     res = run_pipeline(source, prov, cfg, out, media_id=media_id, run_id=args.run_id or out.name,
                        cache_dir=args.cache, evidence_tier="replayed",
                        evidence_note="Recorded clip, chunked offline run. Models are hardware-run only where the run "
-                                     "report says so; not real time; no device validation.",
+                                     "report says so; not real time; no device validation." + note_extra,
                        code_revision=_git_rev(), hardware=hw, progress=progress)
     return _report_run(res, out)
 
@@ -260,6 +266,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("run", help="Phase 4 chunked offline pipeline on a recorded clip (GPU; not real time)")
     p.add_argument("media", nargs="?", default=None)
     p.add_argument("--media", dest="media_opt", default=None, help="same as the positional MEDIA")
+    p.add_argument("--loop-seconds", type=float, default=None,
+                   help="repeat the (short) media up to this many seconds: duration-matched workloads only, content repeats")
     p.add_argument("--mock-scene", default=None, metavar="SPEC",
                    help="CPU-only synthetic scene + fake models (e.g. pause_return or matrix:120); evidence=mocked")
     p.add_argument("--out", required=True)

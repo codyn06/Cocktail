@@ -40,6 +40,9 @@ class Providers:
     speech_revisions: dict | None = None
     event_revisions: dict | None = None
     visual_empty_state: Callable[[], dict] | None = None
+    # Event DETECTION (AST) is cheap and needs none of the heavy event models. When given, it is built lazily on its own
+    # (outside the GPU lease), so SAM 3 / SAM Audio / judge load only if an event window actually has to compute.
+    event_classifier: Callable[[], Callable] | None = None
 
 
 class LazyPass:
@@ -101,14 +104,24 @@ def _lazy_speech(lp: LazyPass, revisions: dict, use_tse: bool) -> SpeechModels:
         embed=_LazyCall(lp, lambda m: m.embed, "speaker embedder"), revisions=revisions)
 
 
-def _lazy_events(lp: LazyPass):
+class _LazyClassifier:
+    def __init__(self, factory):
+        self._f, self._c = factory, None
+
+    def __call__(self, windows):
+        if self._c is None:
+            self._c = self._f()
+        return self._c(windows)
+
+
+def _lazy_events(lp: LazyPass, classifier_factory=None):
     from .event_scope import EventAdapters
     ad = EventAdapters(
         sam_audio=_LazyCall(lp, lambda o: o[0].sam_audio, "sam_audio adapter"),
         judge=_LazyCall(lp, lambda o: o[0].judge, "judge adapter"),
         clap=_LazyCall(lp, lambda o: o[0].clap, "clap adapter"),
         tracker=_LazyCall(lp, lambda o: o[0].tracker, "noun tracker"))
-    return ad, _LazyCall(lp, lambda o: o[1], "event classifier")
+    return ad, (_LazyClassifier(classifier_factory) if classifier_factory else _LazyCall(lp, lambda o: o[1], "event classifier"))
 
 
 class MemorySampler:
@@ -270,7 +283,7 @@ def run_pipeline(source, providers: Providers, cfg: AvConfig, out_dir: str | Pat
                 if providers.event_revisions is None:
                     adapters, classifier, erev = ep.get()
                 else:
-                    (adapters, classifier), erev = _lazy_events(ep), providers.event_revisions
+                    (adapters, classifier), erev = _lazy_events(ep, providers.event_classifier), providers.event_revisions
                 revisions.update({f"events:{k}": v for k, v in erev.items()})
                 stage = event_stage.EventStage(runner, cfg, adapters, classifier=classifier, revisions=erev)
                 events = timed("events", lambda: stage.run(speech))

@@ -227,3 +227,19 @@ def test_partial_invalidation_loads_only_the_pass_that_has_work(base, tmp_path):
     shutil.rmtree(cache / "event_window")                                              # only the events pass has work
     res, _ = go(tmp_path, name="p", cache=cache)
     assert res.report["model_passes_opened"] == {"visual": 0, "speech": 0, "events": 1}
+
+
+def test_event_detection_alone_loads_no_heavy_event_model(tmp_path):
+    """AST detection must not open the SAM 3 / SAM Audio pass; only a window that has to compute does."""
+    prov, ef = providers()
+    opened = []
+    real_events = prov.events
+
+    def events():
+        opened.append(1)
+        return real_events()
+    prov.events = events
+    prov.event_classifier = lambda: fk.fake_classifier
+    src = fk.make_source(chirp=False)                       # no non-speech event: detection runs, no window computes
+    res = run_pipeline(src, prov, load_config(), tmp_path / "o", media_id="nochirp", run_id="n", cache_dir=tmp_path / "c")
+    assert not opened and res.report["model_passes_opened"]["events"] == 0

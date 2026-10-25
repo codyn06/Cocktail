@@ -139,6 +139,58 @@ class TorchcodecSource:
         return b.permute(0, 2, 3, 1).contiguous().numpy()
 
 
+class LoopedSource:
+    """Repeat a short recording up to ``target_seconds`` (duration-matched workloads when no long footage exists).
+
+    Content repeats exactly, so results from a looped source match workloads in DURATION, resolution and source
+    count only; they cannot show content-dependent drift and must be labelled 'looped'. Reads stay bounded: every
+    call maps its span onto at most a few reads of the base source."""
+
+    def __init__(self, base, target_seconds: float):
+        self.base = base
+        self.audio_rate_hz = base.audio_rate_hz
+        self.period = int(base.n_audio_samples)
+        if self.period <= 0:
+            raise ValueError("cannot loop an empty source")
+        self.n_audio_samples = int(round(target_seconds * self.audio_rate_hz))
+        self.av_map = base.av_map
+        t0 = base.av_map.audio_start_us
+        period_us = base.av_map.sample_to_common_us(self.period) - t0
+        bp = [int(p) for p in base.video_pts_us() if int(p) - t0 < period_us]
+        self._nb = len(bp)
+        end_us = t0 + int(round(self.n_audio_samples * 1e6 / self.audio_rate_hz))
+        pts, k = [], 0
+        while True:
+            chunk = [p + k * period_us for p in bp]
+            pts += [p for p in chunk if p < end_us]
+            if not chunk or chunk[-1] >= end_us:
+                break
+            k += 1
+        self._pts = pts
+
+    def video_pts_us(self) -> list[int]:
+        return self._pts
+
+    def read_audio(self, start_sample: int, end_sample: int, rate_hz: int) -> np.ndarray:
+        parts, s = [], int(start_sample)
+        end_sample = min(int(end_sample), self.n_audio_samples)
+        while s < end_sample:
+            off = s % self.period
+            e = min(end_sample, s + (self.period - off))
+            parts.append(self.base.read_audio(off, off + (e - s), rate_hz))
+            s = e
+        return np.concatenate(parts, axis=-1) if parts else np.zeros((1, 0), np.float32)
+
+    def read_frames(self, i0: int, i1: int) -> np.ndarray:
+        parts, i = [], int(i0)
+        while i < i1:
+            j = i % self._nb
+            n = min(i1 - i, self._nb - j)
+            parts.append(self.base.read_frames(j, j + n))
+            i += n
+        return np.concatenate(parts, axis=0)
+
+
 # ---------------------------------------------------------------------------------------- bookkeeping
 @dataclass
 class Counters:

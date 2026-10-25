@@ -491,8 +491,10 @@ class LoadedTimeline:
         return sorted((s for v in self.segments.values() for s in v), key=lambda s: (s.start, s.end, s.source_id))
 
     def speech_segments(self) -> list[Seg]:
-        """Sources of kind "speech" only ("tse:<track>" stems and events would double-count the same voice)."""
-        return [s for s in self.all_segments() if s.kind == "speech"]
+        """Speech voices: kind "speech" plus "outside_view" (an off-screen voice is still a separated speech source,
+        listed apart only for the viewer). "tse:<track>" stems, events and the residual are excluded: they would
+        double-count the same voice or are not speech."""
+        return [s for s in self.all_segments() if s.kind in ("speech", "outside_view")]
 
     def segments_at(self, rate: int = SR16, *, speech_only: bool = True) -> list[Seg]:
         segs = self.speech_segments() if speech_only else self.all_segments()

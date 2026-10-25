@@ -250,6 +250,14 @@
     return out;
   }
   // What the user hears for a source at t: a stored segment, or silence (gap / unavailable stem) - never an error.
+  // Every source with a timeline entry, including ones that never produced audio (refused in every chunk, or an
+  // identity abstention): their refusal reasons are exactly what an inspector needs to see.
+  function allSourceIds() {
+    const ids = Object.keys(LA.idx.sources);
+    ((LF.tlIndex && LF.tlIndex.sources) || []).forEach((s) => { if (ids.indexOf(s.source_id) < 0) ids.push(s.source_id); });
+    return ids;
+  }
+
   function sourceStateAt(index, id, t) {
     const src = index.sources[id];
     if (!src) return 'unknown';
@@ -699,7 +707,7 @@
     LF.sig = sig;
     const ul = $('#tl-details'); const bySrc = {};
     segs.forEach((s) => { bySrc[s.source_id] = s; });
-    Object.keys(LA.idx.sources).forEach((id) => {
+    allSourceIds().forEach((id) => {
       let li = ul.querySelector('[data-source-id="' + qs(id) + '"]');
       if (!li) {                                      // created once, then only text/classes change: no focus loss
         li = document.createElement('li'); li.className = 'tlrow'; li.tabIndex = 0; li.dataset.sourceId = id;
@@ -733,7 +741,7 @@
   }
   function drawLanes(tUs) {
     const c = $('#tl-lanes'); if (!c || !S.duration) return;
-    const rows = Object.keys(LA.idx.sources), laneH = 5, rowH = laneH * 4 + 6;
+    const rows = allSourceIds(), laneH = 5, rowH = laneH * 4 + 6;
     c.width = 900; c.height = Math.max(rows.length * rowH, 10);
     const g = c.getContext('2d'), cs = getComputedStyle(document.body);
     const css = (n, d) => (cs.getPropertyValue(n) || d).trim() || d;
