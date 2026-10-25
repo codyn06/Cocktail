@@ -233,10 +233,12 @@ namespace Cocktail.Stream
                         conn.Dispose();
                         try
                         {
+                            // a dead link (wifi gone, hub killed) must not hold up the reconnect: give the goodbye one second, then drop the socket
                             if (ws.State == WebSocketState.Open)
-                                await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None).ConfigureAwait(false);
+                                using (var closeTimeout = new CancellationTokenSource(1000))
+                                    await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", closeTimeout.Token).ConfigureAwait(false);
                         }
-                        catch { }
+                        catch { try { ws.Abort(); } catch { } }
                     }
                 }
 

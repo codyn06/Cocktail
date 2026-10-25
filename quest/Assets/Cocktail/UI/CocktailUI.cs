@@ -132,7 +132,24 @@ namespace Cocktail.Ui
         // ------------------------------------------------------------------ lifecycle
         void OnEnable() { EnsureInit(); }
         void OnDisable() { Unsubscribe(); }
-        void Update() { Tick(Time.unscaledDeltaTime); TickCursor(Time.unscaledDeltaTime); if (pollInput && Application.isPlaying) PollInput(); }
+        float _nextFrameErrLog;
+
+        void Update()
+        {
+            float dt = Time.unscaledDeltaTime;
+            try { Tick(dt); } catch (System.Exception ex) { LogFrameError("Tick", ex); }
+            try { TickCursor(dt); } catch (System.Exception ex) { LogFrameError("Cursor", ex); }
+            if (pollInput && Application.isPlaying) { try { PollInput(); } catch (System.Exception ex) { LogFrameError("Input", ex); } }
+        }
+
+        // one failing part of the frame must not stop the rest, and the same error must not be logged 72-90 times a second
+        void LogFrameError(string part, System.Exception ex)
+        {
+            if (Time.unscaledTime < _nextFrameErrLog) return;
+            _nextFrameErrLog = Time.unscaledTime + 5f;
+            Debug.LogException(ex);
+            DevLog.Add("err", part + ": " + ex.GetType().Name + " " + ex.Message);
+        }
 
         public void EnsureInit()
         {

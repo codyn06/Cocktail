@@ -55,9 +55,11 @@ namespace Cocktail.Stream
             go.SetActive(false);   // LateUpdate shows it, and only while DevMode is on
         }
 
+        float _nextRigScan;
+
         void LateUpdate()
         {
-            if (rig == null) rig = FindFirstObjectByType<OVRCameraRig>();
+            if (rig == null && Time.unscaledTime >= _nextRigScan) { _nextRigScan = Time.unscaledTime + 1f; rig = FindFirstObjectByType<OVRCameraRig>(); }
             if (rig == null) return;
             if (DevMode.On && OVRInput.GetDown(OVRInput.Button.SecondaryThumbstick, OVRInput.Controller.RTouch)) visible = !visible;
             bool show = visible && DevMode.On;

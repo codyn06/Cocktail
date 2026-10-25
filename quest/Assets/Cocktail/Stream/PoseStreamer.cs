@@ -27,10 +27,12 @@ namespace Cocktail.Stream
             if (hub == null) hub = FindFirstObjectByType<HubClient>();
         }
 
+        float _nextRigScan;
+
         void Update()
         {
             if (hub == null || hub.Connection == null) return;
-            if (rig == null) rig = FindFirstObjectByType<OVRCameraRig>();
+            if (rig == null && Time.unscaledTime >= _nextRigScan) { _nextRigScan = Time.unscaledTime + 1f; rig = FindFirstObjectByType<OVRCameraRig>(); }
             Transform eye = rig != null ? rig.centerEyeAnchor : (Camera.main != null ? Camera.main.transform : null);
             if (eye == null) return;
 
