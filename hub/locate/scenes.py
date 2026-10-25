@@ -17,7 +17,7 @@ Same metrics as locate.bench, per talker:
 * front/back right (talkers within 15 deg of the ear axis are not counted);
 * both talkers within 25 deg, counted per scene (the "two speakers within 25 deg" target);
 * seconds to lock: from the start of head motion (meta head_go_s, 1 s) until the bearing is within
-  25 deg in a committed state (tracking or locked) and stays so; locked within 3 s share;
+  25 deg in a committed state (tracking or locked) and stays so; share committed (tracking or locked) within 3 s;
 * honest confidence: every estimate on the timeline is a (confidence, hit) point, hit = error
   <= 20 deg (the window that defines the confidence), as a reliability table plus the ECE.
   Consecutive estimates are correlated, so read the counts as optimistic.
@@ -39,7 +39,7 @@ from separate.live import LiveSeparator
 
 from . import bench, pairsim, score_live
 from .estimator import wrap180
-from .pair import PairCalibration, PairConfig
+from .pair import PairCalibration, PairConfig, sim_tuned
 
 # Two-talker scenes covering front, side and behind, same-side and opposite-side pairs.
 PAIRS = [(-30, 40), (0, 120), (-90, 60), (150, -120), (20, -160), (90, -60),
@@ -151,7 +151,7 @@ def print_summary(s: dict, title: str = "") -> None:
         print(f"  front/back right     {100 * s['fb_right_rate']:5.1f}%  ({s['n_fb']} talkers, side not counted)")
     print(f"  both within 25 deg   {s['both_within_25']}/{s['n_scenes']} scenes")
     locks = [x for x in s["lock_s"] if x is not None]
-    print(f"  seconds to lock      median {_q(locks, 50)}   locked within 3 s: {100 * s['locked_3s_rate']:.0f}%  "
+    print(f"  seconds to lock      median {_q(locks, 50)}   committed within 3 s: {100 * s['locked_3s_rate']:.0f}%  "
           f"never: {sum(x is None for x in s['lock_s'])}/{len(s['lock_s'])}")
     print(f"  final states         {s['final_states']}")
     print(f"  confidence honesty   ECE {s['ece']:.3f}   final: says {s['final_mean_conf']:.2f}, "
@@ -167,6 +167,8 @@ def main(argv=None) -> None:
     ap.add_argument("root", type=Path, help="folder for the scenes (written on first use)")
     ap.add_argument("--calib", type=Path, default=None, help="tdoa calibration JSON fitted at 16 kHz")
     ap.add_argument("--adapt", action="store_true", help="PairConfig(adapt=True)")
+    ap.add_argument("--sim-tuned", action="store_true",
+                    help="pair.sim_tuned(): less tempering and a looser ambiguity rule, fitted on simulation only")
     ap.add_argument("--seed0", type=int, default=100, help="scene k uses seed seed0+k (other seeds = held out)")
     ap.add_argument("--n", type=int, default=None, help="only the first n scenes")
     ap.add_argument("--seconds", type=float, default=SCENE_SECONDS)
@@ -177,7 +179,7 @@ def main(argv=None) -> None:
     warnings.filterwarnings("ignore")
     calib = PairCalibration.load(a.calib) if a.calib else PairCalibration.default()
     raw_out = {} if a.raw_json else None
-    rows, summ = run_suite(a.root, calib, PairConfig(adapt=a.adapt), a.seed0, a.n, a.seconds, raw_out=raw_out)
+    rows, summ = run_suite(a.root, calib, sim_tuned(adapt=a.adapt) if a.sim_tuned else PairConfig(adapt=a.adapt), a.seed0, a.n, a.seconds, raw_out=raw_out)
     print_summary(summ, "adapt: " if a.adapt else "fixed: ")
     if a.json:
         a.json.write_text(json.dumps({"rows": rows, "summary": summ}, indent=1))

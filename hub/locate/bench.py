@@ -188,7 +188,7 @@ def print_report(rows: list[dict], summaries: dict[str, dict]) -> None:
         if s["fb_right_rate"] is not None:
             print(f"  front/back right     {100 * s['fb_right_rate']:5.1f}%  ({s['n_fb']} takes, side takes not counted)")
         locks = [x for x in s["lock_s"] if x is not None]
-        print(f"  seconds to lock      median {_q(locks, 50)}   locked within 3 s: {100 * s['locked_3s_rate']:.0f}%  "
+        print(f"  seconds to lock      median {_q(locks, 50)}   committed within 3 s: {100 * s['locked_3s_rate']:.0f}%  "
               f"never: {sum(x is None for x in s['lock_s'])}/{len(s['lock_s'])}")
         if s["ece"] is not None:
             print(f"  confidence honesty   ECE {s['ece']:.2f}   final: says {s['final_mean_conf']:.2f}, "

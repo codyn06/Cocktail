@@ -54,7 +54,7 @@ All on real Quest 3S takes (`quest/tools/record_session.py`), scored with `locat
 2. **Systematic error floor**: refit `sys_sd_deg` (now 16 deg, learned on simulation) and the
    reliability table on the same real takes. The milestone "when it says 90%, it is right about
    90%" needs real hit rates of >= 90% within +-20 deg for estimates that report 0.9; in
-   simulation the ceiling is ~0.8 because the median error is ~10 deg.
+   simulation the ceiling is ~0.8: that is the 16 deg `sys_sd_deg` blur capping confidence, not a measured result.
 3. **Moving talker**: at least 5 takes with a person walking at known angles (floor markers and
    a timestamped sync) to fit the random-walk sd and to check lag against the tracker's.
 4. **Two talkers**: at least 10 two-speaker takes. Compare per-talker error against

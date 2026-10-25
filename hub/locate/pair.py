@@ -168,17 +168,17 @@ class PairConfig:
     n_az: int = 360
     tau_s: float = 20.0           # forgetting time constant of the evidence
     p_inlier: float = 0.7         # robust likelihood: share of frames that follow the model
-    neff_ratio: float = 0.5       # consecutive frames are correlated: temper the evidence (was 0.1; see sys_sd_deg)
+    neff_ratio: float = 0.1       # consecutive frames are correlated: temper the evidence
     min_excite_deg: float = 8.0   # yaw std below this = "insufficient_motion"
     lock_conf: float = 0.7
     lock_sigma_deg: float = 15.0
-    ambiguous_ratio: float = 0.6
-    alt_exclude_deg: float = 60.0  # a rival hypothesis must be at least this far from the peak
+    ambiguous_ratio: float = 0.35
+    alt_exclude_deg: float = 40.0  # a rival hypothesis must be at least this far from the peak
     # Systematic bearing error (delay-model mismatch, reverb, calibration) the likelihood does not
     # model: the posterior is blurred by this Gaussian sd before confidence, spread and the
-    # alternative hypothesis are read off it. 0 = report the raw posterior. neff_ratio,
-    # sys_sd_deg, alt_exclude_deg and ambiguous_ratio were chosen on SIMULATED takes and scenes
-    # (pairsim) so that the confidence matches the observed hit rate; real takes may differ.
+    # alternative hypothesis are read off it. 0 = report the raw posterior. It can only lower
+    # confidence. It also caps it near 0.8, which is no protection against a confidently wrong
+    # bearing (the real 3S "locked" 79 deg miss read 0.80): that needs real-take validation.
     sys_sd_deg: float = 16.0
     # adapt: each source gets its own delay swing A and offset c, with Gaussian priors around the
     # calibration (A ~ N(D, (amp_sd_ratio D)^2), c ~ N(offset, offset_sd_s^2)), marginalised
@@ -190,6 +190,15 @@ class PairConfig:
     amp_sd_ratio: float = 0.3
     offset_sd_s: float = 2e-6
     huber_k: float = 2.5
+
+
+def sim_tuned(**kw) -> PairConfig:
+    """Settings fitted on SIMULATED takes and scenes (pairsim) so that confidence matches the
+    observed hit rate there: less tempering (neff_ratio 0.5), a rival must be 60 deg from the
+    peak and hold 0.6 of its mass to flag "ambiguous". Not the default: the real 3S was
+    overconfident where the simulation is underconfident, so check on real takes first
+    (`--sim-tuned` in locate.scenes)."""
+    return PairConfig(**{"neff_ratio": 0.5, "ambiguous_ratio": 0.6, "alt_exclude_deg": 60.0, **kw})
 
 
 class _Src:
