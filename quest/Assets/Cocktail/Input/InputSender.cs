@@ -73,11 +73,19 @@ namespace Cocktail.UserInput
             // Right controller only (one controller is enough):
             //   front trigger = select, side trigger (grip) or B = stop, A = replay,
             //   joystick flick right/left = next/prev. Left X/Y/stick-click still work if present.
-            if (OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger, OVRInput.Controller.RTouch)
-                || OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch)) Send(ProtoAction.Stop);
+            // B (stop) and Y (next) wait ChordWindow before they send: B + Y pressed together is the DevMode shortcut and cancels both
+            bool bDown = OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch), yDown = OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch);
+            bool bHeld = OVRInput.Get(OVRInput.Button.Two, OVRInput.Controller.RTouch), yHeld = OVRInput.Get(OVRInput.Button.Four, OVRInput.Controller.LTouch);
+            float now = Time.unscaledTime;
+            if (bDown) _bPending = yHeld ? -1f : now;
+            if (yDown) _yPending = bHeld ? -1f : now;
+            if (bDown && yHeld) _yPending = -1f;
+            if (yDown && bHeld) _bPending = -1f;
+            if (_bPending >= 0f && now - _bPending >= ChordWindow) { _bPending = -1f; Send(ProtoAction.Stop); }
+            if (_yPending >= 0f && now - _yPending >= ChordWindow) { _yPending = -1f; Send(ProtoAction.Next); }
+            if (OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger, OVRInput.Controller.RTouch)) Send(ProtoAction.Stop);
             if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch)
                 || OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch)) Send(ProtoAction.Replay);
-            if (OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch)) Send(ProtoAction.Next);
             if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch)) Send(ProtoAction.Prev);
 
             float sx = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch).x;
@@ -87,6 +95,8 @@ namespace Cocktail.UserInput
         }
 
         bool _stickLatched;
+        float _bPending = -1f, _yPending = -1f;
+        const float ChordWindow = 0.15f;
 
         void ScanHands()
         {

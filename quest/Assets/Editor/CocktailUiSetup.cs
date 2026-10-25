@@ -161,7 +161,7 @@ namespace Cocktail.Editor
                 EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
                 var go = new GameObject("CocktailUI_SelfTest");
                 var feed = go.AddComponent<FakeSourceFeed>(); feed.autoUpdate = false;
-                var ui = go.AddComponent<CocktailUI>(); ui.pollInput = false; ui.useFake = true;
+                var ui = go.AddComponent<CocktailUI>(); ui.pollInput = false; ui.useFake = true; Cocktail.Dev.DevMode.Set(true);
                 void Step(float dt) { feed.Tick(dt); ui.Tick(dt); }
                 void Run(float seconds, float dt = 0.05f, System.Action each = null) { for (float t = 0; t < seconds; t += dt) { Step(dt); each?.Invoke(); } }
 
@@ -313,7 +313,7 @@ namespace Cocktail.Editor
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             var go = new GameObject("CocktailUI_Shots");
             var feed = go.AddComponent<FakeSourceFeed>(); feed.autoUpdate = false;
-            var ui = go.AddComponent<CocktailUI>(); ui.pollInput = false; ui.useFake = true;
+            var ui = go.AddComponent<CocktailUI>(); ui.pollInput = false; ui.useFake = true; Cocktail.Dev.DevMode.Set(true);
             ui.EnsureInit();
             var camGo = new GameObject("ShotCam");
             var cam = camGo.AddComponent<Camera>();

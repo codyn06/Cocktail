@@ -253,10 +253,12 @@ namespace Cocktail.Audio
 
         // ------------------------------------------------------------ main thread
 
+        float _nextRigScan;
+
         void LateUpdate()
         {
             if (_innerSrc == null) return;
-            if (rig == null) rig = FindFirstObjectByType<OVRCameraRig>();
+            if (rig == null && Time.unscaledTime >= _nextRigScan) { _nextRigScan = Time.unscaledTime + 1f; rig = FindFirstObjectByType<OVRCameraRig>(); }
             _head = rig != null ? rig.centerEyeAnchor : (Camera.main != null ? Camera.main.transform : null);
             if (_head == null) return;
 
