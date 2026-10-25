@@ -168,11 +168,18 @@ class PairConfig:
     n_az: int = 360
     tau_s: float = 20.0           # forgetting time constant of the evidence
     p_inlier: float = 0.7         # robust likelihood: share of frames that follow the model
-    neff_ratio: float = 0.1       # consecutive frames are correlated: temper the evidence
+    neff_ratio: float = 0.5       # consecutive frames are correlated: temper the evidence (was 0.1; see sys_sd_deg)
     min_excite_deg: float = 8.0   # yaw std below this = "insufficient_motion"
     lock_conf: float = 0.7
     lock_sigma_deg: float = 15.0
-    ambiguous_ratio: float = 0.35
+    ambiguous_ratio: float = 0.6
+    alt_exclude_deg: float = 60.0  # a rival hypothesis must be at least this far from the peak
+    # Systematic bearing error (delay-model mismatch, reverb, calibration) the likelihood does not
+    # model: the posterior is blurred by this Gaussian sd before confidence, spread and the
+    # alternative hypothesis are read off it. 0 = report the raw posterior. neff_ratio,
+    # sys_sd_deg, alt_exclude_deg and ambiguous_ratio were chosen on SIMULATED takes and scenes
+    # (pairsim) so that the confidence matches the observed hit rate; real takes may differ.
+    sys_sd_deg: float = 16.0
     # adapt: each source gets its own delay swing A and offset c, with Gaussian priors around the
     # calibration (A ~ N(D, (amp_sd_ratio D)^2), c ~ N(offset, offset_sd_s^2)), marginalised
     # exactly per bearing. Reverb and the source's spectrum change both (pairsim: a voice shows a
@@ -263,6 +270,15 @@ class PairLocator:
         m0, m1, _ = self._posterior(s)
         return m0, m1
 
+    def _blur(self, p):
+        step = 360.0 / self.cfg.n_az
+        d = np.arange(self.cfg.n_az)
+        d = np.minimum(d, self.cfg.n_az - d) * step
+        k = np.exp(-0.5 * (d / self.cfg.sys_sd_deg) ** 2)
+        q = np.fft.irfft(np.fft.rfft(p) * np.fft.rfft(k / k.sum()), self.cfg.n_az)
+        q = np.maximum(q, 0.0)
+        return q / q.sum()
+
     def estimate(self, source_id, t=None) -> BearingEstimate:
         s = self._src.get(source_id)
         if s is None or s.n == 0 or not self._poses:
@@ -272,8 +288,10 @@ class PairLocator:
         lp = loglik - loglik.max()
         p = np.exp(lp)
         p /= p.sum()
+        k = int(np.argmax(p))  # the answer is the sharp posterior's peak ...
+        if self.cfg.sys_sd_deg > 0:
+            p = self._blur(p)  # ... the confidence is read off the blurred one
         N, step = self.cfg.n_az, 360.0 / self.cfg.n_az
-        k = int(np.argmax(p))
         w20 = int(round(20 / step))
         idx = (np.arange(-w20, w20 + 1) + k) % N
         conf = float(p[idx].sum())
@@ -281,7 +299,7 @@ class PairLocator:
         wl = p[idx] / p[idx].sum()
         sig = float(np.degrees(np.sqrt((wl * dd ** 2).sum())))
         mask = np.ones(N, bool)
-        mask[(np.arange(-int(40 / step), int(40 / step) + 1) + k) % N] = False
+        mask[(np.arange(-int(self.cfg.alt_exclude_deg / step), int(self.cfg.alt_exclude_deg / step) + 1) + k) % N] = False
         k2 = int(np.argmax(np.where(mask, p, -1)))
         mass2 = p[(np.arange(-w20, w20 + 1) + k2) % N].sum()
         alt = float(wrap180(self.az[k2] - yaw)) if mass2 >= self.cfg.ambiguous_ratio * conf and mass2 > 0.05 else None

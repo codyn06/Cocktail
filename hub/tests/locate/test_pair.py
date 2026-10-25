@@ -184,3 +184,22 @@ def test_adapt_tracks_a_source_whose_swing_and_offset_differ_from_calibration():
             e = loc.estimate("s")
             errs[adapt].append(abs((e.world_deg - truth + 180) % 360 - 180))
     assert np.median(errs[True]) < np.median(errs[False]) and max(errs[True]) <= 20, errs
+
+
+def _clean_locator(cfg):
+    rng = np.random.default_rng(1)
+    loc = PairLocator(CAL, cfg)
+    for i, yi in enumerate(sweep()):
+        loc.add_head_pose(i * 0.05, yi)
+        loc.add_delay("s", i * 0.05, CAL.predict(60, yi) + rng.normal(0, 3e-6))
+    return loc.estimate("s")
+
+
+def test_systematic_error_floor_caps_confidence_and_zero_restores_the_raw_posterior():
+    from locate.pair import PairConfig
+    raw = _clean_locator(PairConfig(sys_sd_deg=0.0))
+    floored = _clean_locator(PairConfig(sys_sd_deg=16.0))
+    assert raw.confidence > 0.95  # plenty of clean evidence: the raw posterior is razor sharp
+    assert floored.confidence < 0.85  # but a 16 deg model error leaves ~20% outside +-20 deg
+    assert abs((floored.world_deg - raw.world_deg + 180) % 360 - 180) <= 2  # same answer
+    assert floored.state in ("tracking", "locked")
