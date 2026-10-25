@@ -54,7 +54,10 @@ events_state = install_events(app, locator)
 audio_out = install_audio_out(app, events_state, AudioOutConfig(
     settle_s=a.out_settle_s, apply_gains_in_layers=a.out_gains_in_layers))
 worker.listeners.append(audio_out.on_chunks)
-if not a.no_speakers: from speakers import install_speakers; install_speakers(app, events_state, worker)  # noqa: E702
+if not a.no_speakers:
+    from speakers import install_speakers
+
+    install_speakers(app, events_state, worker)
 
 
 @app.get("/sources")
