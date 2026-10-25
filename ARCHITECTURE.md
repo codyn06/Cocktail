@@ -389,6 +389,26 @@ checks (`hub/locate/av_spatial.py`), residual math, envelopes, the matcher and a
 live path; the model phases (SAM 3 masks, SAM Audio stems) are not built. It does not change the live
 defaults.
 
+### D18. Speech: separate, then attribute; SAM Audio for non-speech
+**Proposed** (numbered D18 because D11 is taken; measured on synthetic mixtures of recorded clips, hardware-run
+on the RTX 5070 Ti Laptop; numbers in [`docs/STATUS.md`](docs/STATUS.md); no recorded natural-scene or device test).
+- **Speech branch:** MossFormer2_SS_16K separates 2 voices; S3FD faces are assigned to SAM 3 person
+  masks; TalkNet scores each face. A person with at least 1 s of speaking gets an AV_MossFormer2_TSE_16K
+  extraction (`phase2 --tse`), which is their listening stream only if it matches one separated voice
+  (SI-SDR >= 3 dB, 3 dB margin) that is active while their face speaks. A voice claimed by several people
+  goes to one only with a clear activity lead (2x and >= 1 s); otherwise all are refused. Unmatched voices
+  that do not overlap visible speech are `outside_view`. Otherwise: explicit refusal (target inactive /
+  ambiguous / no associated stream). There is never a dominant-voice fallback.
+- **Why TSE decides:** envelope-to-speaking-score correlation (still the fallback without `--tse`) refused
+  every overlap case and once matched an off-screen voice to a silent person. AV-TSE alone does **not** go
+  silent for an inactive target (-18.7 dBFS on silent A, i.e. above the mixture level), which is why it is
+  gated by TalkNet activity and agreement with a separated voice.
+- **SAM Audio small-tv** stays for non-speech text-prompted extraction. AST gives event labels; a label
+  is not attribution. The `--speech-backend sam_audio` path remains for comparison.
+- **Why:** on a two-voice overlap, SAM Audio's visual mask did not steer which voice came back (0/8
+  candidates reached +3 dB SI-SDRi for the prompted voice), while MossFormer2 separated both voices
+  (+14.5 / +17.9 dB). Separation succeeds where SAM Audio selection fails.
+
 ## Open items
 
 - **Integration owner:** unassigned. `.agents/decisions.md` is out of date ("no app stack

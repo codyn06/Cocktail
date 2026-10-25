@@ -194,6 +194,16 @@ MediaPipe Face Landmarker can provide landmarks and facial transformation matric
 
 Pyroomacoustics SRP takes microphone positions, sample rate, FFT size and a source-count setting. `num_src=1` is a default, not an automatic multi-source discovery result. Keep multiple spatial peaks when appropriate and fuse them with source-specific evidence. [SRP-PHAT API](https://pyroomacoustics.readthedocs.io/en/pypi-release/pyroomacoustics.doa.srp.html)
 
+### 4.5 Separate steps, source fields and speech limits
+
+Treat five steps as distinct, each with its own evidence: (1) event label, (2) visual track, (3) activity, (4) AV association, (5) extraction. A label is not attribution; an extracted stem is not proof of association.
+
+- `SceneSource` carries `label_confidence`, `activity_us` and `extraction {status ok|degraded|unavailable|not_attempted, method, stem_source_id, reason}`.
+- Association status is `matched|ambiguous|unmatched|rejected`; an off-screen source gets visibility `outside_view`. Many-to-many associations are allowed.
+- Continuity: an identity swap without a margin becomes `ambiguous`.
+- The speech separator (MossFormer2) handles at most 2 talkers, so more than 2 is reported as `degraded`.
+- Measured (synthetic mixtures): SAM Audio's visual prompt did not select the voice, so speech uses separate-then-attribute (ARCHITECTURE.md D18).
+
 ## 5. Time, audio and geometry contracts
 
 ### 5.1 One timeline with explicit transforms
@@ -452,7 +462,7 @@ Preflight must report capabilities individually: CPU math, decoding, SAM 3 image
 
 ## 12. Build sequence, ownership and acceptance
 
-The integration orchestrator owns `av_scene/`, internal shared contracts, this specification and coordination of root configuration. Respect PRD ownership for `ingest/`, `separate/`, `locate/`, `vision/`, `who/` and `replay/`. One editing agent per worktree; at most two delegated tasks active. A shared-interface change must have an agreed integration owner before parallel implementation.
+The integration orchestrator owns `av_scene/`, internal shared contracts, this specification and coordination of root configuration. Respect PRD ownership for `ingest/`, `separate/`, `locate/`, `vision/`, `who/` and `replay/`. One editing agent per worktree; delegation concurrency follows `AGENTS.md`. A shared-interface change must have an agreed integration owner before parallel implementation.
 
 ### Phase 0 — Research and executable environment report
 
@@ -483,7 +493,7 @@ Dependency: Phase 1. Owners: perception/vision and replay engineers in separate 
 
 Implement preflight, mask polarity probe, AST discovery, one SAM 3 visual backend and SAM Audio small-tv extraction for a short recorded scene with one visible speaker and a silent bystander. Use configured text plus a real visual prompt. Save intermediate artifacts and a playable output.
 
-Acceptance: tested model/runtime versions; foreground-preserving mask conversion; actual source-specific stem; bystander behavior measured; per-stage memory/latency; a listening review. Label results **replayed**, and model execution **hardware-tested on the named laptop** only when actually run.
+Acceptance: tested model/runtime versions; the five steps reported separately with the `SceneSource` extraction status and association status/visibility (§4.5), including a >2-talker case reported `degraded`; foreground-preserving mask conversion; actual source-specific stem; bystander behavior measured; per-stage memory/latency; a listening review. Label results **replayed**, and model execution **hardware-tested on the named laptop** only when actually run.
 
 ### Phase 3 — Overlap, identity and same-class ambiguity
 

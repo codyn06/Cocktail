@@ -23,8 +23,11 @@ const SCRIPT = ".agents/scripts/sync.mjs";
 // behavior is instruction-enforced, not a security boundary.
 const READONLY_CLAUDE_TOOLS = "Read, Grep, Glob, WebFetch, WebSearch, Bash";
 const READONLY_CLAUDE_DISALLOWED = "Write, Edit, NotebookEdit";
-// Claude Code: the main session (orchestrator) runs Opus via .claude/settings.json; subagents run Sonnet.
+// Claude Code: the main session (orchestrator) runs Sonnet at high effort via .claude/settings.json,
+// with Opus as advisor; subagents default to Sonnet at low effort. A role's own `model:`/`effort:`
+// frontmatter overrides these defaults.
 const CLAUDE_SUBAGENT_MODEL = "sonnet";
+const CLAUDE_SUBAGENT_EFFORT = "low";
 const PI_READ_TOOLS = "read, grep, find, ls, bash";
 const PI_EDIT_TOOLS = "read, grep, find, ls, bash, edit, write";
 
@@ -152,7 +155,7 @@ for (const r of roles) {
   // Claude Code subagent
   let fm = `---\nname: ${r.name}\ndescription: ${yq(r.description)}\n`;
   if (ro) fm += `tools: ${READONLY_CLAUDE_TOOLS}\ndisallowedTools: ${READONLY_CLAUDE_DISALLOWED}\n`;
-  fm += `model: ${CLAUDE_SUBAGENT_MODEL}\n`;
+  fm += `model: ${r.model || CLAUDE_SUBAGENT_MODEL}\neffort: ${r.effort || CLAUDE_SUBAGENT_EFFORT}\n`;
   if (r.skills.length) fm += `skills:\n${r.skills.map((s) => `  - ${s}`).join("\n")}\n`;
   fm += `---\n`;
   out.set(`.claude/agents/${r.name}.md`, Buffer.from(fm + mdHeader(r.src) + "\n" + accessNote(r) + r.body));

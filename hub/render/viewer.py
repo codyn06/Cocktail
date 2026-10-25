@@ -79,7 +79,7 @@ def build_bundle(b: BundleInput):
     for tid, recs in b.tracks.items():
         write_track_jsonl(out / "masks" / f"{tid}.jsonl", recs)
         (out / "activity" / f"track_{tid}.json").write_text(
-            json.dumps({"track_id": tid, "state": b.track_states[tid], "evidence_tier": "mocked/synthetic"}))
+            json.dumps({"track_id": tid, "state": b.track_states[tid], "evidence_tier": b.manifest.evidence_tier}))
         assets[f"masks:{tid}"] = f"masks/{tid}.jsonl"
         assets[f"track_state:{tid}"] = f"activity/track_{tid}.json"
     for sid, act in b.activity.items():
@@ -94,8 +94,17 @@ def build_bundle(b: BundleInput):
         render_sequence([out / "frames" / n for n in names], b.overlays, out / "annotated")
         annotated_ok = True
     first = b.manifest.media.video[0]
+    mask_w, mask_h = first.width, first.height
+    for recs in b.tracks.values():
+        sized = next((r.rle for r in recs if r.rle is not None), None)
+        if sized is not None:
+            mask_w, mask_h = int(sized.width), int(sized.height)
+            break
+    transform = {"version": 1, "frame_w": first.width, "frame_h": first.height, "mask_w": mask_w, "mask_h": mask_h}
+    b.manifest.capabilities["frame_transform"] = transform
     (out / "frames.json").write_text(json.dumps({
         "pts_us": b.pts_us, "files": [f"frames/{n}" for n in names], "width": first.width, "height": first.height,
+        "transform": transform,
         "annotated": [f"annotated/{n}" for n in names] if annotated_ok else None}))
 
     mp4 = {}

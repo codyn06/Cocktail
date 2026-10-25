@@ -223,10 +223,12 @@ def read_png(path: str | Path) -> np.ndarray:
     for y in range(h):
         f, row = raw[y, 0], raw[y, 1:].astype(np.int32)
         prev = out[y - 1].astype(np.int32) if y else np.zeros(w * 3, np.int32)
+        if f > 4:
+            raise ValueError(f"unsupported PNG row filter {int(f)} at row {y} (valid: 0-4)")
         if f == 0:
             cur = row
         elif f == 2:
-            cur = row + prev
+            cur = (row + prev) & 0xFF
         else:
             cur = np.zeros(w * 3, np.int32)
             for x in range(w * 3):

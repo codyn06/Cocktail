@@ -209,7 +209,7 @@ class LearningEligibility:
     """Per logical slot, per audio interval permission to LEARN a voice profile.
 
     `unknown_pose` is the explicit policy for faces whose pose was never observed: 'allow' keeps
-    the pre-existing behaviour, 'block' is stricter. Observed off-axis (|yaw| > 60 deg) or occluded
+    the pre-existing behaviour, 'block' is stricter. Observed off-axis (|yaw| > yaw_limit_deg, default 60; phase1 passes cfg.off_axis.yaw_limit_deg) or occluded
     always blocks. Overlap rule: audio is eligible only if NO overlapping interval blocks it, so a
     later clear observation cannot approve previously contaminated audio."""
 
