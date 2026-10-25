@@ -130,6 +130,12 @@ def plan_chunks(n_samples: int, window_s: float = 4.0, overlap_s: float = 2.0, s
     return specs
 
 
+def crossfade_check(f_samples: int, window_s: float, overlap_s: float, sr: int = SPEECH_SR) -> None:
+    """The crossfade (centred on a boundary at the overlap midpoint) must fit in the overlap and in a hop."""
+    if f_samples > int(round(overlap_s * sr)) or f_samples > int(round((window_s - overlap_s) * sr)):
+        raise ValueError(f"crossfade of {f_samples} samples does not fit overlap={overlap_s}s / hop={window_s - overlap_s}s")
+
+
 def check_coverage(specs: list[ChunkSpec], n_samples: int) -> None:
     """Raise unless owned regions tile [0, n_samples) with no gap and no duplicate, inside their windows."""
     pos = 0
