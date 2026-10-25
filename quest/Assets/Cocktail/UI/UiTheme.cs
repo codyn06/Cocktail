@@ -163,13 +163,34 @@ namespace Cocktail.Ui
         public Color speakerColor = Hex(0x00E7FF);
         [Tooltip("Thin dark line around the outline, dot and arrow so they read on light walls.")] public Color speakerOutlineColor = Hex(0x0A0A14);
         [Tooltip("Outline box around a speaker when the camera gives no box for them: full angle in degrees (width, height).")] public Vector2 speakerBoxDeg = new Vector2(22f, 46f);
-        [Tooltip("Corner bracket line width, arm length (fraction of the shorter side) and the dark outer line, in metres at the marker distance.")] public float speakerBracketThickness = 0.016f, speakerBracketArm = 0.22f, speakerOutlineExtra = 0.005f;
+        [Tooltip("Corner bracket line width, arm length (fraction of the shorter side) and the dark outer line, in metres at the marker distance.")] public float speakerBracketThickness = 0.006f, speakerBracketArm = 0.22f, speakerOutlineExtra = 0.003f;
         [Tooltip("A source counts as speaking when labelled speech, tracking, and at least this loud (dB).")] public float speakingMinDb = -50f;
         [Tooltip("Keep the outline this long after the hub stops reporting speech, so it does not flicker.")] public float speakerHoldSeconds = 0.6f;
-        [Tooltip("The speaker is in view when within this many degrees of straight ahead; beyond that a dot is shown at the screen edge.")] public float speakerViewHalfDeg = 45f;
+        [Tooltip("The speaker is in view when within this many degrees of straight ahead; beyond that a dot is shown at the screen edge.")] public float speakerViewHalfDeg = 45f, speakerViewHalfVertDeg = 28f;
+        [Tooltip("Speaker picker: head-locked offset, row width and height, number size (metres / em).")] public Vector3 speakerListOffset = new Vector3(0.42f, -0.2f, 1.1f);
+        [Tooltip("Pointer: dot diameter and ray width in metres.")] public float pointerDotSize = 0.022f, pointerLineWidth = 0.002f;
+        [Tooltip("Demo/test panel: head-locked offset of its chip (the panel opens below it).")] public Vector3 demoPanelOffset = new Vector3(-0.42f, 0.34f, 1.1f);
+        [Tooltip("Numbers on the picker rows are for the team while testing; turn off for wearers (rows are then colour only).")] public bool speakerListShowNumbers = true;
+        // ---- the Cocktail look (from the design mock; every size in degrees at the distance it is drawn at: boxes at markerDistance, picker at 1.1 m)
+        [Header("Cocktail look")]
+        public Color lookInk = Hex(0x08242F), lookPetrol = Hex(0x0A3341), lookPaper = Hex(0xF4F1E8), lookFocus = Hex(0x54899E);
+        [Tooltip("Source colours 1 to 5 (acid yellow, coral, mint, haze blue, lilac). Later numbers take the midpoint of two neighbours.")]
+        public Color[] lookSources = { Hex(0xD8E018), Hex(0xE88068), Hex(0x38E0B0), Hex(0x4A9EC4), Hex(0xB08CB8) };
+        public bool lookFullBox = true;   // false = corner brackets
+        [Range(0f, 1f)] public float lookTint = 0.25f, lookBoxLine = 0.80f, lookHairline = 0.65f, lookTab = 0.80f, lookPlate = 0.62f, lookBlock = 0.65f, lookBlockChosen = 0.90f, lookName = 0.80f, lookHoverBand = 0.55f, lookFrame = 0.90f, lookChevron = 0.70f;
+        public float lookBoxLineDeg = 0.14f, lookHairlineDeg = 0.06f, lookBoxPadDeg = 0.30f, lookTabHeightDeg = 1.15f, lookTabPadDeg = 0.25f, lookTabGapDeg = 0.30f, lookTabNumDeg = 0.80f, lookTabNameDeg = 0.95f;
+        public float lookRowDeg = 1.30f, lookRowGapDeg = 0.20f, lookPadDeg = 0.26f, lookBlockWDeg = 2.20f, lookNameColDeg = 4.40f, lookNameGapDeg = 0.35f, lookNumDeg = 0.80f, lookNameDeg = 1.00f;
+        public float lookChamferDeg = 0.62f, lookFrameChamferDeg = 0.72f, lookBandChamferDeg = 0.50f, lookFrameOutsetDeg = 0.13f, lookBandOutsetDeg = 0.08f, lookFrameLineDeg = 0.10f;
+        [Tooltip("Motion, seconds. All on one ease: 1 - 2^(-10t).")] public float tAppear = 0.28f, tDisappear = 0.42f, tCross = 0.42f, tGlide = 0.22f, tFlash = 0.60f;
+        /// <summary>Size in metres of an angle in degrees at a distance (no lower limit, unlike UiMath.AngleToSize).</summary>
+        public static float Deg(float deg, float distance) => 2f * distance * Mathf.Tan(0.5f * deg * Mathf.Deg2Rad);
+
+        public float speakerListWidth = 0.1f, speakerListRowHeight = 0.05f, speakerListEm = 0.04f;
+        [Tooltip("Tracked hands are drawn as dots on the joints joined by thin lines: colour (alpha = opacity), dot diameter and line width in metres.")] public Color handDotColor = new Color(0.96f, 0.95f, 0.93f, 0.7f);
+        public float handDotSize = 0.005f, handLineWidth = 0.0015f;
+        [Tooltip("Draw the hand skeleton (dots and lines). Off: only your real hands show through the passthrough.")] public bool showHandDots = false;
+        [Tooltip("Opacity of the colour layer over a speaker you are pointing at (0 to 1).")] [Range(0f, 1f)] public float speakerHoverTint = 0.28f;
         [Tooltip("Dot size, and the dashed uncertainty ring (small ring = sure, large ring = unsure), in metres.")] public float speakerDotSize = 0.05f, speakerRingMin = 0.14f, speakerRingMax = 0.34f;
-        [Tooltip("Head-locked arrow that always points toward the noise (up = ahead, right = to the right, down = behind).")] public Vector3 speakerArrowOffset = new Vector3(0f, -0.38f, 1.1f);
-        public float speakerArrowSize = 0.09f;
 
         // ---------------------------------------------------------------- unlocated chips
         [Header("Unlocated sources (no bearing)")]

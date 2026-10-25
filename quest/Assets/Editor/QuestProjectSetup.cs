@@ -22,6 +22,7 @@ namespace Cocktail.Editor
     {
         const string ScenePath = "Assets/Scenes/Main.unity";
         const string CameraRigPath = "Packages/com.meta.xr.sdk.core/Prefabs/OVRCameraRig.prefab";
+        const string HandPrefabPath = "Packages/com.meta.xr.sdk.core/Prefabs/OVRHandPrefab.prefab";
         const string MetaFeatureSetId = "com.meta.openxr.featureset.metaxr";
         const string ApkPath = "Builds/cocktail-quest.apk";
 
@@ -155,7 +156,38 @@ namespace Cocktail.Editor
             var config = OVRProjectConfig.CachedProjectConfig;
             config.targetDeviceTypes = new List<OVRProjectConfig.DeviceType>(TargetDevices);
             config.insightPassthroughSupport = OVRProjectConfig.FeatureSupport.Supported;
+            // Hands plus controllers: the app is operated by pinching, and switches to hands when the controllers are put down.
+            config.handTrackingSupport = OVRProjectConfig.HandTrackingSupport.ControllersAndHands;
             OVRProjectConfig.CommitProjectConfig(config);
+        }
+
+        /// <summary>Tracked hands under the rig's hand anchors, so OVRHand pinch states exist (CocktailUI reads them). Skipped when already present.</summary>
+        static void EnsureHands(OVRCameraRig rig)
+        {
+            if (rig.GetComponentInChildren<OVRHand>(true) != null) return;
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(HandPrefabPath);
+            if (prefab == null) { Debug.LogError($"[QuestSetup] Hand prefab missing at {HandPrefabPath}"); return; }
+            foreach (var side in new[] { ("LeftHandAnchor", 0), ("RightHandAnchor", 1) })
+            {
+                var anchor = rig.transform.Find("TrackingSpace/" + side.Item1);
+                if (anchor == null) { Debug.LogError($"[QuestSetup] {side.Item1} not found under the rig"); continue; }
+                var hand = (GameObject)PrefabUtility.InstantiatePrefab(prefab, anchor);
+                hand.name = side.Item2 == 0 ? "LeftHand" : "RightHand";
+                // 0 = left, 1 = right on OVRHand.HandType, OVRSkeleton._skeletonType and OVRMesh._meshType
+                SetEnum(hand.GetComponent<OVRHand>(), "HandType", side.Item2);
+                SetEnum(hand.GetComponent<OVRSkeleton>(), "_skeletonType", side.Item2);
+                SetEnum(hand.GetComponent<OVRMesh>(), "_meshType", side.Item2);
+            }
+        }
+
+        static void SetEnum(Component c, string field, int value)
+        {
+            if (c == null) return;
+            var so = new SerializedObject(c);
+            var p = so.FindProperty(field);
+            if (p == null) { Debug.LogWarning($"[QuestSetup] {c.GetType().Name}.{field} not found"); return; }
+            p.intValue = value;   // the enum's value, not its list index (OVRSkeleton/OVRMesh enums start at None = -1)
+            so.ApplyModifiedPropertiesWithoutUndo();
         }
 
         static bool CreateScene()
@@ -200,6 +232,8 @@ namespace Cocktail.Editor
             var ovr = manager.GetComponent<OVRManager>();
             if (ovr == null) ovr = manager.AddComponent<OVRManager>();
             ovr.isInsightPassthroughEnabled = true;
+
+            EnsureHands(rig);
 
             // Passthrough renders as an underlay, so the eye camera must clear to transparent
             // black instead of drawing the skybox over it.

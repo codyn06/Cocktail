@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Text;
+using Cocktail.Audio;
 using Cocktail.Protocol;
 using Cocktail.Stream;
 using Cocktail.UserInput;
@@ -56,7 +58,15 @@ namespace Cocktail.Ui
         static readonly System.Comparison<Entry> ByBearing = (a, b) => (a.src.BearingDeg ?? 0f).CompareTo(b.src.BearingDeg ?? 0f);
 
         Transform _worldRoot, _headLocked, _arrowRoot, _chipRoot, _fakeHead, _speakerWorld;
-        SpeakerArrowView _speakerArrow; bool _speakerOnly;
+        bool _speakerOnly;
+        SpeakerListView _list; int _listCursor; int _hoverRowNow = -1; bool _scrollCursor;
+        DemoPanelView _demo; AudioOutPlayer _audioOut;
+        PointerCursorView _cursor; float _tgtDist; bool _tgtFound;
+        int _dData, _dCubes, _dNums, _dMode, _dSound;
+        float _nextReadout;
+        readonly Dictionary<string, int> _speakerNum = new Dictionary<string, int>();
+        readonly List<SpeakerRow> _rows = new List<SpeakerRow>();
+        bool[] _midWas = new bool[0], _ringWas = new bool[0];
         StateBannerView _banner; AlertBannerView _alert; GlassesPanelView _glasses; CompassStripView _compass; RadarRingView _radar; ReticleView _reticle;
         bool _init, _subscribed;
         float _time, _realAt = -1000f, _nextRigScan;
@@ -103,7 +113,6 @@ namespace Cocktail.Ui
         /// <summary>Speaker-only HUD: just the outline on whoever is speaking, a dot at the edge if they are out of view, and the arrow toward the noise. Only applies in HudMode.Full.</summary>
         public bool SpeakerOnly { get => _speakerOnly; set => _speakerOnly = value; }
         public SpeakerView GetSpeaker(string id) => _entries.TryGetValue(id, out var e) ? e.speaker : null;
-        public SpeakerArrowView SpeakerArrow => _speakerArrow;
         public int SpeakerOutlineCount { get { int n = 0; foreach (var e in _entries.Values) if (e.speaker != null && e.speaker.OutlineVisible) n++; return n; } }
         public int SpeakerDotCount { get { int n = 0; foreach (var e in _entries.Values) if (e.speaker != null && e.speaker.DotVisible) n++; return n; } }
 
@@ -118,7 +127,7 @@ namespace Cocktail.Ui
         // ------------------------------------------------------------------ lifecycle
         void OnEnable() { EnsureInit(); }
         void OnDisable() { Unsubscribe(); }
-        void Update() { Tick(Time.unscaledDeltaTime); if (pollInput && Application.isPlaying) PollInput(); }
+        void Update() { Tick(Time.unscaledDeltaTime); TickCursor(Time.unscaledDeltaTime); if (pollInput && Application.isPlaying) PollInput(); }
 
         public void EnsureInit()
         {
@@ -151,8 +160,10 @@ namespace Cocktail.Ui
                 _glasses = Child<GlassesPanelView>("GlassesPanel", theme.glassesOffset); _glasses.Build(theme);
                 _compass = Child<CompassStripView>("CompassStrip", theme.compassOffset); _compass.Build(theme);
                 _radar = Child<RadarRingView>("RadarRing", theme.radarOffset); _radar.Build(theme);
+                _list = Child<SpeakerListView>("SpeakerList", theme.speakerListOffset); _list.Build(theme);
+                _demo = Child<DemoPanelView>("DemoPanel", theme.demoPanelOffset); BuildDemo();
+                if (Application.isPlaying) { _cursor = new GameObject("PointerCursor").AddComponent<PointerCursorView>(); _cursor.Build(theme); }
                 _reticle = Child<ReticleView>("Reticle", new Vector3(0f, 0f, theme.reticleDistance)); _reticle.Build(theme);
-                _speakerArrow = Child<SpeakerArrowView>("SpeakerArrow", theme.speakerArrowOffset); _speakerArrow.Build(theme);
             }
             Subscribe();
             if (hub != null && hub.LastSources != null && _entries.Count == 0) { ApplySources(hub.LastSources, false); }
@@ -297,13 +308,15 @@ namespace Cocktail.Ui
             Vector3 headPosL = _worldRoot.InverseTransformPoint(Head.position);
             float headYaw = HeadYaw();
             if (fake != null) fake.headYawDeg = headYaw;
+            TickCubes(headPosL, headYaw);
+            TickDemo(dt);
 
             bool full = hudMode == HudMode.Full;
             bool spk = full && _speakerOnly;   // speaker-only HUD: nothing but the speaker outline, dot and arrow
             bool rich = full && !spk;
             _worldRoot.gameObject.SetActive(rich);
             _speakerWorld.gameObject.SetActive(spk);
-            _speakerArrow.gameObject.SetActive(spk);
+            _list.gameObject.SetActive(spk);
             _arrowRoot.gameObject.SetActive(rich && theme.showEdgeArrows);
             _chipRoot.gameObject.SetActive(rich);
             _compass.gameObject.SetActive(rich && theme.showCompass);
@@ -336,7 +349,12 @@ namespace Cocktail.Ui
             }
             _located.Sort(ByBearing);
 
-            if (spk) { _hoverId = null; _hoverTime = 0f; TickSpeakers(dt, headPosL, headYaw); return; }
+            if (spk)
+            {
+                TickSpeakers(dt, headPosL, headYaw);
+                _alert.Tick(dt, _alertBearing.HasValue ? UiMath.NormalizeDeg(_alertBearing.Value - headYaw) : (float?)null);   // keep alerts expiring in this mode
+                return;
+            }
 
             // stack markers whose bearings are close so their data boxes do not overlap
             float prevB = float.NaN; int stack = 0;
@@ -415,33 +433,346 @@ namespace Cocktail.Ui
 
         void TickSpeakers(float dt, Vector3 headPosL, float headYaw)
         {
-            Entry primary = null, loudest = null; float primaryDb = float.MinValue, loudestDb = float.MinValue;
+            // nothing is chosen automatically: every talking speaker is a row in the picker, the wearer chooses one
+            string selId = ResolveSelectedSourceId();
+            float headPitch = Mathf.Asin(Mathf.Clamp(_worldRoot.InverseTransformDirection(Head.forward).y, -1f, 1f)) * Mathf.Rad2Deg;
+            _rows.Clear();
+            var ptr = Pointer();
+            string best = null; float bestScore = float.MaxValue, bestDist = 1.5f;
             foreach (var en in _located)
             {
                 var s = en.src;
                 if (IsSpeaking(s)) en.lastSpeaking = _time;
                 bool visible = _time - en.lastSpeaking <= theme.speakerHoldSeconds;
                 float rel = UiMath.NormalizeDeg(s.BearingDeg.Value - headYaw);
-                if (visible && en.speaker == null)
+                float relElev = (s.ElevationDeg ?? en.elevFallback) - headPitch;
+                bool inView = Mathf.Abs(rel) <= theme.speakerViewHalfDeg && Mathf.Abs(relElev) <= theme.speakerViewHalfVertDeg;
+                int num = NumberFor(s.SourceId, visible);
+                Color own = num > 0 ? SpeakerColor(num) : default;
+                bool chosen = s.SourceId == selId;
+                if (visible) _rows.Add(new SpeakerRow { id = s.SourceId, number = num, name = NameFor(s), color = own, selected = chosen, dist = s.DistanceM ?? float.MaxValue });
+                // pointing at a speaker who is in view: a light colour layer over them (the pointer is the hand ray, or the head if no hand is tracked)
+                if (visible && inView)
+                {
+                    Vector3 wp = _worldRoot.TransformPoint(headPosL + UiMath.DirFromYawElev(s.BearingDeg.Value, s.ElevationDeg ?? en.elevFallback) * theme.markerDistance);
+                    Vector2 half = en.hasBox ? en.box * 0.5f
+                        : new Vector2(UiMath.AngleToSize(theme.speakerBoxDeg.x, theme.markerDistance), UiMath.AngleToSize(theme.speakerBoxDeg.y, theme.markerDistance)) * 0.5f;
+                    if (GazeHitFrom(ptr, wp, half, out float sc) && sc < bestScore) { bestScore = sc; best = s.SourceId; bestDist = Vector3.Dot(wp - ptr.position, ptr.forward); }
+                }
+                bool hovered = s.SourceId == _hoverId && inView;
+                // the chosen speaker is marked: a rectangle if in view, an edge arrow if not. A pointed-at speaker gets only the tint.
+                bool show = visible && (chosen || hovered);
+                if (show && en.speaker == null)
+                {
+                    var go = new GameObject("Speaker_" + s.SourceId); go.transform.SetParent(_speakerWorld, false);
+                    en.speaker = go.AddComponent<SpeakerView>(); en.speaker.Build(theme, _headLocked);
+                }
+                if (en.speaker == null) continue;
+                en.speaker.Tick(new SpeakerInput
+                {
+                    color = own,
+                    src = s, relDeg = rel, relElevDeg = relElev, inView = inView, headPosL = headPosL,
+                    hasBox = en.hasBox, boxSize = en.box, elevFallbackDeg = en.elevFallback, visible = show, dt = dt,
+                    selected = chosen, hovered = hovered, number = num, name = NameFor(s),
+                });
+            }
+            // heard but not located: still a row in the picker; if chosen, a plain dot instead of an arrow
+            foreach (var en in _unlocated)
+            {
+                var s = en.src;
+                if (IsSpeaking(s)) en.lastSpeaking = _time;
+                bool visible = _time - en.lastSpeaking <= theme.speakerHoldSeconds;
+                int num = NumberFor(s.SourceId, visible);
+                Color own = num > 0 ? SpeakerColor(num) : default;
+                bool chosen = s.SourceId == selId;
+                if (visible) _rows.Add(new SpeakerRow { id = s.SourceId, number = num, name = NameFor(s), color = own, selected = chosen, dist = s.DistanceM ?? float.MaxValue });
+                bool show = visible && chosen;
+                if (show && en.speaker == null)
                 {
                     var go = new GameObject("Speaker_" + s.SourceId); go.transform.SetParent(_speakerWorld, false);
                     en.speaker = go.AddComponent<SpeakerView>(); en.speaker.Build(theme, _headLocked);
                 }
                 if (en.speaker != null)
-                    en.speaker.Tick(new SpeakerInput
-                    {
-                        src = s, relDeg = rel, inView = Mathf.Abs(rel) <= theme.speakerViewHalfDeg, headPosL = headPosL,
-                        hasBox = en.hasBox, boxSize = en.box, elevFallbackDeg = en.elevFallback, visible = visible, dt = dt,
-                    });
-                if (visible && s.LevelDb > primaryDb) { primary = en; primaryDb = s.LevelDb; }
-                if (s.State == TrackState.Tracking && s.LevelDb > loudestDb) { loudest = en; loudestDb = s.LevelDb; }
+                    en.speaker.Tick(new SpeakerInput { src = s, noDirection = true, color = own, visible = show, selected = chosen, dt = dt });
             }
-            foreach (var en in _unlocated)
-                if (en.speaker != null)
-                    en.speaker.Tick(new SpeakerInput { src = en.src, visible = false, dt = dt });
-            // the arrow always points toward the noise: the loudest speaker, else the loudest tracked sound of any kind
-            var target = primary ?? loudest;
-            _speakerArrow.Tick(target != null ? UiMath.NormalizeDeg(target.src.BearingDeg.Value - headYaw) : (float?)null, dt);
+            if (best == _hoverId) _hoverTime += dt;
+            else { _hoverId = best; _hoverTime = 0f; }
+            if (best != null) NoteTarget(bestDist);
+            // nearest first, so a source that is hard to point at can still be picked from the list; no distance = last
+            // distances are bucketed to 0.5 m so two sources about as far away keep a steady order (by number) instead of swapping every frame
+            _rows.Sort((a, b) => { int c = Bucket(a.dist).CompareTo(Bucket(b.dist)); return c != 0 ? c : a.number.CompareTo(b.number); });
+            _listCursor = _rows.Count == 0 ? 0 : Mathf.Clamp(_listCursor, 0, _rows.Count - 1);
+            // pointing at a world speaker lights that speaker's row; pointing at a row lights it (and a pinch then chooses it)
+            int hoverRow = -1;
+            if (_hoverId != null) { hoverRow = _rows.FindIndex(r => r.id == _hoverId); if (hoverRow >= 0) _listCursor = hoverRow; }
+            else
+            {
+                float rowBest = float.MaxValue, rowDist = 1.2f;
+                for (int i = 0; i < _list.VisibleRows; i++)
+                    if (_list.RowAt(i, out int ri, out Vector3 rc, out Vector2 rh) && GazeHitFrom(ptr, rc, rh, out float rs) && rs < rowBest) { rowBest = rs; _listCursor = ri; hoverRow = ri; rowDist = Vector3.Dot(rc - ptr.position, ptr.forward); }
+                if (rowBest < float.MaxValue) NoteTarget(rowDist);
+            }
+            _hoverRowNow = hoverRow;
+            if (hoverRow >= 0) _scrollCursor = false;
+            _list.Tick(_rows, hoverRow >= 0 ? hoverRow : (_scrollCursor ? _listCursor : -1), dt);
+        }
+
+        // ------------------------------------------------------------------ demo / test panel
+        void BuildDemo()
+        {
+            _demo.Build(theme);
+            _audioOut = FindFirstObjectByType<AudioOutPlayer>();
+            _dData = _demo.AddButton("FAKE FALLBACK", () => useFake = !useFake, 0, 1, 0);
+            _dCubes = _demo.AddButton("CUBES", () => spawnCubeSources = !spawnCubeSources, 1, 1, 0);
+            _dNums = _demo.AddButton("NUMBERS", () => theme.speakerListShowNumbers = !theme.speakerListShowNumbers, 0, 1, 1);
+            _dMode = _demo.AddButton("MODE", CycleMode, 1, 1, 1);
+            _demo.AddButton("VOICE -", () => VolStep(-3f, 0f), 0, 1, 2);
+            _demo.AddButton("VOICE +", () => VolStep(3f, 0f), 1, 1, 2);
+            _demo.AddButton("ROOM -", () => VolStep(0f, -3f), 0, 1, 3);
+            _demo.AddButton("ROOM +", () => VolStep(0f, 3f), 1, 1, 3);
+            _demo.AddButton("REPLAY", () => DemoCmd(ProtoAction.Replay), 0, 1, 4);
+            _demo.AddButton("STOP", () => DemoCmd(ProtoAction.Stop), 1, 1, 4);
+            _demo.AddButton("PREV", () => DemoCmd(ProtoAction.Prev), 0, 1, 5);
+            _demo.AddButton("NEXT", () => DemoCmd(ProtoAction.Next), 1, 1, 5);
+            _dSound = _demo.AddButton("CUBE SOUND", () => cubeSound = !cubeSound, 0, 2, 6);
+            _demo.SetOpen(false);
+        }
+
+        void VolStep(float innerDb, float outerDb)
+        {
+            if (_audioOut == null) _audioOut = FindFirstObjectByType<AudioOutPlayer>();
+            if (_audioOut != null) _audioOut.SetVolumesDb(_audioOut.InnerDb + innerDb, _audioOut.OuterDb + outerDb, false);   // the headset applies the levels itself
+        }
+
+        void CycleMode()
+        {
+            var next = (Mode)(((int)_mode + 1) % 3);
+            if (UsingFake) { if (fake != null) fake.SetMode(next); }
+            else if (hub != null && hub.Connection != null) hub.Connection.SendCommand(new SetMode { Mode = next });
+        }
+
+        void DemoCmd(ProtoAction a)
+        {
+            if (UsingFake)
+            {
+                if (fake == null) return;
+                if (a == ProtoAction.Replay) fake.Replay();
+                else if (a == ProtoAction.Stop) fake.Stop();
+                else StepSelection(a == ProtoAction.Next ? 1 : -1);
+            }
+            else if (input != null) input.Send(a, null, "ui");
+        }
+
+        // fake mode has no hub to cycle for us: step through the picker rows
+        void StepSelection(int dir)
+        {
+            if (_rows.Count == 0) return;
+            int cur = _rows.FindIndex(r => r.selected);
+            int next = cur < 0 ? (dir > 0 ? 0 : _rows.Count - 1) : (cur + dir + _rows.Count) % _rows.Count;
+            if (next != cur) TrySelectId(_rows[next].id, "ui");
+        }
+
+        // ------------------------------------------------------------------ pointer cursor
+        void NoteTarget(float metresAlongRay) { _tgtFound = true; _tgtDist = Mathf.Max(0.3f, metresAlongRay); }
+
+        void TickCursor(float dt)
+        {
+            if (_cursor == null) return;
+            var ptr = Pointer(); bool hand = ptr != Head;
+            float pinch = 0f;
+            foreach (var h in _hands) if (h != null && h.IsTracked) pinch = Mathf.Max(pinch, h.GetFingerPinchStrength(OVRHand.HandFinger.Index));
+            _cursor.Tick(ptr, _tgtFound ? _tgtDist : (hand ? 1.4f : 1.1f), _tgtFound, pinch, hand, dt);
+            _tgtFound = false;
+        }
+
+        // per hand: T = tracked, P = pointer pose valid, pinch strength of the index finger, * while it counts as a pinch
+        string HandDebug()
+        {
+            if (_hands.Length == 0) return "none found";
+            var sb = new StringBuilder();
+            foreach (var h in _hands)
+            {
+                if (h == null) continue;
+                sb.Append(h.name.StartsWith("L") ? "L" : "R").Append(h.IsTracked ? "T" : "-").Append(h.IsPointerPoseValid ? "P" : "-")
+                  .Append(h.GetFingerPinchStrength(OVRHand.HandFinger.Index).ToString("0.0")).Append(h.GetFingerIsPinching(OVRHand.HandFinger.Index) ? "*" : "").Append(' ');
+            }
+            return sb.ToString();
+        }
+
+        void TickDemo(float dt)
+        {
+            if (_demo == null) return;
+            _demo.Tick(Pointer(), dt);
+            if (_demo.TryGetHoverWorld(out var demoAt)) NoteTarget(Vector3.Dot(demoAt - Pointer().position, Pointer().forward));
+            if (_time < _nextReadout) return;
+            _nextReadout = _time + 0.25f;
+            _demo.SetLabel(_dData, "FAKE FALLBACK " + (useFake ? "ON" : "OFF"));
+            _demo.SetLabel(_dCubes, "CUBES " + (spawnCubeSources ? "ON" : "OFF"));
+            _demo.SetLabel(_dSound, "CUBE SOUND " + (cubeSound ? "ON" : "OFF"));
+            _demo.SetLabel(_dNums, "NUMBERS " + (theme.speakerListShowNumbers ? "ON" : "OFF"));
+            _demo.SetLabel(_dMode, "MODE " + _mode);
+            if (!_demo.Open) return;
+            var sb = new StringBuilder();
+            bool conn = hub != null && hub.Connection != null && hub.Connection.Events.State == LinkState.Connected;
+            sb.Append("DATA ").Append(UsingFake ? "FAKE" : "REAL").Append("  HUB ").Append(conn ? "UP " : "DOWN ").Append(hub != null ? hub.Host : "-").Append('\n');
+            sb.Append("STATE ").Append(_state).Append("  CHOSEN ").Append(ResolveSelectedSourceId() ?? "-").Append('\n');
+            sb.Append("HANDS ").Append(HandDebug()).Append("  POINT ").Append(_demo.HoverIndex >= 0 ? "panel" : _hoverId ?? (_listCursor >= 0 && _rows.Count > 0 ? "row" : "-")).Append('\n');
+            if (_audioOut != null) sb.Append("VOICE ").Append(_audioOut.InnerDb.ToString("0")).Append("  ROOM ").Append(_audioOut.OuterDb.ToString("0")).Append(" dB\n");
+            int n = 0;
+            foreach (var en in _entries.Values)
+            {
+                if (n++ >= 5) break;
+                var s = en.src;
+                sb.Append(s.SourceId).Append(' ').Append(s.Label).Append(' ').Append(s.LevelDb.ToString("0")).Append("dB ")
+                  .Append(s.BearingDeg.HasValue ? s.BearingDeg.Value.ToString("0") + "deg " : "no-dir ")
+                  .Append(s.DistanceM.HasValue ? s.DistanceM.Value.ToString("0.0") + "m " : "")
+                  .Append(s.State).Append('\n');
+            }
+            _demo.SetReadout(sb.ToString());
+        }
+
+        // ------------------------------------------------------------------ test audio cubes (fake data only)
+        [Tooltip("In fake mode, put two cubes in the room that act as the two speakers: the HUD follows where they are.")]
+        [SerializeField] bool spawnCubeSources = true;
+        Transform[] _cubes;
+        // four cubes at different directions and depths: ids match the fake feed's talkers (s_3 stays the scripted music)
+        static readonly string[] CubeIds = { "s_1", "s_2", "s_4", "s_5" };
+        static readonly float[] CubeYawOffsetDeg = { -25f, 30f, 5f, -70f };
+        static readonly float[] CubeDist = { 2f, 2f, 1.0f, 3.5f };       // metres: two at arm-and-a-bit, one close, one far
+        static readonly float[] CubeElev = { 0f, 0f, -8f, 6f };          // degrees: the close one low, the far one a little high
+        static readonly float[] CubeF0 = { 180f, 260f, 140f, 330f };
+        static readonly float[] CubeRate = { 3.0f, 2.25f, 1.75f, 2.5f };   // multiples of 0.25 so each 4 s clip loops with no click
+
+        [Tooltip("Cubes make sound: the chosen cube plays at the VOICE level, the other at the ROOM level (nothing chosen: both at full).")]
+        [SerializeField] bool cubeSound = true;
+        AudioSource[] _cubeAudio;
+        float[] _cubeGain = new float[4];
+
+        // the product's focus behaviour, played locally for the cubes: chosen speaker = inner level, everyone else = outer level
+        void TickCubeSound(float dtForSound)
+        {
+            if (_cubeAudio == null) return;
+            string sel = ResolveSelectedSourceId();
+            float inner = _audioOut != null ? _audioOut.InnerDb : 0f, outer = _audioOut != null ? _audioOut.OuterDb : -12f;
+            for (int i = 0; i < _cubeAudio.Length; i++)
+            {
+                if (_cubeAudio[i] == null) continue;
+                // an AudioSource stops when its object is deactivated (CUBES off, real data arriving): start it again
+                if (_cubeAudio[i].gameObject.activeInHierarchy && !_cubeAudio[i].isPlaying) _cubeAudio[i].Play();
+                float db = !cubeSound ? -80f : sel == null ? 0f : (sel == CubeIds[i] ? inner : outer);
+                float target = db <= -79f ? 0f : 0.5f * Mathf.Pow(10f, db / 20f);
+                _cubeGain[i] = UiObjects.Ease(_cubeGain[i], target, 8f, dtForSound);   // glide, no clicks
+                _cubeAudio[i].volume = Mathf.Clamp01(_cubeGain[i]);
+            }
+        }
+
+        // a looping voice-like sound: harmonics of f0 with a little vibrato, chopped into syllables at the given rate; loops with no click
+        static AudioClip VoiceClip(string name, float f0, float syllableHz)
+        {
+            const int rate = 16000, seconds = 4;
+            var data = new float[rate * seconds];
+            var rng = new System.Random(f0.GetHashCode());
+            for (int n = 0; n < data.Length; n++)
+            {
+                float t = n / (float)rate;
+                float vib = 1f + 0.015f * Mathf.Sin(2f * Mathf.PI * 5f * t);
+                float s = 0f;
+                for (int h = 1; h <= 8; h++) s += Mathf.Sin(2f * Mathf.PI * f0 * h * vib * t) / h;
+                float env = 0.5f * (1f + Mathf.Sin(2f * Mathf.PI * syllableHz * t - 1.2f)); env *= env;
+                float breath = ((float)rng.NextDouble() * 2f - 1f) * 0.05f;
+                data[n] = (s * 0.35f + breath) * env;
+            }
+            var clip = AudioClip.Create(name, data.Length, 1, rate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
+
+        void TickCubes(Vector3 headPosL, float headYaw)
+        {
+            if (_cubes != null)
+            {
+                bool on = spawnCubeSources && UsingFake;
+                foreach (var c in _cubes) if (c != null && c.gameObject.activeSelf != on) c.gameObject.SetActive(on);
+            }
+            if (!spawnCubeSources && fake != null) fake.ClearAnchors();
+            if (!spawnCubeSources || fake == null || !UsingFake || !Application.isPlaying) return;
+            if (_cubes == null)
+            {
+                if (_time < 1.5f) return;   // let head tracking settle before placing them
+                Transform wp = rig != null && rig.trackingSpace != null ? rig.trackingSpace : transform;
+                var root = new GameObject("AudioCubes").transform; root.SetParent(wp, false);
+                _cubes = new Transform[CubeIds.Length]; _cubeAudio = new AudioSource[CubeIds.Length];
+                for (int i = 0; i < CubeIds.Length; i++)
+                {
+                    var c = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    c.name = "AudioCube" + (i + 1);
+                    UiObjects.Kill(c.GetComponent<Collider>());
+                    c.transform.SetParent(root, false);
+                    c.transform.localScale = Vector3.one * 0.3f;
+                    c.transform.localPosition = headPosL + UiMath.DirFromYawElev(headYaw + CubeYawOffsetDeg[i], CubeElev[i]) * CubeDist[i];
+                    _cubes[i] = c.transform;
+                    // a sound on the cube: a looping voice-like tone (a different pitch and rhythm per cube), 3D so it comes from the cube
+                    var src = c.AddComponent<AudioSource>();
+                    src.clip = VoiceClip("CubeVoice" + (i + 1), CubeF0[i], CubeRate[i]);
+                    src.loop = true; src.spatialBlend = 1f; src.dopplerLevel = 0f;
+                    src.rolloffMode = AudioRolloffMode.Logarithmic; src.minDistance = 0.6f; src.maxDistance = 12f;
+                    src.volume = 0f; src.playOnAwake = false;
+                    _cubeAudio[i] = src;
+                    src.Play();
+                }
+            }
+            for (int i = 0; i < _cubes.Length; i++)
+            {
+                Vector3 d = _cubes[i].localPosition - headPosL;
+                float horiz = new Vector2(d.x, d.z).magnitude;
+                // the overlay box covers the whole cube (a little larger than its width, from where you stand)
+                float sizeDeg = 2f * Mathf.Atan2(_cubes[i].localScale.x * 0.5f * 1.2f, Mathf.Max(0.3f, d.magnitude)) * Mathf.Rad2Deg;
+                string id = CubeIds[i];
+                fake.SetAnchor(id, UiMath.YawOf(d), Mathf.Atan2(d.y, horiz) * Mathf.Rad2Deg, sizeDeg, d.magnitude);
+                // the cube wears the same colour as its row in the picker
+                if (_speakerNum.TryGetValue(id, out int cn))
+                {
+                    var r = _cubes[i].GetComponent<Renderer>();
+                    if (r != null) r.material.color = SpeakerColor(cn);
+                }
+            }
+            TickCubeSound(dtForSound: Time.unscaledDeltaTime);
+        }
+
+        static float Bucket(float distM) => distM >= float.MaxValue * 0.5f ? float.MaxValue : Mathf.Round(distM / 0.5f);
+
+        // numbers (for the team, not the wearer) go only to sources that actually talk, in the order they first do; music never takes one
+        int NumberFor(string id, bool talking)
+        {
+            if (_speakerNum.TryGetValue(id, out int n)) return n;
+            if (!talking) return 0;
+            n = _speakerNum.Count + 1; _speakerNum[id] = n;
+            return n;
+        }
+
+        /// <summary>One colour per speaker number, so a speaker keeps the same colour on its outline, its arrow and its row.</summary>
+        Color SpeakerColor(int number)
+        {
+            // numbers 1 to 5 are the design's colours; later numbers take the midpoint of two neighbours around the loop
+            var p = theme.lookSources;
+            if (p == null || p.Length == 0) return theme.cyan;
+            int i = number - 1;
+            if (i < p.Length) return p[i];
+            int k = (i - p.Length) % p.Length;
+            return Color.Lerp(p[k], p[(k + 1) % p.Length], 0.5f);
+        }
+
+        // base names (human, object, unknown; animal once the hub sends one) stand in for the hub's coarse labels; a specific name passes through
+        static string NameFor(Source s)
+        {
+            string l = (s.Label ?? "").Trim().ToLowerInvariant();
+            switch (l)
+            {
+                case "speech": case "human": case "person": case "voice": return "human";
+                case "music": case "alarm": case "object": return "object";
+                case "other": case "unknown": case "": return "unknown";
+                default: return l;
+            }
         }
 
         MarkerInput MakeInput(Entry en, string selId, float dt)
@@ -499,12 +830,22 @@ namespace Cocktail.Ui
         }
 
         // ------------------------------------------------------------------ gaze selection
-        bool GazeHit(Vector3 worldCenter, Vector2 half, out float score)
+        bool GazeHit(Vector3 worldCenter, Vector2 half, out float score) => GazeHitFrom(Head, worldCenter, half, out score);
+
+        /// <summary>The hand's pointing ray when a hand is tracked, otherwise where the head points.</summary>
+        Transform Pointer()
         {
-            Vector3 local = Head.InverseTransformPoint(worldCenter);
+            foreach (var h in _hands)
+                if (h != null && h.IsTracked && h.IsPointerPoseValid && h.PointerPose != null) return h.PointerPose;
+            return Head;
+        }
+
+        bool GazeHitFrom(Transform from, Vector3 worldCenter, Vector2 half, out float score)
+        {
+            Vector3 local = from.InverseTransformPoint(worldCenter);
             score = float.MaxValue;
             if (local.z < 0.15f) return false;
-            float pad = 0.03f;
+            float pad = from == Head ? 0.03f : 0.07f;   // a hand ray is harder to hold steady: a more forgiving target
             float hax = Mathf.Atan2(half.x + pad, local.z), hay = Mathf.Atan2(half.y + pad, local.z);
             float dx = Mathf.Abs(Mathf.Atan2(local.x, local.z)), dy = Mathf.Abs(Mathf.Atan2(local.y, local.z));
             score = Mathf.Max(dx / hax, dy / hay);
@@ -535,7 +876,33 @@ namespace Cocktail.Ui
         public bool TrySelectGazed(string modality = "head")
         {
             if (string.IsNullOrEmpty(_hoverId)) return false;
-            string id = _hoverId;
+            return TrySelectId(_hoverId, modality);
+        }
+
+        /// <summary>Select the speaker on the picker's cursor row (speaker-only HUD).</summary>
+        public bool TrySelectListRow(string modality = "hand")
+        {
+            // only a row you are pointing at (or scrolled to with the thumbstick) can be chosen: a stray pinch does nothing
+            if (!_speakerOnly || _rows.Count == 0 || (_hoverRowNow < 0 && !_scrollCursor)) return false;
+            _scrollCursor = false;
+            return TrySelectId(_rows[Mathf.Clamp(_listCursor, 0, _rows.Count - 1)].id, modality);
+        }
+
+        /// <summary>Move the picker cursor by one row (+1 = down).</summary>
+        public void ScrollList(int step) { if (_speakerOnly && _rows.Count > 0) { _scrollCursor = true; _listCursor = Mathf.Clamp(_listCursor + step, 0, _rows.Count - 1); } }
+        public int ListCursor => _listCursor;
+        public int ListRowCount => _rows.Count;
+
+        bool TrySelectId(string id, string modality)
+        {
+            // choosing the speaker who is already chosen switches the focus off
+            if (id == ResolveSelectedSourceId())
+            {
+                if (UsingFake) { if (fake != null) fake.Stop(); }
+                else if (input != null) input.Send(ProtoAction.Stop, null, modality);
+                _pendingId = null; _pendingLeft = 0f;
+                return true;
+            }
             if (UsingFake) { if (fake != null) fake.Select(id); }
             else if (input != null && sendExplicitSelect)
             {
@@ -561,7 +928,11 @@ namespace Cocktail.Ui
                 if (pinching && !_pinchWas[i] && !select) { select = true; modality = "hand"; }
                 _pinchWas[i] = pinching;
             }
-            if (select) TrySelectGazed("head");
+            if (select && _demo != null && _demo.Press()) { }   // a pinch on a demo-panel button
+            else if (select && !TrySelectGazed("head")) TrySelectListRow(modality);
+            // testing fallback when hand tracking is not working: right thumbstick up/down scrolls the picker
+            if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstickUp, OVRInput.Controller.RTouch)) ScrollList(-1);
+            if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstickDown, OVRInput.Controller.RTouch)) ScrollList(1);
             if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch)) ToggleHudMode();
             if (UsingFake && fake != null)
             {
@@ -575,7 +946,13 @@ namespace Cocktail.Ui
             if (Time.unscaledTime < _nextHandScan) return;
             _nextHandScan = Time.unscaledTime + 2f;
             var found = FindObjectsByType<OVRHand>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-            if (found.Length != _hands.Length) { _hands = found; _pinchWas = new bool[found.Length]; } else _hands = found;
+            foreach (var h in found)
+            {
+                HandGridSkin.Apply(h, theme);
+                // the hand's pointer pose is written in tracking-space coordinates, so it must live under the tracking space
+                if (rig != null && rig.trackingSpace != null && h.PointerPose.parent != rig.trackingSpace) h.PointerPose.SetParent(rig.trackingSpace, false);
+            }
+            if (found.Length != _hands.Length) { _hands = found; _pinchWas = new bool[found.Length]; _midWas = new bool[found.Length]; _ringWas = new bool[found.Length]; } else _hands = found;
         }
     }
 }

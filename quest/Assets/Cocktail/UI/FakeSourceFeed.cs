@@ -47,7 +47,7 @@ namespace Cocktail.Ui
             Clock += dt; _acc += dt; _stateClock += dt;
             if (!_started) { _started = true; Emit(); EmitState(); }
             if (_pendingTo >= 0f && Clock >= _pendingTo) { _pendingTo = -1f; SetState(_pendingState, _target); }
-            if (!UserControlled) RunScript();
+            if (!UserControlled && _anchors.Count == 0) RunScript();   // with the cubes in the room, nothing is chosen until the wearer chooses
             if (_acc >= 0.1f) { _acc = 0f; Emit(); }
         }
 
@@ -56,10 +56,13 @@ namespace Cocktail.Ui
         {
             UserControlled = true; _selVersion++;
             _target = sourceId;
-            OnTarget?.Invoke(new TargetUpdated { TargetId = "t_" + sourceId, SelectionVersion = _selVersion, SourceId = sourceId, Kind = "speech", AssocConf = 0.9f, State = TrackState.Tracking, BearingDeg = BearingOf(sourceId, Clock) });
+            OnTarget?.Invoke(new TargetUpdated { TargetId = "t_" + sourceId, SelectionVersion = _selVersion, SourceId = sourceId, Kind = "speech", AssocConf = 0.9f, State = TrackState.Tracking, BearingDeg = BearingFor(sourceId, Clock) });
             SetState(HubState.Selected, sourceId);
             _pendingTo = Clock + 0.8f; _pendingState = HubState.Playing;
         }
+
+        public void ClearAnchors() => _anchors.Clear();
+        public void SetMode(Mode m) { _mode = m; EmitState(); }
 
         public void Stop() { UserControlled = true; _target = null; _pendingTo = -1f; SetState(HubState.Listening, null); }
 
@@ -87,11 +90,6 @@ namespace Cocktail.Ui
             else if (t >= 5f) Goto(HubState.Playing, "s_1", 5f);
             else if (t >= 4f) Goto(HubState.Selected, "s_1", 4f);
             else Goto(HubState.Listening, null, 0f);
-            if (!_alertFired && t >= 14f && t < 20f)
-            {
-                _alertFired = true;
-                OnAlert?.Invoke(new AlertFired { AlertId = "a_" + _lastCycle, Label = "alarm", Critical = true, SpokenText = "Smoke alarm", BearingDeg = 120f });
-            }
         }
 
         string _gotoKey;
@@ -103,7 +101,7 @@ namespace Cocktail.Ui
             if (target != null && (s == HubState.Selected))
             {
                 _selVersion++;
-                OnTarget?.Invoke(new TargetUpdated { TargetId = "t_" + target, SelectionVersion = _selVersion, SourceId = target, Kind = "speech", AssocConf = 0.9f, State = TrackState.Tracking, BearingDeg = BearingOf(target, Clock) });
+                OnTarget?.Invoke(new TargetUpdated { TargetId = "t_" + target, SelectionVersion = _selVersion, SourceId = target, Kind = "speech", AssocConf = 0.9f, State = TrackState.Tracking, BearingDeg = BearingFor(target, Clock) });
             }
             if (s == HubState.ReplayPlaying)
                 OnReplayReady?.Invoke(new ReplayReady { TargetId = "t_" + target, SelectionVersion = _selVersion, DurationS = 5f });
@@ -123,6 +121,12 @@ namespace Cocktail.Ui
         }
 
         // ---- sources
+        // sources placed by the scene (the audio cubes) override the scripted motion
+        // x = bearing, y = elevation, z = angular size of the object (degrees, so the box covers it), w = distance in metres
+        readonly System.Collections.Generic.Dictionary<string, Vector4> _anchors = new System.Collections.Generic.Dictionary<string, Vector4>();
+        public void SetAnchor(string id, float bearingDeg, float elevationDeg, float sizeDeg, float distanceM) => _anchors[id] = new Vector4(bearingDeg, elevationDeg, sizeDeg, distanceM);
+        float BearingFor(string id, float t) => _anchors.TryGetValue(id, out var a) ? a.x : BearingOf(id, t);
+
         static float BearingOf(string id, float t)
         {
             switch (id)
@@ -150,13 +154,19 @@ namespace Cocktail.Ui
             long s2obs = s2state == TrackState.Tracking ? now : (long)((Clock - (Clock % period - 38f)) * 1_000_000.0);
             list.Add(Make("s_2", "speech", 0.84f, Clock, s2state, s2state == TrackState.Tracking ? -38f + 6f * Mathf.Sin(Clock * 1.7f) : -55f, now, s2obs));
             list.Add(Make("s_3", "music", 0.77f, Clock, TrackState.Tracking, -24f + 4f * Mathf.Sin(Clock * 0.9f), now, now));
+            // two more talkers, only while the scene has objects standing in for them (the extra cubes)
+            if (_anchors.ContainsKey("s_4")) list.Add(Make("s_4", "speech", 0.88f, Clock, TrackState.Tracking, -30f, now, now));
+            if (_anchors.ContainsKey("s_5")) list.Add(Make("s_5", "speech", 0.86f, Clock, TrackState.Tracking, -30f, now, now));
             Current = new SourcesUpdated { DeviceTsUs = now, Sources = list };
             OnSources?.Invoke(Current);
         }
 
         Source Make(string id, string label, float conf, float t, TrackState st, float db, long now, long observed)
         {
-            float b = BearingOf(id, t);
+            bool anchored = _anchors.TryGetValue(id, out var anchor);
+            // a real object in the room does not drop out or go quiet (the scripted source 2 fades to -55 dB for 14 s of every minute)
+            if (anchored) { st = TrackState.Tracking; observed = now; db = -30f + 3f * Mathf.Sin(t * 1.7f); }
+            float b = BearingFor(id, t);
             float rel = UiMath.NormalizeDeg(b - headYawDeg);
             bool inView = Mathf.Abs(rel) < inViewHalfDeg && st != TrackState.Lost;
             float[] bbox = null;
@@ -164,12 +174,20 @@ namespace Cocktail.Ui
             {
                 float th = Mathf.Tan(hfovDeg * 0.5f * Mathf.Deg2Rad);
                 float cx = 0.5f + Mathf.Tan(rel * Mathf.Deg2Rad) / (2f * th);
-                bbox = new[] { cx - 0.05f, 0.38f, cx + 0.05f, 0.64f };
+                if (anchored)
+                {
+                    // box sized to the object: normalized half extents for the object's angular size (4:3 camera)
+                    float half = Mathf.Tan(anchor.z * 0.5f * Mathf.Deg2Rad);
+                    float hw = half / (2f * th), hh = half / (2f * th / (4f / 3f));
+                    bbox = new[] { cx - hw, 0.5f - hh, cx + hw, 0.5f + hh };
+                }
+                else bbox = new[] { cx - 0.05f, 0.38f, cx + 0.05f, 0.64f };
             }
             return new Source
             {
                 SourceId = id, Label = label, LabelConf = conf, BearingDeg = b, BearingConf = 0.8f, BearingSource = BearingSource.Fused,
-                ElevationDeg = id == "s_3" ? 5f : (float?)null, State = st, LevelDb = db, InView = inView, Bbox = bbox, LastObservedUs = observed,
+                DistanceM = anchored ? anchor.w : (float?)null,
+                ElevationDeg = anchored ? anchor.y : id == "s_3" ? 5f : (float?)null, State = st, LevelDb = db, InView = inView, Bbox = bbox, LastObservedUs = observed,
             };
         }
     }
