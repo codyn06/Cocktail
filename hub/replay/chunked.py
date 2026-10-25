@@ -460,20 +460,31 @@ class ChunkedSpeechRunner:
         })
         (d / "meta.json").write_text(json.dumps(meta, sort_keys=True, default=_json_default), encoding="utf-8")
 
-    # ---- driver
-    def run(self) -> SpeechRunResult:
-        records: list[ChunkRecord] = []
-        state = PipelineState()
+    # ---- driver: two passes so each pass loads its own models once (the GPU lease is exclusive)
+    def run_visual(self) -> list[tuple[str, Path]]:
+        """Pass A: persistent visual tracks for every chunk (SAM 3 + S3FD live here)."""
+        out: list[tuple[str, Path]] = []
         vstate: dict = self.visual_empty_state()
-        prev_entry: Path | None = None
         for spec in self.specs:
             vkey, ventry = self._visual_stage(spec, vstate)
             vstate = json.loads((ventry / "state_out.json").read_text(encoding="utf-8"))
+            out.append((vkey, ventry))
+        return out
+
+    def run_speech(self, visual: list[tuple[str, Path]]) -> SpeechRunResult:
+        """Pass B: TalkNet / MossFormer2 / AV-TSE / identity / stitching for every chunk."""
+        records: list[ChunkRecord] = []
+        state = PipelineState()
+        prev_entry: Path | None = None
+        for spec, (vkey, ventry) in zip(self.specs, visual):
             skey, sentry = self._speech_stage(spec, vkey, ventry, state, prev_entry)
             state = PipelineState.read(sentry / "state_out.json")
             records.append(ChunkRecord(spec, vkey, skey, ventry, sentry))
             prev_entry = sentry
         return SpeechRunResult(records, state, self.counters, self.n16)
+
+    def run(self) -> SpeechRunResult:
+        return self.run_speech(self.run_visual())
 
     def visual_empty_state(self) -> dict:
         f = getattr(self.visual, "empty_state", None)
