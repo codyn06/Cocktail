@@ -66,21 +66,42 @@ namespace Cocktail.Stream
             Connection.HelloProvider = BuildHelloAsync;
         }
 
-        void OnEnable() { Connection.Start(); Debug.Log($"[HubClient] hub={Connection.Host}:{port}"); }
+        void OnEnable() { while (Connection.IncomingEvents.TryDequeue(out _)) { } Connection.Start(); Debug.Log($"[HubClient] hub={Connection.Host}:{port}"); }
         void OnDisable() { Connection?.Stop(); }
+
+        float _nextHandlerLog;
 
         void Update()
         {
+            // sources, state and metrics are snapshots: after a stall (headset taken off, a slow frame) only the newest of the backlog matters
+            SourcesUpdated sources = null; StateChanged state = null; Metrics metrics = null;
             while (Connection.IncomingEvents.TryDequeue(out var ev))
             {
                 switch (ev)
                 {
-                    case SourcesUpdated e: LastSources = e; OnSources?.Invoke(e); break;
-                    case StateChanged e: LastState = e; OnState?.Invoke(e); break;
-                    case TargetUpdated e: OnTarget?.Invoke(e); break;
-                    case AlertFired e: OnAlert?.Invoke(e); break;
-                    case ReplayReady e: OnReplayReady?.Invoke(e); break;
-                    case Metrics e: LastMetrics = e; OnMetrics?.Invoke(e); break;
+                    case SourcesUpdated e: sources = e; break;
+                    case StateChanged e: state = e; break;
+                    case Metrics e: metrics = e; break;
+                    case TargetUpdated e: Raise(OnTarget, HubDataGuard.Clean(e)); break;
+                    case AlertFired e: Raise(OnAlert, HubDataGuard.Clean(e)); break;
+                    case ReplayReady e: Raise(OnReplayReady, e); break;
+                }
+            }
+            if (state != null) { LastState = state; Raise(OnState, state); }
+            if (sources != null) { LastSources = HubDataGuard.Clean(sources); Raise(OnSources, LastSources); }
+            if (metrics != null) { LastMetrics = metrics; Raise(OnMetrics, metrics); }
+        }
+
+        // one failing listener must not stop the others or the rest of the frame; the error is logged at most every 5 s
+        void Raise<T>(System.Action<T> handler, T arg) where T : class
+        {
+            if (handler == null || arg == null) return;
+            foreach (var d in handler.GetInvocationList())
+            {
+                try { ((System.Action<T>)d)(arg); }
+                catch (System.Exception ex)
+                {
+                    if (Time.unscaledTime >= _nextHandlerLog) { _nextHandlerLog = Time.unscaledTime + 5f; Debug.LogException(ex); }
                 }
             }
         }

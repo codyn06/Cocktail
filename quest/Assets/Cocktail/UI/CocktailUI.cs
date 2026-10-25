@@ -150,6 +150,7 @@ namespace Cocktail.Ui
                 if (fake == null && useFake) fake = gameObject.AddComponent<FakeSourceFeed>();
                 if (rig == null) rig = FindFirstObjectByType<OVRCameraRig>();
 
+                _wasFake = UsingFake;
                 _fakeHead = new GameObject("UiFakeHead").transform;
                 _fakeHead.SetParent(transform, false);
                 _worldRoot = new GameObject("UiWorld").transform;
@@ -876,6 +877,11 @@ namespace Cocktail.Ui
             _localChosen = keep;   // a short stall must not forget the choice; it only shows once that source is listed again (the hub never reuses an id)
             _pendingId = null; _pendingLeft = 0f; _hoverId = null;
             _state = HubState.Listening; _stateTargetId = null;
+            if (!UsingFake && hub != null)
+            {
+                if (hub.LastSources != null) ApplySources(hub.LastSources, false);
+                if (hub.LastState != null) ApplyState(hub.LastState, false);
+            }
         }
 
         // stop / next / prev can also come from InputSender's buttons: keep the local choice in step with what the hub does
