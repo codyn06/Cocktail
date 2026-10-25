@@ -13,6 +13,7 @@ import protocol as p
 from ingest import IngestState, create_app
 from events import install_events
 from out import AudioOutConfig, install_audio_out
+from track import TrackConfig, Tracker
 
 from .live import LiveSeparator
 from .models import SoundLabeler, VoiceSeparator
@@ -27,6 +28,12 @@ ap.add_argument("--voice-memory", action="store_true",
                 help="use optional WavLM speaker embeddings to retain voice slots across pauses")
 ap.add_argument("--locate-method", choices=["level", "tdoa"], default="level",
                 help="direction finding: level (head shadow) or tdoa (inter-mic delay, calibrated; Quest 3S)")
+ap.add_argument("--locate-ungated", action="store_true",
+                help="level method without the fit gates (can report a confident wrong bearing on the Quest 3S; see locate/TUNING.md)")
+ap.add_argument("--active-floor-db", type=float, default=-88.0,
+                help="activity floor in band-level dB (not dBFS: the band level reads ~29 dB below the stream rms). "
+                     "-88 = zero activity at a ~-59 dBFS stream, full at ~-49; the Quest mic's speech sits at -43 to -50 dBFS "
+                     "(the class default -60 only suits louder simulated signals)")
 ap.add_argument("--out-settle-s", type=float, default=0.3,
                 help="hold separated audio this long before /audio/out so the tracker has caught up")
 ap.add_argument("--out-gains-in-layers", action="store_true",
@@ -39,18 +46,24 @@ logging.basicConfig(level=logging.INFO)
 state = IngestState()
 worker = SeparationWorker(state, LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler(),
                                                merge_ild_db=a.merge_ild_db,
-                                               voice_memory=a.voice_memory))
+                                               voice_memory=a.voice_memory,
+                                               floor_db=a.active_floor_db))
 try:  # direction finding (C4) if hub/locate is present
+    from locate.estimator import LocateConfig
     from locate.live import LiveLocator
 
-    locator = LiveLocator(state, method=a.locate_method)
+    # Gated by default: on the real 4-channel Quest the plain level model "locks" on a bearing it does not
+    # fit (locate/TUNING.md), so withhold the bearing (unknown direction) unless the fit is good.
+    gates = None if a.locate_ungated else LocateConfig(profile_diff=True, max_resid_chi2=3.0, min_fit_gain=0.05)
+    locator = LiveLocator(state, cfg=gates, method=a.locate_method)
     worker.listeners.append(locator.on_chunks)
 except ImportError:
     logging.getLogger("separate").exception("direction finding disabled: hub/locate failed to import")
     locator = None
 worker.start()
 app = create_app(state)
-events_state = install_events(app, locator)
+# Direction is usually unknown on the Quest (gated locator), so speech must be announced without a bearing.
+events_state = install_events(app, locator, Tracker(TrackConfig(bearingless_speech_hits=3)))
 audio_out = install_audio_out(app, events_state, AudioOutConfig(
     settle_s=a.out_settle_s, apply_gains_in_layers=a.out_gains_in_layers))
 worker.listeners.append(audio_out.on_chunks)

@@ -7,7 +7,7 @@ Attribution rules (slot = separator voice stream "s1"/"s2"; residual "s3" is nev
   2. Exactly one candidate -> attribute. Several -> ambiguous: drop the hop and clear the slot's pending.
   3. No candidate (track not yet confirmed, paused/lost, slot claimed by someone else) -> the hop is held
      in a per-slot pending buffer (<= 5 hops). When the slot later resolves to T, pending hops are
-     flushed to T only if hop.start >= T.first_us - 1 s AND the slot did not previously resolve to a
+     flushed to T only if hop.start >= T.first_us - 4 s AND the slot did not previously resolve to a
      different track. Otherwise they are dropped. Recorded audio is never moved between speakers.
   4. Epoch / ring reset clears everything (tracker ids restart history there). Ids themselves are never
      reused by the tracker, and speaker numbers are 1-based by first attributed audio, never reassigned.
@@ -39,7 +39,7 @@ RING_S = 120
 MAX_SPAN_S = 300          # WAV time axis cap (gaps are zero-filled)
 MAX_PENDING = 5
 MAX_INTERVALS = 200
-PRE_ROLL_US = 1_000_000
+PRE_ROLL_US = 4_000_000  # the tracker stamps a track at delivery, ~2.5 s after a hop's capture (window + hop + compute)
 
 
 class _Hop:

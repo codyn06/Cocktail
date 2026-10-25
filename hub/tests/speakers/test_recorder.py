@@ -101,12 +101,12 @@ def test_pending_flush_after_late_confirmation():
 
 def test_pending_older_than_track_dropped():
     tr, rec = mk()
-    tr.set("t1", "s1", first=5, confirmed=False)
+    tr.set("t1", "s1", first=9, confirmed=False)    # pre-roll is 4 s: hops 0..2 are older than first - 4
     for t in range(3):
         rec.on_chunks([chunk("s1", t, 0.3)])
     tr.tracks["t1"].confirmed = True
-    rec.on_chunks([chunk("s1", 5, 0.3)])
-    assert rec.info("t1")["audio_start_ts_us"] == 5 * S
+    rec.on_chunks([chunk("s1", 9, 0.3)])
+    assert rec.info("t1")["audio_start_ts_us"] == 9 * S
     assert rec.status()["hops_dropped"] == 3
 
 

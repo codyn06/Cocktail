@@ -40,6 +40,9 @@ class TrackConfig:
     merge_deg: float = 12.0          # a same-label extra stream this close to a track is a duplicate
     confirm_hits: int = 3            # updates needed before a new source is announced
     bearingless_hits: int = 15       # a source with no direction yet needs this many (and no same-label one active)
+    # Speech with no direction (the live Quest withholds unfit bearings) can confirm sooner: None = off, else the
+    # hop count for a speech-labelled direction-less source. Identity then rests on slot continuity + voice memory.
+    bearingless_speech_hits: int | None = None
     hold_s: float = 1.5              # unheard this long: tracking -> last_seen
     lost_s: float = 8.0              # unheard this long: last_seen -> lost
     forget_s: float = 60.0           # unheard this long: dropped (the id is never reused)
@@ -289,7 +292,8 @@ class Tracker:
                     t.confirmed = True
             elif t.tid in self._tid_aid:
                 t.confirmed = True  # a distinct voice, direction unsure: announce it without a bearing
-            elif t.hits >= c.bearingless_hits and not any(
+            elif t.hits >= (c.bearingless_speech_hits if c.bearingless_speech_hits is not None and t.label == "speech"
+                            else c.bearingless_hits) and not any(
                     o is not t and o.label == t.label and o.state == p.TrackState.tracking for o in self.tracks.values()):
                 t.confirmed = True
 
