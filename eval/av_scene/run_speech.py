@@ -38,7 +38,7 @@ from ingest.media_io import write_wav  # noqa: E402
 SR = 16000
 CASES = ("overlap_stack_AB", "overlap_stack_BA", "overlap_side_AB", "overlap_side_BA", "A_alone_stack_AB",
          "B_alone_stack_AB", "silent_stack_AB", "offscreen3_stack_AB", "offscreen_only_stack_AB",
-         "speech_music_stack_AB")
+         "speech_music_stack_AB", "overlap3_side_ABC")
 
 
 def _score(est, case, t, mix16):
@@ -59,6 +59,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--tse", action="store_true")
+    ap.add_argument("--gate", action="store_true", help="Phase 3 slice 1: TalkNet + TSE activity gate (needs --tse)")
+    ap.add_argument("--offscreen", action="store_true", help="Phase 3 slice 2: upgraded outside_view rule")
+    ap.add_argument("--peel", action="store_true", help="Phase 3 slice 3b: residual speech peeling for a 3rd voice")
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -82,7 +85,8 @@ def main(argv=None) -> int:
         cover = {k: round(float(np.mean([b is not None for b in v])), 3) for k, v in boxes.items()}
         torch.cuda.reset_peak_memory_stats()
         t0 = time.perf_counter()
-        r = run_speech_branch(mix16, rgb, fps, boxes, separator=sep, scorer=scorer, tse=tse)
+        r = run_speech_branch(mix16, rgb, fps, boxes, separator=sep, scorer=scorer, tse=tse,
+                              activity_gate=a.gate, offscreen_upgrade=a.offscreen, peel=a.peel)
         wall = time.perf_counter() - t0
         d = out / case.case_id
         for k, x in r.streams.items():
