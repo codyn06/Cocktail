@@ -142,6 +142,7 @@ namespace Cocktail.Ui
                 if (theme == null) { theme = ScriptableObject.CreateInstance<UiTheme>(); theme.name = "CocktailUiTheme (runtime default)"; }
                 if (hub == null) hub = HubClient.Instance != null ? HubClient.Instance : FindFirstObjectByType<HubClient>();
                 if (input == null) input = FindFirstObjectByType<InputSender>();
+                if (input != null) input.autoSelect = false;   // this class sends every select, by source id; InputSender's own head-ray select never fires
                 if (cameraStreamer == null) cameraStreamer = FindFirstObjectByType<CameraStreamer>();
                 if (fake == null) fake = GetComponent<FakeSourceFeed>();
                 if (fake == null && useFake) fake = gameObject.AddComponent<FakeSourceFeed>();
@@ -234,7 +235,7 @@ namespace Cocktail.Ui
         }
 
         void OnRealSources(SourcesUpdated e) { _realAt = _time; ApplySources(e, false); }
-        void OnRealState(StateChanged e) { _realAt = _time; _hubStateSeen = true; ApplyState(e, false); }
+        void OnRealState(StateChanged e) { _realAt = _time; if (e != null && e.State != HubState.Listening) _hubStateSeen = true; ApplyState(e, false); }
         void OnRealTarget(TargetUpdated e) { ApplyTarget(e, false); }
         void OnRealAlert(AlertFired e) { ShowAlert(e); }
         void OnRealReplay(ReplayReady e) { _replaySeconds = e.DurationS; }
@@ -319,7 +320,6 @@ namespace Cocktail.Ui
             _time += dt;
             bool fakeNow = UsingFake;
             if (fakeNow != _wasFake) { _wasFake = fakeNow; ResetForNewSource(); }
-            if (input != null) input.autoSelect = hudMode != HudMode.Full;   // in the full HUD this class sends every select, by source id
             if (rig == null && _time >= _nextRigScan) { _nextRigScan = _time + 1f; rig = FindFirstObjectByType<OVRCameraRig>(); }
             ReparentRoots();
             Vector3 headPosL = _worldRoot.InverseTransformPoint(Head.position);
@@ -851,10 +851,12 @@ namespace Cocktail.Ui
         void ResetForNewSource()
         {
             // fake and real sources never mix: start clean (numbers and colours too) when the data source changes
+            string keep = _localChosen;
             _remove.Clear(); _remove.AddRange(_entries.Keys);
             foreach (var id in _remove) DestroyEntry(id);
             _speakerNum.Clear(); _targetToSource.Clear();
-            _localChosen = null; _pendingId = null; _pendingLeft = 0f; _hoverId = null;
+            _localChosen = keep;   // a short stall must not forget the choice; it only shows once that source is listed again (the hub never reuses an id)
+            _pendingId = null; _pendingLeft = 0f; _hoverId = null;
             _state = HubState.Listening; _stateTargetId = null;
         }
 
