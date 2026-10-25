@@ -31,7 +31,7 @@ from separate.score import sisdr
 
 from .estimator import wrap180
 from .live import LiveLocator
-from .pair import PairCalibration
+from .pair import PairCalibration, PairConfig
 
 
 class OracleSeparator:
@@ -60,9 +60,9 @@ def oracle_separator(s: Session, win_s: float = 2.0, hop_s: float = 1.0) -> Orac
     return OracleSeparator(np.stack([np.pad(r, (0, n - len(r))) for r in refs]), int(hop_s * SR), int(win_s * SR))
 
 
-def run(s: Session, live: LiveSeparator, method: str = "level", calib=None):
+def run(s: Session, live: LiveSeparator, method: str = "level", calib=None, pair_cfg=None):
     st = IngestState()
-    loc = LiveLocator(st, method=method, calib=calib)
+    loc = LiveLocator(st, method=method, calib=calib, pair_cfg=pair_cfg)
     r = Resampler(s.sample_rate, s.audio.shape[1])
     x = r(s.audio)[r.delay :]
     poses = iter(s.poses)
@@ -87,8 +87,9 @@ def run(s: Session, live: LiveSeparator, method: str = "level", calib=None):
     return {k: np.concatenate(v) for k, v in est.items()}, trace, loc
 
 
-def score(s: Session, live: LiveSeparator, tol_deg: float = 20.0, method: str = "level", calib=None) -> dict:
-    est, trace, loc = run(s, live, method, calib)
+def score(s: Session, live: LiveSeparator, tol_deg: float = 20.0, method: str = "level", calib=None,
+          pair_cfg=None) -> dict:
+    est, trace, loc = run(s, live, method, calib, pair_cfg)
     srcs = s.meta["sources"]
     refs = {q["name"]: wavfile.read(s.path / q["stem"])[1].astype(np.float32) for q in srcs}
     n = min(len(next(iter(est.values()))), *(len(v) for v in refs.values()))
@@ -117,6 +118,7 @@ def main():
     ap.add_argument("--locate-method", choices=["level", "tdoa"], default="level")
     ap.add_argument("--calib", type=Path, default=None, help="tdoa calibration JSON (default: quest3s)")
     ap.add_argument("--oracle", action="store_true", help="ground-truth stems instead of the separation model")
+    ap.add_argument("--adapt", action="store_true", help="tdoa: per-source delay swing and offset (PairConfig.adapt)")
     a = ap.parse_args()
     s = Session.load(a.session)
     calib = PairCalibration.load(a.calib) if a.calib else None
@@ -125,7 +127,7 @@ def main():
     else:
         from separate.models import SoundLabeler, VoiceSeparator
         live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler())
-    res = score(s, live, a.tol, a.locate_method, calib)
+    res = score(s, live, a.tol, a.locate_method, calib, PairConfig(adapt=a.adapt))
     for nm, r in res.items():
         ok = "PASS" if r["error_deg"] <= a.tol else "FAIL"
         print(f"{nm:14s} -> {r['stream']}  truth {r['truth_deg']:7.1f}  got {r['world_deg']:7.1f}  "

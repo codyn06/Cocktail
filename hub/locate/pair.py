@@ -173,11 +173,22 @@ class PairConfig:
     lock_conf: float = 0.7
     lock_sigma_deg: float = 15.0
     ambiguous_ratio: float = 0.35
+    # adapt: each source gets its own delay swing A and offset c, with Gaussian priors around the
+    # calibration (A ~ N(D, (amp_sd_ratio D)^2), c ~ N(offset, offset_sd_s^2)), marginalised
+    # exactly per bearing. Reverb and the source's spectrum change both (pairsim: a voice shows a
+    # 30% larger swing than the pink-noise calibration takes). The prior keeps A > 0, i.e. the
+    # device geometry, so the source and its opposite stay distinct. Outlying frames get a Huber
+    # weight against each bearing's current fit instead of the fixed inlier mixture.
+    adapt: bool = False
+    amp_sd_ratio: float = 0.3
+    offset_sd_s: float = 2e-6
+    huber_k: float = 2.5
 
 
 class _Src:
     def __init__(self, n):
         self.loglik = np.zeros(n)
+        self.stats = np.zeros((6, n))  # adapt: weighted sums of s^2, s, 1, s tau, tau, tau^2 per bearing
         self.last_t = None
         self.n = 0
         self.yw = self.ym = self.ymm = 0.0
@@ -211,24 +222,54 @@ class PairLocator:
         if s.last_t is not None:
             lam = float(np.exp(-max(t - s.last_t, 0.0) / self.cfg.tau_s))
             s.loglik *= lam
+            s.stats *= lam
             s.yw *= lam; s.ym *= lam; s.ymm *= lam
         s.last_t = t
         yaw = self._yaw_at(t)
         c = self.calib
-        r = tau_s - c.predict(self.az, yaw)
         sig = c.frame_sigma(sigma_s)
-        inl = self.cfg.p_inlier * np.exp(-0.5 * (r / sig) ** 2) / (sig * np.sqrt(2 * np.pi))
-        out = (1 - self.cfg.p_inlier) / (2 * c.max_tau_s)
-        s.loglik += weight * self.cfg.neff_ratio * np.log(inl + out)
+        if self.cfg.adapt:
+            sn = np.sin(np.radians(self.az - c.axis_deg - yaw))  # tau = A sn + c for bearing az
+            v = weight * self.cfg.neff_ratio / sig ** 2
+            if s.n >= 10:  # Huber weight against each bearing's current (A, c)
+                a_hat, c_hat = self._fit(s)
+                r = np.abs(tau_s - (a_hat * sn + c_hat))
+                v = v * np.minimum(1.0, self.cfg.huber_k * sig / np.maximum(r, 1e-12))
+            s.stats += v * np.stack([sn * sn, sn, np.ones_like(sn), sn * tau_s,
+                                     np.full_like(sn, tau_s), np.full_like(sn, tau_s * tau_s)])
+        else:
+            r = tau_s - c.predict(self.az, yaw)
+            inl = self.cfg.p_inlier * np.exp(-0.5 * (r / sig) ** 2) / (sig * np.sqrt(2 * np.pi))
+            out = (1 - self.cfg.p_inlier) / (2 * c.max_tau_s)
+            s.loglik += weight * self.cfg.neff_ratio * np.log(inl + out)
         s.yw += weight; s.ym += weight * yaw; s.ymm += weight * yaw * yaw
         s.n += 1
+
+    def _posterior(self, s):
+        """Per bearing: the (A, c) posterior's precision matrix entries, mean and the log
+        marginal likelihood of the delays (up to a constant shared by all bearings)."""
+        c = self.calib
+        la = 1 / (self.cfg.amp_sd_ratio * c.delay_amp_s) ** 2
+        lc = 1 / self.cfg.offset_sd_s ** 2
+        ss, s1, n, st, t1, tt = s.stats
+        a, b, d = la + ss, s1, lc + n
+        h0, h1 = la * c.delay_amp_s + st, lc * c.offset_s + t1
+        det = a * d - b * b
+        m0, m1 = (d * h0 - b * h1) / det, (a * h1 - b * h0) / det
+        ll = -0.5 * (tt - h0 * m0 - h1 * m1) - 0.5 * np.log(det)
+        return m0, m1, ll
+
+    def _fit(self, s):
+        m0, m1, _ = self._posterior(s)
+        return m0, m1
 
     def estimate(self, source_id, t=None) -> BearingEstimate:
         s = self._src.get(source_id)
         if s is None or s.n == 0 or not self._poses:
             return BearingEstimate(source_id, 0.0, 0.0, 0.0, 180.0, "unobserved", None, 0.0, 0)
         yaw = self._yaw_at(t if t is not None else self._poses[-1][0])
-        lp = s.loglik - s.loglik.max()
+        loglik = self._posterior(s)[2] if self.cfg.adapt else s.loglik
+        lp = loglik - loglik.max()
         p = np.exp(lp)
         p /= p.sum()
         N, step = self.cfg.n_az, 360.0 / self.cfg.n_az

@@ -168,3 +168,19 @@ def test_live_locator_rejects_a_phase_calibration():
     from dataclasses import replace
     with pytest.raises(ValueError):
         LiveLocator(IngestState(), method="tdoa", calib=replace(CAL, delay_method="phase", model_s=2e-6))
+
+
+def test_adapt_tracks_a_source_whose_swing_and_offset_differ_from_calibration():
+    rng = np.random.default_rng(7)
+    errs = {False: [], True: []}
+    for truth in (0, 40, 90, 135, 180, -45, -90, -150):
+        for adapt in (False, True):
+            from locate.pair import PairConfig
+            loc = PairLocator(CAL, PairConfig(adapt=adapt))
+            for i, yi in enumerate(sweep(400, 40.0)):
+                loc.add_head_pose(i * 0.05, yi)
+                tau = 0.7 * CAL.delay_amp_s * np.sin(np.radians(truth - CAL.axis_deg - yi)) + CAL.offset_s + 2e-6
+                loc.add_delay("s", i * 0.05, tau + rng.normal(0, 3e-6))
+            e = loc.estimate("s")
+            errs[adapt].append(abs((e.world_deg - truth + 180) % 360 - 180))
+    assert np.median(errs[True]) < np.median(errs[False]) and max(errs[True]) <= 20, errs

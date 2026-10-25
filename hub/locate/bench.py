@@ -11,7 +11,8 @@ room) is listed but left out of the summary.
 
 Methods: `level` (head-shadow levels, estimator.py), `tdoa` (inter-mic delay with the stored
 calibration, pair.py), `tdoa-loo` (GCC-PHAT delays, calibration refitted without the take
-being scored) and `phase-loo` (phase-slope delays with per-frame sigma, same refit). Takes inside the stored calibration are marked `*`: their `tdoa` score is
+being scored), `phase-loo` (phase-slope delays with per-frame sigma, same refit) and
+`adapt-loo` (GCC refit, each source's delay swing and offset estimated around it). Takes inside the stored calibration are marked `*`: their `tdoa` score is
 in-sample and flatters the method; `tdoa-loo` is the honest number.
 
 Per method it prints:
@@ -36,11 +37,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .pair import PairCalibration, fit_calibration
+from .pair import PairCalibration, PairConfig
 from .real_eval import circ_diff, fit_at, framing, is_valid, observations, run
 
-METHODS = ("level", "tdoa", "tdoa-loo", "phase-loo")
-LOO = {"tdoa-loo": "gcc", "phase-loo": "phase"}
+METHODS = ("level", "tdoa", "tdoa-loo", "phase-loo", "adapt-loo")
+LOO = {"tdoa-loo": "gcc", "phase-loo": "phase", "adapt-loo": "gcc"}
+ADAPT = {"adapt-loo"}  # PairConfig(adapt=True): per-source delay swing and offset
 LOCK_TOL_DEG = 25.0
 HIT_DEG = 20.0          # matches the +-20 deg window that defines BearingEstimate.confidence
 SIDE_BAND_DEG = 15.0
@@ -102,7 +104,7 @@ def score_take(take: Path, method: str, calib: PairCalibration | None) -> dict:
     meta = json.loads((take / "meta.json").read_text())
     truth = float(meta["truth_deg"])
     r = run(take, truth, 12.0, verbose=False, method="level" if method == "level" else "tdoa",
-            calib=calib, timeline_s=TIMELINE_S)
+            calib=calib, timeline_s=TIMELINE_S, pair_cfg=PairConfig(adapt=method in ADAPT))
     tl = [(t, w, c, s) for t, w, c, s in r["timeline"] if r["go"] is None or t >= r["go"]]
     t0 = tl[0][0] if tl else 0.0
     final = (tl[-1][0] + 1e-3 if tl else t0, r["world_deg"], r["confidence"], r["state"])

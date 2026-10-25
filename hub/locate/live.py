@@ -27,7 +27,7 @@ import numpy as np
 import protocol as p
 
 from .estimator import BearingEstimate, BearingEstimator, LocateConfig
-from .pair import PairCalibration, PairLocator, frame_delays
+from .pair import PairCalibration, PairConfig, PairLocator, frame_delays
 
 # A8 estimator states -> how much to trust the bearing in the published Source.
 _SHOW = {"locked", "tracking", "ambiguous"}
@@ -39,9 +39,9 @@ TDOA_WIN, TDOA_HOP = 1024, 800  # 64 ms frames every 50 ms at 16 kHz
 
 class LiveLocator:
     def __init__(self, ingest, cfg: LocateConfig | None = None, method: str = "level",
-                 calib: PairCalibration | None = None):
+                 calib: PairCalibration | None = None, pair_cfg: PairConfig | None = None):
         assert method in ("level", "tdoa")
-        self.ingest, self.cfg, self.method = ingest, cfg or LocateConfig(), method
+        self.ingest, self.cfg, self.method, self.pair_cfg = ingest, cfg or LocateConfig(), method, pair_cfg
         self.calib = (calib or PairCalibration.default()) if method == "tdoa" else None
         if self.calib is not None and self.calib.delay_method != "gcc":
             raise ValueError("live tdoa measures GCC-PHAT delays; this calibration was fitted on "
@@ -54,7 +54,7 @@ class LiveLocator:
         self._reset()
 
     def _reset(self):
-        self.est = PairLocator(self.calib) if self.method == "tdoa" else BearingEstimator(self.cfg)
+        self.est = PairLocator(self.calib, self.pair_cfg) if self.method == "tdoa" else BearingEstimator(self.cfg)
         self._last_pose_us = None
         self._pose_epoch = self.ingest.pose_epoch
         self.latest: dict[str, tuple] = {}  # stream_id -> (StreamChunk, BearingEstimate)

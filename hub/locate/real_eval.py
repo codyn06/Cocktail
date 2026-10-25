@@ -24,7 +24,7 @@ import numpy as np
 from scipy import signal
 
 from .estimator import BearingEstimator, LocateConfig
-from .pair import PairCalibration, PairLocator, fit_calibration, frame_delay_phase
+from .pair import PairCalibration, PairConfig, PairLocator, fit_calibration, frame_delay_phase
 from .tdoa import gcc_phat
 
 BANDS = (500.0, 1000.0, 2000.0, 4000.0, 8000.0)
@@ -118,7 +118,8 @@ def _active_frames(take: Path, within_db: float):
 
 
 def run(take: Path, truth: float | None, within_db: float, verbose: bool = True, method: str = "level",
-        calib: PairCalibration | None = None, keep_frames: bool = False, timeline_s: float = 5.0) -> dict:
+        calib: PairCalibration | None = None, keep_frames: bool = False, timeline_s: float = 5.0,
+        pair_cfg: PairConfig | None = None) -> dict:
     meta, x, rate, pose = load(take)
     cue = meta.get("cue") or {}
     nu, go, stop = cue.get("noise_until", 0.0), cue.get("go"), cue.get("stop")
@@ -166,7 +167,7 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True,
     if method == "tdoa":
         # Inter-mic delay + head yaw (pair.py): for closely spaced mics such as the Quest 3S.
         calib = calib or PairCalibration.default()
-        est = PairLocator(calib)
+        est = PairLocator(calib, pair_cfg)
         phase = calib.delay_method == "phase"
         frame, r = delay_audio(x, rate, calib.rate_hz, calib.win)  # as the calibration was fitted
         sub = min(512, calib.win // 4)
@@ -331,13 +332,14 @@ def main() -> None:
     ap.add_argument("--method", choices=["level", "tdoa"], default="level",
                     help="level: head-shadow level model (estimator.py); tdoa: inter-mic delay (pair.py)")
     ap.add_argument("--calib", type=Path, default=None, help="tdoa calibration JSON (default: quest3s)")
+    ap.add_argument("--adapt", action="store_true", help="tdoa: per-source delay swing and offset (PairConfig.adapt)")
     a = ap.parse_args()
     take = Path(a.take)
     truth = a.truth
     if truth is None:
         truth = json.loads((take / "meta.json").read_text()).get("truth_deg")
     r = run(take, truth, a.active_within_db, method=a.method,
-            calib=PairCalibration.load(a.calib) if a.calib else None)
+            calib=PairCalibration.load(a.calib) if a.calib else None, pair_cfg=PairConfig(adapt=a.adapt))
     raise SystemExit(0 if r.get("pass", True) else 1)
 
 
