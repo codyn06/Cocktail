@@ -53,8 +53,20 @@ Subtasks:
 - **M1 (Lalitha):** speaker HUD (#38) on the headset with fake data, then with Cody's live hub (#37); tune outline size, view angle, dot and arrow; design pass; "point the controller at the sound and pull the trigger" truth labels for Shayaan's recordings.
 - **M2 (Cody):** merge #37 and #39; stream the selected source to `/audio/out` with inner and outer volumes; keep the voice locked through pauses; print gain in dB and delay in ms.
 - **M3 (Sadie):** `python -m locate.bench recordings/` scoreboard (median and p90 error, front/back rate, time to lock, confidence calibration); tune the inter-mic delay method (#36) with per-device calibration; locate each separated stream; combine delay, loudness and head-motion history in one posterior with honest confidence; tracker smoothing on real data; camera snap once M4 exists.
-- **M3d (Shayaan):** tape angle marks every 30 deg at 0.5, 1 and 2 m; record pink noise and speech at small, normal and large head motion on both headsets with `quest/tools/run_locate_take.ps1`; build `python -m locate.dataset_check recordings/` (coverage grid, PASS/FAIL per take); record the shared test scene (C2); round-trip delay test (C1); later run the scoreboard for G1.
+- **M3d (Shayaan):** tape angle marks every 30 deg at 0.5, 1 and 2 m; record pink noise and speech at small, normal and large head motion on both headsets with `quest/tools/run_locate_take.ps1`; build `eval/dataset_check.py` (run: `uv run --project hub python eval/dataset_check.py <recordings folder>`) (coverage grid, PASS/FAIL per take); record the shared test scene (C2); round-trip delay test (C1); later run the scoreboard for G1.
 - **M4 (Cody):** save camera frames in the recorder; person detection on the hub; boxes into sources; match the box to the speaker by direction (E2).
+
+### Scope: what each person owns
+Edit only your own folders. Need a change somewhere else? Ask its owner (or open a PR and tag them).
+
+| Person | Owns (edits freely) | Gets from others | Gives to others | Does NOT touch |
+|---|---|---|---|---|
+| Cody | `hub/separate`, `hub/events`, `hub/ingest`, `hub/mockclient`, new `hub/out` (audio to the headset), new `hub/vision` | live headset stream; protocol (Lalitha) | separated streams and tracked sources on `/events`; chosen-voice audio on `/audio/out`; GPU runs for others | `quest/`, `hub/locate`, `hub/track` |
+| Lalitha | `quest/` (Unity app, UI, input, headset audio), `hub/protocol` (integration owner: approves every protocol change) | `/events` and `/audio/out` from Cody's hub | headset builds (`.apk`) for Shayaan; truth-label tool; UI feedback | hub Python other than the protocol |
+| Sadie | `hub/locate`, `hub/track` (direction and tracking math, the `locate.bench` scoreboard) | recordings from Shayaan; separated streams from Cody | better bearings and confidence in every source | `quest/`, `hub/separate`, the protocol (ask Lalitha) |
+| Shayaan | `eval/` (data check, delay test, metrics), `quest/tools/record_session.py` and `run_locate_take.ps1` (recording tools), the shared recordings folder | headset build from Lalitha or Cody; new code to score from Sadie and Cody | labeled recordings, the test scene, measured numbers | `hub/locate` math, `quest/` Unity code |
+
+Shared rules: `docs/STATUS.md` (edit only your own rows), dependency files (`hub/pyproject.toml`, `uv.lock`, `quest/Packages`) are changed only after telling the team. **Recordings are not in git** (too big): they go in one shared drive folder (Shayaan sets it up and posts the link); a few short takes may be committed as regression tests.
 
 ### Location targets (M3, change them as we learn)
 In front: median 15 deg or less. Behind: median 25 deg or less. Front/back correct 95% or more. Lock within 3 s of head movement. Two speakers: both within 25 deg. Confidence honest: when it says 90% sure, it is right about 90% of the time.
