@@ -7,6 +7,8 @@ Run from the repo root (hub venv):
     uv run --project hub python quest/tools/record_session.py --out hub/recordings/take1 --truth 90 --seconds 25
 
 Writes OUT/audio.wav (int16, interleaved), OUT/pose.csv (t_us,qx,qy,qz,qw), OUT/meta.json,
+and OUT/audio_chunks.csv (seq,device_ts_us,frames,epoch of every audio chunk, so
+eval/dataset_check.py can look for dropped chunks and clock jumps; audio.wav is unchanged),
 and the camera frames (for SAM 3 and mock replay):
   OUT/video/<device_ts_us>.jpg   the JPEG bytes exactly as the headset sent them
   OUT/video/frames.jsonl         one VideoFrame header per line (seq, device_ts_us, epoch, width, height,
@@ -16,6 +18,9 @@ Frames cost disk (about 0.5 MB/s at the headset's 640 px, q60, 15 fps): limit th
 --max-frames, or turn them off with --no-video. `--truth` is the angle you placed the sound source at, in
 degrees from where your head faced when you started (+ = right, 180 = behind); it is stored for the scorer.
 `--camera-flipped` records that the headset's CameraStreamer.flipVertical was on (it is not on the wire).
+Optional labels stored in meta.json for the eval coverage grid (eval/dataset_check.py):
+`--distance-m` (source distance in meters), `--motion small|normal|large`,
+`--stimulus pink|speech`. They default to null.
 """
 
 from __future__ import annotations
@@ -53,6 +58,8 @@ def reset_state() -> None:
         "video": [],  # kept frames: (VideoFrame header, jpeg bytes)
         "video_kept_ts": set(), "video_next_due_us": None, "video_last_ts_us": None,
         "video_bytes": 0, "video_skipped": 0,
+        "chunks": [],  # (seq, device_ts_us, frames, epoch) of every audio chunk -> audio_chunks.csv
+        "clock_restarts": 0, "pose_restarts": 0,
     })
 
 
@@ -124,6 +131,8 @@ async def ws_audio(ws: WebSocket) -> None:
                 print("[audio] headset clock restarted; discarding the earlier session")
                 S["audio"], S["audio_frames"], S["audio_rate"] = [], 0, None
                 S["pose"] = []
+                S["chunks"] = []
+                S["clock_restarts"] += 1
                 clear_video()
                 S["video_last_ts_us"] = None
             if S["audio_rate"] is None:
@@ -132,6 +141,7 @@ async def ws_audio(ws: WebSocket) -> None:
                 print(f"[audio] first chunk: {hdr.sample_rate} Hz, {hdr.channels} ch, ts={hdr.device_ts_us}")
             S["audio"].append(pcm)
             S["audio_frames"] += hdr.frames
+            S["chunks"].append((hdr.seq, hdr.device_ts_us, hdr.frames, hdr.epoch))
             S["last_audio_ts_us"] = hdr.device_ts_us
     except (WebSocketDisconnect, RuntimeError):
         pass
@@ -164,6 +174,7 @@ async def ws_pose(ws: WebSocket) -> None:
                 q = m.rot_xyzw
                 if S["pose"] and m.device_ts_us < S["pose"][-1][0] - 2_000_000:
                     S["pose"] = []  # app restarted: new clock
+                    S["pose_restarts"] += 1
                 S["pose"].append((m.device_ts_us, q[0], q[1], q[2], q[3]))
     except (WebSocketDisconnect, RuntimeError):
         pass
@@ -224,7 +235,8 @@ def save_video(out: Path) -> int:
     return len(frames)
 
 
-def save(out: Path, truth: float | None, note: str) -> None:
+def save(out: Path, truth: float | None, note: str, distance_m: float | None = None,
+         motion: str | None = None, stimulus: str | None = None) -> None:
     out.mkdir(parents=True, exist_ok=True)
     if S["audio_rate"] is None:
         print("No audio received: nothing saved. Is the headset app running and pointed at this laptop?")
@@ -236,6 +248,10 @@ def save(out: Path, truth: float | None, note: str) -> None:
         f.write("t_us,qx,qy,qz,qw\n")
         for row in S["pose"]:
             f.write(",".join(str(v) for v in row) + "\n")
+    with open(out / "audio_chunks.csv", "w") as f:
+        f.write("seq,device_ts_us,frames,epoch\n")
+        for row in S["chunks"]:
+            f.write(",".join(str(v) for v in row) + "\n")
     saved_frames = save_video(out)
     meta = {
         "truth_deg": truth, "note": note, "sample_rate": S["audio_rate"], "channels": S["audio_ch"],
@@ -243,6 +259,9 @@ def save(out: Path, truth: float | None, note: str) -> None:
         "seconds": S["audio_frames"] / S["audio_rate"], "pose_samples": len(S["pose"]),
         "video_frames": S["video_frames"], "video_saved": saved_frames,
         "video_enabled": VIDEO["enabled"], "video_camera_flipped": VIDEO["flipped"], "hello": S["hello"], "cue": S["cue"], "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "distance_m": distance_m, "motion": motion, "stimulus": stimulus,
+        "audio_chunks": len(S["chunks"]), "clock_restarts": S["clock_restarts"],
+        "pose_restarts": S["pose_restarts"],
     }
     (out / "meta.json").write_text(json.dumps(meta, indent=2))
     print(f"saved {meta['seconds']:.1f} s of audio ({S['audio_ch']} ch @ {S['audio_rate']} Hz), "
@@ -264,7 +283,7 @@ async def main_async(a) -> None:
         pass
     server.should_exit = True
     await asyncio.sleep(0.5)
-    save(Path(a.out), a.truth, a.note)
+    save(Path(a.out), a.truth, a.note, a.distance_m, a.motion, a.stimulus)
 
 
 if __name__ == "__main__":
@@ -282,6 +301,9 @@ if __name__ == "__main__":
     ap.add_argument("--camera-flipped", action="store_true",
                     help="note in meta.json that the headset sends flipped frames (CameraStreamer.flipVertical on)")
     ap.add_argument("--note", default="")
+    ap.add_argument("--distance-m", type=float, default=None, help="source distance in meters (coverage grid label)")
+    ap.add_argument("--motion", choices=["small", "normal", "large"], default=None, help="head-movement size label")
+    ap.add_argument("--stimulus", choices=["pink", "speech"], default=None, help="what the source played")
     ap.add_argument("--port", type=int, default=p.DEFAULT_PORT)
     args = ap.parse_args()
     VIDEO.update(enabled=not args.no_video, max_frames=args.max_frames, flipped=args.camera_flipped,
@@ -292,4 +314,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main_async(args))
     except KeyboardInterrupt:
-        save(Path(args.out), args.truth, args.note)
+        save(Path(args.out), args.truth, args.note, args.distance_m, args.motion, args.stimulus)
