@@ -1,5 +1,7 @@
 {
-  "model": "opus",
+  "model": "sonnet",
+  "effortLevel": "high",
+  "advisorModel": "opus",
   "hooks": {
     "PreToolUse": [
       {

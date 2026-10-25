@@ -2,6 +2,7 @@
 name: integration-engineer
 description: "Engineer for bounded Gemma integration and communication/interface tasks between components (phone, glasses, display, perception services)."
 model: sonnet
+effort: low
 skills:
   - graphify
   - gemma-dev

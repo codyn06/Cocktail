@@ -37,11 +37,11 @@
     ".agent/skills/systematic-debugging/test-pressure-3.md": "96b50a52e2c7989c9cf20fb752c47c1e9a3a70dc362f8f7989f8f5b64dac7708",
     ".agent/skills/verification-before-completion/LICENSE": "a37e0e9697144819e1d965176ac4ae5bc3fa02d11e7812036bbcadf6dafe2400",
     ".agent/skills/verification-before-completion/SKILL.md": "2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3",
-    ".claude/agents/device-engineer.md": "31f3e64fab1f6045bcfc16c806f0745dc59ca281448a955707e8bd4caf8f5405",
-    ".claude/agents/docs-scout.md": "2804a08f6d6c83764cddb957344d6815f1b9998a9f7c69849891d626fe2fb01d",
-    ".claude/agents/integration-engineer.md": "1849b5a21c0ad517552637f36eab2df1ccfd6635a3583933b7c39632463bf1f4",
-    ".claude/agents/perception-engineer.md": "1348953612e96a8fb10eb3be3348605293a31950a6f11c83658e2a5e4c5115db",
-    ".claude/agents/reviewer.md": "c0ade367ed31c8fbf037a6a7ceaa20ac89cd0bcabc36a6503aac7818645e33cd",
+    ".claude/agents/device-engineer.md": "8e8b1df44a0878d991c98ca0244ec5744194419f089c34844cbbf1517ebc7293",
+    ".claude/agents/docs-scout.md": "c28628bff7b0e73a0caee0be4648be7a7a45f4d0beb559f80e2bc55c31b2b02a",
+    ".claude/agents/integration-engineer.md": "ed8bc6b85f066194b0001b3d9dc84feaf60f773615138e555d465b283635a974",
+    ".claude/agents/perception-engineer.md": "9554077a6db035855f013ca45607498ab691456446f7bf2cc32c71bc366bf9c3",
+    ".claude/agents/reviewer.md": "4bb2a83f47fa3d9c7bd3d25a4cde5d151c3b2d022ab1ad321bc25474f4c6d3ee",
     ".claude/skills/cocktail-perception/SKILL.md": "3164b1a44cc5d22b2a4d336760a77cf9a43d911f673eba2378295416769af909",
     ".claude/skills/cocktail-perception/references/sam-audio.md": "9d89ffbaaae9feac3190e134d87b6c08fa190aed21966a92e2bb10064f416295",
     ".claude/skills/cocktail-perception/references/sam3.md": "4c04f4024c697e7d3edab606daae44d11b49e68bf4e680fdc82ff69e57391287",
@@ -90,6 +90,6 @@
     ".pi/agents/reviewer.md": "d0d6f4602be343b3404f121e9eb38e6d0da9d02cfe7fa1e1d6d1abdb7a7d2ef6",
     ".pi/extensions/subagent/agents.ts": "9e868e3e6e5d3c9cf73ba614cf2fa1825545c08a5f1037237de8db180990e679",
     ".pi/extensions/subagent/index.ts": "dcb485eaed46ea4997ddd8293238f6205b610d1ebb9c5987becdfde23cd86c2a",
-    "GEMINI.md": "4888d1ce5ae2f0d6cb584d72bb65aed4493fd0ba4705b7c10439947f14bde799"
+    "GEMINI.md": "95a37992d6f1c709a840d19736f003fa471b9c3cc2c69dd4a80e6f0cbaf040ab"
   }
 }

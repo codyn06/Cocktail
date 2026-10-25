@@ -4,6 +4,7 @@ description: "Read-only researcher that verifies SDK APIs, hardware capabilities
 tools: Read, Grep, Glob, WebFetch, WebSearch, Bash
 disallowedTools: Write, Edit, NotebookEdit
 model: sonnet
+effort: low
 skills:
   - graphify
   - hz-quest-verify-first

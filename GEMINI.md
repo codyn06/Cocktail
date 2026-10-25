@@ -27,9 +27,26 @@ Do not assume:
    role assigned to each; file ownership per task; shared decisions (interfaces,
    formats, config); how each task will be verified.
 3. **Delegate**:
-   - At most 2 active delegated tasks at a time.
-   - One editing agent per working tree. Parallel writers need separate worktrees;
-     otherwise serialize.
+   - Plan first, always: inspect, query graphify, and write the plan as a task DAG
+     with file ownership per task before spawning anything. Claude Code: consult the
+     advisor on the plan before fanning out.
+   - No concurrency cap (deadline mode). Spawn every task with no unmet dependency in
+     the same message; start each next wave as soon as its dependencies finish.
+     If rate-limited, cap a wave at about 6 agents.
+   - One editing agent per working tree: every parallel editing agent runs in its own
+     worktree on its own branch. Read-only agents need no worktree.
+   - File ownership within a wave is disjoint. Shared interfaces, config,
+     `.agents/decisions.md`, and dependency files are decided in the plan up front or
+     edited by a single owner task.
+   - Keep tasks narrow and fully specified (exact files, acceptance checks, what to
+     return); subagents run at low effort.
+   - Never block on long commands: run anything expected to take more than about
+     1 minute (tests, builds, model runs, installs, evals) in the background and watch
+     it (Claude Code: `run_in_background` + `Monitor` or completion notification), not
+     foreground waits or sleep-polling. Subagents follow the same rule.
+   - Use the wait time: while commands or agents run, plan the next wave, spawn tasks
+     whose dependencies are met, and integrate or check returned results. Idle only
+     when everything remaining depends on running work.
    - Every assignment states: goal and context, allowed files, skills to load,
      dependencies, acceptance/verification, and what to return.
    - Subagents start cold: they see only the assignment, not the orchestrator's
@@ -40,9 +57,10 @@ Do not assume:
      facts, not "as discussed" or "see above". For follow-ups, continue the same
      subagent (e.g. Claude Code `SendMessage`) rather than starting a fresh one.
    - Out-of-scope needs are reported back to the orchestrator, not acted on.
-4. **Integrate and review**: the orchestrator inspects and integrates results itself,
-   then gets an independent review proportional to risk (the `reviewer` role for
-   non-trivial or shared-interface changes).
+4. **Integrate and review**: the orchestrator inspects and integrates results itself
+   (merge worktree branches serially, run tests once on the combined result), then
+   gets one independent review proportional to risk on the combined diff (the
+   `reviewer` role for non-trivial or shared-interface changes).
 5. **Continuity**: for substantive tasks keep a per-branch handoff file in
    `.agents/handoff/` (format in `.agents/handoff/README.md`: status, ownership,
    decisions, verification, next steps) so another agent or teammate can resume.

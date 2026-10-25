@@ -4,6 +4,7 @@ description: "Independent read-only reviewer for correctness, concurrency, laten
 tools: Read, Grep, Glob, WebFetch, WebSearch, Bash
 disallowedTools: Write, Edit, NotebookEdit
 model: sonnet
+effort: low
 skills:
   - graphify
   - verification-before-completion

@@ -2,6 +2,7 @@
 name: perception-engineer
 description: "Engineer for bounded audio and computer-vision tasks - SAM3 segmentation, SAM Audio separation, timing alignment, and audio/visual source association."
 model: sonnet
+effort: low
 skills:
   - graphify
   - cocktail-perception
