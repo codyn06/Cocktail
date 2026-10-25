@@ -170,9 +170,13 @@ namespace Cocktail.Ui
                 if (Application.isPlaying) { _cursor = new GameObject("PointerCursor").AddComponent<PointerCursorView>(); _cursor.Build(theme); }
                 _reticle = Child<ReticleView>("Reticle", new Vector3(0f, 0f, theme.reticleDistance)); _reticle.Build(theme);
             }
-            Subscribe();
-            if (hub != null && hub.LastSources != null && _entries.Count == 0) { ApplySources(hub.LastSources, false); }
-            if (hub != null && hub.LastState != null) ApplyState(hub.LastState, false);
+            // replay what the hub last said only when (re)subscribing, never on every EnsureInit call: ApplySources and ApplyState
+            // call EnsureInit themselves, and with an empty source list this used to recurse until the stack overflowed
+            if (Subscribe())
+            {
+                if (hub != null && hub.LastSources != null && _entries.Count == 0) { ApplySources(hub.LastSources, false); }
+                if (hub != null && hub.LastState != null) ApplyState(hub.LastState, false);
+            }
         }
 
         T Child<T>(string name, Vector3 localPos) where T : Component
@@ -196,9 +200,10 @@ namespace Cocktail.Ui
             }
         }
 
-        void Subscribe()
+        /// <summary>True when this call subscribed (first time, or after OnDisable); false when already subscribed.</summary>
+        bool Subscribe()
         {
-            if (_subscribed) return;
+            if (_subscribed) return false;
             _subscribed = true;
             if (hub != null)
             {
@@ -209,6 +214,7 @@ namespace Cocktail.Ui
                 fake.OnSources += OnFakeSources; fake.OnState += OnFakeState; fake.OnTarget += OnFakeTarget; fake.OnAlert += OnFakeAlert; fake.OnReplayReady += OnFakeReplay;
             }
             if (input != null) input.OnSent += OnInputSent;
+            return true;
         }
 
         void Unsubscribe()
