@@ -389,6 +389,21 @@ checks (`hub/locate/av_spatial.py`), residual math, envelopes, the matcher and a
 live path; the model phases (SAM 3 masks, SAM Audio stems) are not built. It does not change the live
 defaults.
 
+### D18. Speech: separate, then attribute; SAM Audio for non-speech
+**Proposed** (numbered D18 because D11 is taken; measured on synthetic mixtures of recorded clips, hardware-run
+on the RTX 5070 Ti Laptop; numbers in [`docs/STATUS.md`](docs/STATUS.md); no recorded natural-scene or device test).
+- **Speech branch:** MossFormer2_SS_16K (2 speakers), then per-face TalkNet speaking scores (S3FD face
+  boxes assigned to SAM 3 person masks), then stream-to-track association by envelope/speaking-score
+  correlation with a margin, then explicit refusal (ambiguous / no associated stream / target inactive).
+  There is never a dominant-voice fallback.
+- **AV_MossFormer2_TSE_16K** is an optional per-face extractor. It is CUDA-only and does **not** go silent
+  for an inactive target (+9 dB vs the mixture level on a silent target), so gate its output by activity.
+- **SAM Audio small-tv** stays for non-speech text-prompted extraction. AST gives event labels; a label
+  is not attribution. The `--speech-backend sam_audio` path remains for comparison.
+- **Why:** on a two-voice overlap, SAM Audio's visual mask did not steer which voice came back (0/8
+  candidates reached +3 dB SI-SDRi for the prompted voice), while MossFormer2 separated both voices
+  (+14.5 / +17.9 dB). Separation succeeds where SAM Audio selection fails.
+
 ## Open items
 
 - **Integration owner:** unassigned. `.agents/decisions.md` is out of date ("no app stack

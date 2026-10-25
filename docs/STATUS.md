@@ -239,3 +239,48 @@ alert messages, Meta glasses version, search and rescue.
 
   Offline 12 s gives the same numbers. Caveat: clean read speech from LibriSpeech, which may overlap
   the model's training data; expect lower on the real 3S recording (reverb, mic noise, crosstalk).
+
+  Multi-source AV separation and attribution (2026-10-25). Evidence: **SYNTHETIC mixtures of recorded
+  clips**; models hardware-run on the RTX 5070 Ti Laptop (12 GiB); timing measured while another GPU job
+  was running.
+
+  SAM Audio small-tv, `overlap_stack_AB` (8 s clip, A = woman top, B = man bottom, RMS-matched, 8
+  candidates, seeds 100-107):
+  - **Prompting A:** every non-oracle candidate resembles B. Candidate 0 SI-SDRi on A is about -29 dB;
+    best is -12.7 to -14.4 dB; 0/8 candidates reach >= +3 dB.
+  - Holds for prompts "person speaking", "speech, single speaker", "speech, one person" and "woman
+    speaking", with no anchors / predicted spans or with full-clip anchors. With the visual prompt off it
+    is still -28 dB.
+  - Oracle spans from clean refs (**DIAGNOSTIC only**) gave one candidate at +6.2 dB, which cannot be
+    selected without the reference.
+  - **Prompting B:** +7.3 dB for candidate 0, 8/8 candidates.
+  - Conclusion: the visual mask does not steer which voice is returned. The bias is signal-dependent: the
+    team's earlier report favored the woman, here it favors B.
+  - Input audit passed: 48 kHz mono, no clipping, 200 frames <-> 200 features (0 ms mapping error); mask
+    polarity correct (target kept 0.9996, background 0).
+  - The vision encoder squashes frames to 336x336 without preserving aspect ratio (stretch 1.125 for the
+    stack layout, 0.28 for side-by-side). Untested possible contributor.
+  - Cost: 8 candidates ~50 s per condition; peak 8.26 GiB; span predictor kept on CPU.
+  - The installed sam_audio bb4c6999 includes the issue #98 span fix. Span prediction runs only when
+    anchors is None and is driven by the text prompt.
+  - BA ordering and judge ranker results: TBD (pending run).
+
+  MossFormer2_SS on the same mixtures: best-matching output stream SI-SDRi +14.5 dB for A and +17.9 dB for
+  B, identical across stack/side and AB/BA layouts (same audio). Separation succeeds where SAM Audio
+  selection fails.
+
+  Attribution, first run (head-crop heuristic): failed. The eval masks are whole-tile rectangles, so the
+  "head box" was the whole tile, TalkNet saw no face, every track scored inactive, and the system refused
+  all selections (no wrong voice returned). Fix: S3FD face detection; rerun TBD (pending run).
+
+  AV-TSE (per face, still with the bad crops):
+  - offscreen3, A: +4.7 dB, correct selection (margin 13.5 dB)
+  - speech+music, A: +4.5 dB, correct (margin 22.6 dB)
+  - silent target: TSE output -16.7 dBFS, i.e. not silent
+
+  Speech-branch peak VRAM 1.52 GiB (MossFormer2 + TalkNet + TSE together). Wall time 6-16 s per 8 s case,
+  measured while the SAM Audio run was also on the GPU.
+
+  Limitations: 2-talker separator limit; a single speaker pair; seeds are not generalization; reference B
+  is derived (compB - compA); no recorded natural-scene or device test yet; off-screen attribution relies
+  on visible faces being confidently silent; latency is not real-time.
