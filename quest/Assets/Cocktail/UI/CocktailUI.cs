@@ -647,7 +647,7 @@ namespace Cocktail.Ui
             int n = 0;
             foreach (var en in _entries.Values)
             {
-                if (n++ >= 5) break;
+                if (n++ >= 3) break;
                 var s = en.src;
                 sb.Append(s.SourceId).Append(' ').Append(s.Label).Append(' ').Append(s.LevelDb.ToString("0")).Append("dB ")
                   .Append(s.BearingDeg.HasValue ? s.BearingDeg.Value.ToString("0") + "deg " : "no-dir ")
@@ -1016,7 +1016,7 @@ namespace Cocktail.Ui
             if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch)) ToggleHudMode();
             if (UsingFake && fake != null)
             {
-                if (OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch)) fake.Stop();
+                if (OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch) && !OVRInput.Get(OVRInput.Button.Four, OVRInput.Controller.LTouch)) fake.Stop();
                 if (OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch)) fake.Replay();
             }
         }

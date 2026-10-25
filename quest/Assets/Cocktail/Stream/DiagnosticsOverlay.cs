@@ -59,7 +59,7 @@ namespace Cocktail.Stream
         {
             if (rig == null) rig = FindFirstObjectByType<OVRCameraRig>();
             if (rig == null) return;
-            if (OVRInput.GetDown(OVRInput.Button.SecondaryThumbstick, OVRInput.Controller.RTouch)) visible = !visible;
+            if (DevMode.On && OVRInput.GetDown(OVRInput.Button.SecondaryThumbstick, OVRInput.Controller.RTouch)) visible = !visible;
             bool show = visible && DevMode.On;
             _text.gameObject.SetActive(show);
             if (!show) return;
