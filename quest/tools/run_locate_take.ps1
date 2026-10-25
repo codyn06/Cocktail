@@ -32,6 +32,33 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Check the labels and the stimulus file before anything starts (recorder, headset app): a mistake
+# found later would kill the hidden recorder after the headset app is already running.
+$callerDir = (Get-Location).Path     # relative -StimulusWav paths are taken from where the user ran this
+if ($StimulusWav -and $Stimulus -eq "pink") { throw "-StimulusWav with -Stimulus pink would mislabel the take; use -Stimulus speech (or omit -Stimulus)." }
+if ($Stimulus -eq "speech" -and -not $StimulusWav) { throw "-Stimulus speech needs -StimulusWav <PCM .wav>: this script only generates pink noise." }
+$Motion = $Motion.ToLower(); $Stimulus = $Stimulus.ToLower()   # ValidateSet ignores case, the recorder's argparse does not
+$userWav = $null
+if ($StimulusWav) {
+    $cand = if ([System.IO.Path]::IsPathRooted($StimulusWav)) { $StimulusWav } else { Join-Path $callerDir $StimulusWav }
+    if (-not (Test-Path -LiteralPath $cand -PathType Leaf)) { throw "-StimulusWav not found: $cand" }
+    $userWav = (Resolve-Path -LiteralPath $cand).Path
+    # SoundPlayer.Load() alone accepts a non-wav file (it only fails at Play), so read the header too:
+    # RIFF/WAVE with a PCM (format tag 1) 'fmt ' chunk, which is all SoundPlayer can play.
+    $fs = [System.IO.File]::OpenRead($userWav)
+    try { $hdr = New-Object byte[] ([Math]::Min(4096, $fs.Length)); [void]$fs.Read($hdr, 0, $hdr.Length) } finally { $fs.Dispose() }
+    $isPcm = $false
+    if ($hdr.Length -ge 20 -and [Text.Encoding]::ASCII.GetString($hdr, 0, 4) -eq "RIFF" -and [Text.Encoding]::ASCII.GetString($hdr, 8, 4) -eq "WAVE") {
+        for ($o = 12; $o + 10 -le $hdr.Length; ) {
+            $id = [Text.Encoding]::ASCII.GetString($hdr, $o, 4); $len = [BitConverter]::ToUInt32($hdr, $o + 4)
+            if ($id -eq "fmt ") { $isPcm = ([BitConverter]::ToUInt16($hdr, $o + 8) -eq 1); break }
+            $o += 8 + $len + ($len % 2)
+        }
+    }
+    if (-not $isPcm) { throw "-StimulusWav is not a PCM .wav that Windows can play (need RIFF/WAVE with a PCM fmt chunk): $userWav" }
+    $probe = New-Object System.Media.SoundPlayer $userWav
+    try { $probe.Load() } catch { throw "-StimulusWav could not be loaded by Windows: $userWav ($($_.Exception.Message))" }
+}
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $root
 $pkg = "com.DefaultCompany.quest"
@@ -52,10 +79,10 @@ x = np.fft.irfft(W / np.sqrt(f), n); x = np.clip(x / x.std() * 0.30, -0.98, 0.98
 with wave.open(sys.argv[1], "wb") as o:
     o.setnchannels(1); o.setsampwidth(2); o.setframerate(44100); o.writeframes((x * 32767).astype("<i2").tobytes())
 '@
-$gen | Set-Content -Encoding ascii "$env:TEMP\gen_pink.py"
-uv run --project hub python "$env:TEMP\gen_pink.py" $noiseWav
-if ($Stimulus -eq "speech" -and -not $StimulusWav) { throw "-Stimulus speech needs -StimulusWav <PCM .wav>: this script only generates pink noise." }
-if ($StimulusWav) { $noiseWav = (Resolve-Path $StimulusWav).Path }
+if ($userWav) { $noiseWav = $userWav } else {
+    $gen | Set-Content -Encoding ascii "$env:TEMP\gen_pink.py"
+    uv run --project hub python "$env:TEMP\gen_pink.py" $noiseWav
+}
 $player = New-Object System.Media.SoundPlayer $noiseWav
 $labelArgs = @()
 if (-not [double]::IsNaN($Distance)) { $labelArgs += @("--distance-m", $Distance) }
