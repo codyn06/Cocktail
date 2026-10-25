@@ -34,6 +34,8 @@ ap.add_argument("--active-floor-db", type=float, default=-88.0,
                 help="activity floor in band-level dB (not dBFS: the band level reads ~29 dB below the stream rms). "
                      "-88 = zero activity at a ~-59 dBFS stream, full at ~-49; the Quest mic's speech sits at -43 to -50 dBFS "
                      "(the class default -60 only suits louder simulated signals)")
+ap.add_argument("--no-audio-bearing", action="store_true",
+                help="hide audio-derived directions; only a camera-matched box positions a speaker")
 ap.add_argument("--out-settle-s", type=float, default=0.3,
                 help="hold separated audio this long before /audio/out so the tracker has caught up")
 ap.add_argument("--out-gains-in-layers", action="store_true",
@@ -83,8 +85,10 @@ person_box = PersonBox(state, events_state.selection, camera_flipped=a.camera_fl
                        recorder_fn=lambda: getattr(app.state, "speakers", None))
 from events.no_audio_bearing import strip_audio_bearing  # noqa: E402
 
-# Demo: no audio-derived direction is ever shown (it lands tens of degrees off on the Quest 3S); a box only from the camera.
-events_state.source_overlays.insert(0, strip_audio_bearing)
+# Audio-derived direction is shown (the camera box overrides it for the chosen speaker). --no-audio-bearing hides it:
+# on the Quest 3S it can land tens of degrees off (locate/TUNING.md).
+if a.no_audio_bearing:
+    events_state.source_overlays.insert(0, strip_audio_bearing)
 events_state.source_overlays.append(person_box.overlay)
 person_box.start()
 
