@@ -23,7 +23,7 @@
   if (typeof document === 'undefined' || !document.getElementById('stage')) return;
 
   const fetchJson = async (p) => { const r = await fetch(p); if (!r.ok) throw new Error(p + ': ' + r.status); return r.json(); };
-  const fetchLines = async (p) => (await (await fetch(p)).text()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+  const fetchLines = async (p) => (await (async () => { const r = await fetch(p); if (!r.ok) throw new Error(p + ': ' + r.status); return r.text(); })()).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
 
   const S = {
     ctx: null, buffers: {}, gains: {}, nodes: [], playing: false, offset: 0, t0: 0, duration: 0,
@@ -64,12 +64,13 @@
     applyMix(true);
     startNodes();
     S.playing = true; $('#play').textContent = 'Pause';
-    if (S.useVideo) { $('#video').currentTime = S.offset; }
+    if (S.useVideo) { const vd = $('#video'); vd.currentTime = S.offset; vd.play().catch(() => {}); }
   }
   function pause() {
     if (!S.playing) return;
     S.offset = Math.min(position(), S.duration);
     stopNodes(); S.playing = false; $('#play').textContent = 'Play';
+    if (S.useVideo) $('#video').pause();
   }
   function seek(t) {
     S.offset = Math.min(Math.max(t, 0), S.duration);
@@ -148,7 +149,7 @@
       strip.addEventListener('click', (e) => { e.stopPropagation(); const r = strip.getBoundingClientRect(); seek(((e.clientX - r.left) / r.width) * S.duration); });
       li.append(nm, b, strip);
       li.addEventListener('click', () => selectSource(s.source_id, true));
-      li.addEventListener('keydown', (e) => { if (e.key === 'Enter') selectSource(s.source_id, true); });
+      li.setAttribute('role', 'button'); li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') selectSource(s.source_id, true); });
       ul.appendChild(li);
     });
   }
@@ -203,7 +204,7 @@
     $('#time').textContent = `${Math.min(t, S.duration).toFixed(2)} / ${S.duration.toFixed(2)} s`;
     if (!seekDrag) $('#seek').value = String(Math.round((Math.min(t, S.duration) / S.duration) * 1000));
     if (S.playing && t >= S.duration) pause();
-    if (S.playing && S.useVideo) { const v = $('#video'); if (Math.abs(v.currentTime - t) > 0.15) v.currentTime = t; }
+    if (S.useVideo) { const v = $('#video'); if (!S.playing || Math.abs(v.currentTime - t) > 0.045) v.currentTime = Math.min(t, S.duration); }   // within about one frame of the audio clock
     requestAnimationFrame(draw);
   }
 

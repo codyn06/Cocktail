@@ -225,3 +225,33 @@ def test_mp4_output_when_ffmpeg_is_available(scene, tmp_path):
     man = phase1.run(scene["fx"], out, run_id="mp4")
     assert man.capabilities["mp4"]["status"] == "written"
     assert (out / "source_video.mp4").stat().st_size > 1000 and (out / "annotated.mp4").stat().st_size > 1000
+
+
+def test_stage_keys_are_content_addressed_and_chained(scene):
+    keys = [s["key"] for s in json.loads((scene["out"] / "manifest.json").read_text())["stages"]]
+    assert len(keys) == len(set(keys)) and all(len(k) == 16 for k in keys)
+    hashes = json.loads((scene["out"] / "manifest.json").read_text())["input_hashes"]
+    assert {"master.wav", "fixture.json", "visual_motion.json"} <= set(hashes)
+    assert any(k.startswith("truth_stems/") for k in hashes) and any(k.startswith("masks_truth/") for k in hashes)
+
+
+def test_removed_stem_is_found_as_an_unexplained_event_through_the_pipeline(scene, tmp_path):
+    out = tmp_path / "av"
+    man = phase1.run(scene["fx"], out, run_id="removed", write_annotated=False, remove_stem="cat_chirp")
+    rem = {r.kind: r for r in man.remainders}["unexplained_power"]
+    events = rem.stft["events"]
+    chirps = scene["truth"]["sources"][2]["activity_us"]
+    assert all(any(e["start_s"] < b / 1e6 and e["end_s"] > a / 1e6 for e in events) for a, b in chirps)
+    assert {s.source_id for s in man.stems} == {"spk_alice", "spk_bob", "knock_offscreen"}
+
+
+def test_off_axis_yaw_limit_comes_from_the_config(scene):
+    from av_scene.config import load_config
+    cfg = load_config()
+    cfg.off_axis.yaw_limit_deg = 80.0                     # alice's 75 deg turn is now within the limit
+    man = phase1.run(scene["fx"], scene["out"].parent / "yaw80", cfg=cfg, run_id="yaw80", write_annotated=False)
+    alice = next(a for a in man.associations if a.source_id == "spk_alice")
+    comp = {c.name: c for c in alice.components}
+    assert comp["onset_synchrony"].quality == 1.0         # both onsets now have usable lips
+    assert all(e.eligible for e in alice.learning_eligibility if e.reason.startswith("face_forward"))
+    assert not any(e.reason.startswith("off_axis") for e in alice.learning_eligibility)

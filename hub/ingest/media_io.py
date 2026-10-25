@@ -240,7 +240,7 @@ def read_png(path: str | Path) -> np.ndarray:
                     p0 = a + prev[x] - c
                     pa, pb, pc = abs(p0 - a), abs(p0 - prev[x]), abs(p0 - c)
                     pred = a if pa <= pb and pa <= pc else (prev[x] if pb <= pc else c)
-                cur[x] = row[x] + pred
+                cur[x] = (row[x] + pred) & 0xFF
         out[y] = (cur & 0xFF).astype(np.uint8)
     return out.reshape(h, w, 3)
 
@@ -324,6 +324,10 @@ def probe_video_pts(info: FfmpegInfo, path: str | Path) -> list[int]:
     return pts
 
 
+def _concat_quote(p) -> str:
+    return Path(p).resolve().as_posix().replace("'", "'"+chr(92)+"''")
+
+
 def encode_mp4(info: FfmpegInfo, frame_paths: list[Path], pts_us: list[int], out_path: str | Path,
                audio_path: str | Path | None = None, tail_us: int = 40_000) -> None:
     """Mux a PNG sequence (variable frame rate via per-frame durations) and optional audio to MP4."""
@@ -335,8 +339,8 @@ def encode_mp4(info: FfmpegInfo, frame_paths: list[Path], pts_us: list[int], out
     lines = []
     for i, f in enumerate(frame_paths):
         dur = (pts_us[i + 1] - pts_us[i]) if i + 1 < len(pts_us) else tail_us
-        lines.append(f"file '{Path(f).resolve().as_posix()}'\nduration {dur / 1e6:.6f}")
-    lines.append(f"file '{Path(frame_paths[-1]).resolve().as_posix()}'")
+        lines.append(f"file '{_concat_quote(f)}'\nduration {dur / 1e6:.6f}")
+    lines.append(f"file '{_concat_quote(frame_paths[-1])}'")
     lst.write_text("\n".join(lines) + "\n", encoding="utf-8")
     cmd = [info.ffmpeg, "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst)]
     if audio_path:

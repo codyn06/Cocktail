@@ -15,6 +15,11 @@ Timing: `lag = t_audio_onset - t_visual_onset` (positive = audio late). Acoustic
 makes audio arrive 0-35 ms late at room distances; that range is free. Audio that LEADS the
 picture beyond clock/frame uncertainty is penalised, as is lag far beyond the ToF range.
 
+Status semantics: `Decision.status` is about the SOURCE (matched / ambiguous / unmatched). For an
+unmatched source `Decision.score` is the best LOSING candidate's score, not a match score. `rejected`
+is a per-candidate label (`Decision.candidates[track]["status"]`, evidence below `reject_threshold`);
+it is never the status of a whole source.
+
 Learning eligibility: lip-sync ASD is `unavailable` and voice-profile learning is frozen while
 the observed face is turned more than 60 deg from the camera or the mouth is occluded. The gate
 is bound to the audio interval and logical slot, so a later clear face cannot approve audio that
@@ -186,10 +191,9 @@ class FaceObservation:
     occluded: bool = False
 
 
-def lip_asd_available(face: FaceObservation | None) -> bool:
+def lip_asd_available(face: FaceObservation | None, yaw_limit_deg: float = OFF_AXIS_YAW_LIMIT_DEG) -> bool:
     """Lip-sync ASD needs an observed, forward-ish, unoccluded face."""
-    return bool(face and not face.occluded and face.yaw_deg is not None
-                and abs(face.yaw_deg) <= OFF_AXIS_YAW_LIMIT_DEG)
+    return bool(face and not face.occluded and face.yaw_deg is not None and abs(face.yaw_deg) <= yaw_limit_deg)
 
 
 @dataclass
@@ -209,8 +213,9 @@ class LearningEligibility:
     always blocks. Overlap rule: audio is eligible only if NO overlapping interval blocks it, so a
     later clear observation cannot approve previously contaminated audio."""
 
-    def __init__(self, unknown_pose: Literal["allow", "block"] = "allow"):
+    def __init__(self, unknown_pose: Literal["allow", "block"] = "allow", yaw_limit_deg: float = OFF_AXIS_YAW_LIMIT_DEG):
         self.unknown_pose = unknown_pose
+        self.yaw_limit_deg = yaw_limit_deg
         self.intervals: list[_Interval] = []
 
     def observe(self, slot: int, face: FaceObservation | None) -> _Interval | None:
@@ -220,7 +225,7 @@ class LearningEligibility:
             eligible, why = False, "mouth_occluded"
         elif face.yaw_deg is None:
             eligible, why = self.unknown_pose == "allow", f"pose_unknown_policy_{self.unknown_pose}"
-        elif abs(face.yaw_deg) > OFF_AXIS_YAW_LIMIT_DEG:
+        elif abs(face.yaw_deg) > self.yaw_limit_deg:
             eligible, why = False, f"off_axis_yaw_{face.yaw_deg:.0f}deg"
         else:
             eligible, why = True, "face_forward"

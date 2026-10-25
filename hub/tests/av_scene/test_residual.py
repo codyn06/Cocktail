@@ -136,3 +136,20 @@ def test_coherent_mask_partitions_do_not_create_unexplained_events():
     sa, sb = istft(X * Ma, CFG, N), istft(X * (1 - Ma), CFG, N)
     events, proj = find_unexplained_events(mix, [sa, sb], FS, CFG)
     assert events == [] and proj.projection_error_db < -25.0
+
+
+def test_omitted_source_overlapping_an_included_stems_bins_is_detected_when_clearly_louder():
+    """alpha_max bounds the gain a candidate stem may take, so a missing source that shares the SAME
+    time-frequency bins is only detectable once it exceeds what alpha_max * |S| can explain (about
+    +3.5 dB over the stem for amplitude masks at alpha_max = 1.5). Quieter overlapped sources can be
+    partly absorbed: a documented limit of the projection, not a claim of full coverage."""
+    s = clean_source()
+    stem = rotate_phase(s, ROTATIONS["quadrature"][0])
+    rng = np.random.default_rng(6)
+    a, b = int(1.2 * FS), int(1.5 * FS)
+    loud = np.zeros(N)
+    loud[a:b] = signal.sosfilt(signal.butter(6, [200, 1800], "bandpass", fs=FS, output="sos"),
+                               rng.standard_normal(b - a)) * np.hanning(b - a)
+    loud *= 3.0 * np.max(np.abs(s)) / np.max(np.abs(loud))              # about +10 dB over the included stem
+    events, _ = find_unexplained_events(s + loud, [stem], FS, CFG)
+    assert len(events) == 1 and events[0]["start_s"] < 1.4 and events[0]["end_s"] > 1.3

@@ -136,6 +136,10 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):  # keep the CLI quiet
         pass
 
+    def list_directory(self, path):  # never expose directory listings
+        self.send_error(404, "No permission to list directory")
+        return None
+
     def send_head(self):
         self._range_left = None
         rng = self.headers.get("Range")

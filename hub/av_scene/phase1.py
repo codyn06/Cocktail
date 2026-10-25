@@ -29,7 +29,7 @@ from vision.mask_store import read_track_jsonl
 from who.matcher import (Evidence, FaceObservation, LearningEligibility, assign, causal_lag_score, combine,
                          lip_asd_available)
 
-from .cache import hash_file
+from .cache import hash_config, hash_file
 from .config import AvConfig, load_array_calibration, load_config
 from .schemas import (AcousticEvent, Association, ComponentScore, EligibilityInterval, LabelScore, MaskletTrack,
                       RemainderResult, RunManifest, SceneSource, SpatialEvidence, SpeakerTrack, StageRecord,
@@ -41,8 +41,11 @@ NOUNS = {"speech": ["person"], "chirp": ["cat"], "knock": ["door", "wall"]}
 
 def _git_rev() -> str | None:
     try:
-        return subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5,
-                              cwd=Path(__file__).parent).stdout.strip() or None
+        cwd = Path(__file__).parent
+        rev = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5, cwd=cwd).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True,
+                               timeout=10, cwd=cwd).stdout.strip()
+        return (rev + ("+dirty" if dirty else "")) or None
     except Exception:
         return None
 
@@ -85,10 +88,14 @@ def run(fixture_dir: str | Path, out_dir: str | Path, cfg: AvConfig | None = Non
     cal = load_array_calibration()
     truth = json.loads((fx / "fixture.json").read_text())
     stages: list[StageRecord] = []
+    inputs = {str(p.relative_to(fx).as_posix()): hash_file(p) for p in sorted(fx.rglob("*"))
+              if p.is_file() and p.suffix in (".wav", ".json", ".jsonl")}
+    chain = {"key": ""}
 
     def stage(name: str, t0: float, detail: str = "") -> None:
-        stages.append(StageRecord(name=name, key=cfg.hash()[:16], seconds=round(time.perf_counter() - t0, 3),
-                                  detail=detail))
+        # content-addressed and chained: a changed input, config or upstream stage changes every later key
+        chain["key"] = hash_config({"stage": name, "inputs": inputs, "config": cfg.hash(), "upstream": chain["key"]})[:16]
+        stages.append(StageRecord(name=name, key=chain["key"], seconds=round(time.perf_counter() - t0, 3), detail=detail))
 
     # ---- ingest
     t0 = time.perf_counter()
@@ -100,8 +107,7 @@ def run(fixture_dir: str | Path, out_dir: str | Path, cfg: AvConfig | None = Non
                                channel_order=cal.channel_order, rel_to=out)
     index = build_media_index(run_id, video_pts_us=pts, width=W, height=H, audio=[audio], nominal_fps=25.0,
                               frames_dir="frames",
-                              input_hashes={"master.wav": hash_file(fx / "master.wav"),
-                                            "fixture.json": hash_file(fx / "fixture.json")},
+                              input_hashes=inputs,
                               calibration_id=cal.calibration_id, ambient_temperature_c=cfg.acoustics.ambient_temperature_c,
                               temperature_provenance=cfg.acoustics.temperature_provenance, r_min_m=cfg.acoustics.r_min_m)
     tl = MediaTimeline(index)
@@ -136,7 +142,7 @@ def run(fixture_dir: str | Path, out_dir: str | Path, cfg: AvConfig | None = Non
     # ---- speaker anchors
     speech = [s for s in truth["sources"] if s["kind"] == "speech"]
     acts = {s["id"]: envs[s["id"]].segments_us for s in speech if s["id"] != remove_stem}
-    noise = [iv for s in truth["sources"] if s["kind"] != "speech" for iv in envs[s["id"]].segments_us]
+    noise = [iv for s in truth["sources"] if s["kind"] != "speech" and s["id"] in envs for iv in envs[s["id"]].segments_us]
     anchors = compute_anchors(acts, noise, cfg.anchors)
     speakers = [SpeakerTrack(speaker_id=k, turns_us=[tuple(iv) for iv in v], count_evidence={"method": "fixture_inventory"},
                              anchors=anchors[k].to_dict()) for k, v in acts.items()]
@@ -152,11 +158,11 @@ def run(fixture_dir: str | Path, out_dir: str | Path, cfg: AvConfig | None = Non
     Ws = dict(zip(ids, sp.wdo_weights([sp.stft_frames(stems[i].astype(np.float64), nfft, hop) for i in ids],
                                       cfg.spatial.wdo_min_weight)))
     t_frames = (np.arange(X0.shape[0]) * hop + nfft / 2) / rate
-    par = sp.parallax_sigma(cal.t_cam_to_array_m, cfg.acoustics.r_min_m)
+    par = sp.parallax_sigma(cal.t_cam_to_array_m, cfg.acoustics.r_min_m)   # widens the delay likelihood below
     tracks_truth = {t["id"]: t for t in truth["tracks"]}
     motion = json.loads((fx / "visual_motion.json").read_text())["motion"]
     faces = {}
-    elig = LearningEligibility(cfg.off_axis.unknown_pose)
+    yaw_limit = cfg.off_axis.yaw_limit_deg
     for tid, t in tracks_truth.items():
         obs = [FaceObservation(a, b, y) for a, b, y in t["face_yaw"]]
         obs += [FaceObservation(a, b, 0.0, occluded=True) for a, b in t["occlusions_us"]]
@@ -166,7 +172,7 @@ def run(fixture_dir: str | Path, out_dir: str | Path, cfg: AvConfig | None = Non
         if tracks_truth[tid]["concept"] != "person":
             return True                                              # human lip-ASD limits do not apply to the cat
         hit = [o for o in faces[tid] if o.start_us <= t_us < o.end_us]
-        return bool(hit) and all(lip_asd_available(o) for o in hit)
+        return bool(hit) and all(lip_asd_available(o, yaw_limit) for o in hit)
 
     vis_on = {tid: visual_onsets(motion[tid], pts) for tid in tracks_truth}
     sem = {("speech", "person"): 0.9, ("speech", "cat"): 0.1, ("chirp", "cat"): 0.9, ("chirp", "person"): 0.1}
@@ -213,9 +219,12 @@ def run(fixture_dir: str | Path, out_dir: str | Path, cfg: AvConfig | None = Non
                                if avail else "lips not visible (off-axis/occluded): ASD unavailable"))
             # 3D spatial likelihood: camera ray -> predicted pair delay vs weighted post-PHAT GCC
             if cc is not None and par.confident:
-                ray = sp.ray_from_pixel(*t["center_px"], **truth["camera"])
+                cam = cal.camera
+                ray = sp.ray_from_pixel(*t["center_px"], cam.fx, cam.fy, cam.cx, cam.cy, np.asarray(cal.r_cam_to_array))
                 tau = float(sp.predict_pair_tau(cal, ray, 0, 1, cfg.acoustics.ambient_temperature_c))
-                val = sp.ray_delay_score(lags, cc, tau, 35e-6)
+                # delay uncertainty: base resolution, calibrated channel noise and the camera-to-array parallax floor
+                sig_tau = float(np.sqrt(35e-6 ** 2 + cal.channel_noise_s ** 2 + (d_pair / c * par.sigma_rad) ** 2))
+                val = sp.ray_delay_score(lags, cc, tau, sig_tau)
                 ev.append(Evidence("spatial_delay", val, 0.3 if alias_flag else 1.0, 0.8,
                                    (f"narrowband {fc:.0f} Hz > pair alias cutoff {f_alias:.0f} Hz: multimodal peaks kept"
                                     if alias_flag else "wideband post-PHAT WDO-weighted GCC")))
@@ -238,7 +247,7 @@ def run(fixture_dir: str | Path, out_dir: str | Path, cfg: AvConfig | None = Non
         status_of[sid], track_of[sid] = dcs.status, dcs.track_id
         el_records = []
         if dcs.track_id and sid in speech_slots:
-            e2 = LearningEligibility(cfg.off_axis.unknown_pose)
+            e2 = LearningEligibility(cfg.off_axis.unknown_pose, yaw_limit)
             for o in faces[dcs.track_id]:
                 e2.observe(speech_slots[sid], o)
             el_records = [EligibilityInterval(**r) for r in e2.to_records()]
@@ -343,6 +352,6 @@ def run(fixture_dir: str | Path, out_dir: str | Path, cfg: AvConfig | None = Non
                              residual_waveform=r_wave.astype(np.float32), projection=proj, residual_cfg=cfg.residual,
                              frame_paths=frame_paths, pts_us=pts, tracks=tracks_masks, activity=activity,
                              track_states=track_states, overlays=overlays, ffmpeg=ff, write_annotated=write_annotated))
-    manifest.stages.append(StageRecord(name="total", key=cfg.hash()[:16], seconds=round(time.perf_counter() - t_run, 3)))
+    manifest.stages.append(StageRecord(name="total", key=hash_config({"stage": "total", "upstream": chain["key"]})[:16], seconds=round(time.perf_counter() - t_run, 3)))
     (out / "manifest.json").write_text(manifest.to_json(indent=1), encoding="utf-8")
     return manifest

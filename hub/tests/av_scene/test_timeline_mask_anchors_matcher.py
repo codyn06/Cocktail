@@ -347,3 +347,47 @@ def test_return_window_creation_is_blocked_but_recognition_continues():
     assert np.allclose(res[1], voice(1500)) and np.allclose(res[0], voice(300))
     assert all(np.array_equal(a, b) for a, b in zip(before, mem.profiles))
     assert set(diag["learning_blocked"]) == {"s1", "s2"}
+
+
+def test_png_roundtrip_with_every_row_filter(tmp_path):
+    """read_png must decode all five PNG row filters, including values that wrap past 255."""
+    import struct
+    import zlib
+
+    from ingest.media_io import read_png, write_png
+
+    rng = np.random.default_rng(4)
+    img = rng.integers(0, 256, (9, 7, 3), dtype=np.uint8)
+    write_png(tmp_path / "plain.png", img)
+    assert np.array_equal(read_png(tmp_path / "plain.png"), img)
+    h, w, bpp = img.shape[0], img.shape[1], 3
+    flat = img.reshape(h, w * 3).astype(np.int32)
+    rows = []
+    for y in range(h):
+        f = [1, 2, 3, 4][y % 4]
+        cur = flat[y]
+        prev = flat[y - 1] if y else np.zeros(w * 3, np.int32)
+        out = np.zeros(w * 3, np.int32)
+        for x in range(w * 3):
+            a = cur[x - bpp] if x >= bpp else 0
+            c = prev[x - bpp] if x >= bpp else 0
+            if f == 1:
+                pred = a
+            elif f == 2:
+                pred = prev[x]
+            elif f == 3:
+                pred = (a + prev[x]) // 2
+            else:
+                p0 = a + prev[x] - c
+                pa, pb, pc = abs(p0 - a), abs(p0 - prev[x]), abs(p0 - c)
+                pred = a if pa <= pb and pa <= pc else (prev[x] if pb <= pc else c)
+            out[x] = (cur[x] - pred) & 0xFF
+        rows.append(bytes([f]) + out.astype(np.uint8).tobytes())
+
+    def chunk(tag, body):
+        return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
+
+    png = (bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]) + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
+    (tmp_path / "filtered.png").write_bytes(png)
+    assert np.array_equal(read_png(tmp_path / "filtered.png"), img)

@@ -205,6 +205,12 @@ def run_gate(level_k: np.ndarray, level_short: np.ndarray, lf_frac: np.ndarray, 
                     forced = t_o
                     break
             if forced is not None or below >= hold:
+                if forced is None:
+                    # the trailing window lags the true end: walk back to the last sample where the short window was still up
+                    j, thr_end = below_start, cfg.activate_dbfs_k - cfg.backtrack_db
+                    while j > onset_i + 1 and below_start - j < back_max and level_short[j - 1] < thr_end:
+                        j -= 1
+                    below_start = j
                 off_s = forced if forced is not None else below_start * hop_s
                 segs.append((onset_i * hop_s, max(off_s, (onset_i + 1) * hop_s)))
                 active, lock_until, below = False, i + lock, 0
