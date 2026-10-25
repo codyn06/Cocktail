@@ -51,6 +51,12 @@ class StreamChunk:
     levels_db: np.ndarray            # (frames, mics, bands) per-mic band levels
     activity: np.ndarray             # (frames,) 0..1, use as the A8 weight
     scores: dict[str, float] = field(default_factory=dict)
+    # Provenance for the tracker (internal; never sent to clients). The two voice streams are the
+    # voice memory's logical slots, so acoustic_id is "src_<slot>"; None when voice memory is off
+    # or for the residual. identity_conf is high only when a stored profile backs the slot and it
+    # was kept by continuity or assigned by a confident embedding match, low otherwise.
+    acoustic_id: str | None = None
+    identity_conf: float = 0.0
 
 
 def _band_edges():
@@ -197,6 +203,17 @@ class LiveSeparator:
             old = self._scores[k]
             self._scores[k] = {c: a * old.get(c, s) + (1 - a) * s for c, s in new.items()}
 
+    IDENT_HIGH, IDENT_LOW = 0.9, 0.2
+
+    def _slot_identity(self, slot: int, diagnostic: dict) -> tuple[str, float]:
+        vm = self.voice_memory
+        backed = vm.profiles[slot] is not None
+        blocked = bool(getattr(vm, "_learning_blocked", [False, False])[slot])  # uncertain match after a return
+        # A returning voice whose embedding match fell back to overlap order is not trusted.
+        fell_back = diagnostic.get("returning") and diagnostic.get("reason") == "overlap"
+        conf = self.IDENT_HIGH if backed and not blocked and not fell_back else self.IDENT_LOW
+        return f"src_{slot}", conf
+
     def step(self, x: np.ndarray, start_ts_us: int) -> list[StreamChunk]:
         """x: (W, mics) window whose first sample is at start_ts_us; windows must advance by
         exactly one hop. Returns the finished first hop of this window for every stream
@@ -246,6 +263,8 @@ class LiveSeparator:
 
         chunks = []
         for k in range(self.n_streams):
+            aid, iconf = (self._slot_identity(k, self.last_gates["voice_memory"])
+                          if self.voice_memory is not None and k < 2 else (None, 0.0))
             s = self._scores[k]
             label, conf = max(s.items(), key=lambda kv: kv[1]) if s else ("speech" if k < 2 else "other", 0.0)
             bb = 10 * np.log10(pow_bb[:, k] + 1e-10)
@@ -254,7 +273,8 @@ class LiveSeparator:
             activity = np.clip((bb - self.floor_db) / 10, 0, 1) * np.clip((bb - (mix_db - 25)) / 20, 0, 1)
             chunks.append(StreamChunk(self.ids[k], label, float(conf), start_ts_us, head[k, 0].copy(),
                                       head[k, 1:].copy(), level_ts, lv_all[:, k], activity,
-                                      scores=dict(sorted(s.items(), key=lambda kv: -kv[1])[:3])))
+                                      scores=dict(sorted(s.items(), key=lambda kv: -kv[1])[:3]),
+                                      acoustic_id=aid, identity_conf=iconf))
         self.compute_ms.append((time.perf_counter() - started) * 1000)
         if len(self.compute_ms) > 600:
             del self.compute_ms[:-600]

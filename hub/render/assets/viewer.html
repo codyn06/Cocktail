@@ -12,6 +12,7 @@
   <span id="tier" class="tier" title="Evidence label for everything in this bundle">loading…</span>
 </header>
 <div id="banner" role="status"></div>
+<div id="live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 <main>
   <section class="stage-col" aria-label="Video">
     <div class="stage-wrap">
@@ -27,7 +28,7 @@
     <p id="hint" class="muted">Click a highlighted or idle object to hear its stem. Overlapping masks list every candidate.</p>
   </section>
   <section class="panel" aria-label="Mix">
-    <fieldset>
+    <fieldset class="legacy-only">
       <legend>Playback</legend>
       <label><input type="radio" name="mode" value="stems" checked> Separated stems</label>
       <label><input type="radio" name="mode" value="mixture"> Original mixture</label>
@@ -35,8 +36,18 @@
       <button id="reset" type="button">Reset mix</button>
       <p class="muted small">One shared audio clock drives every stem and the picture. The embedded video soundtrack is always muted so nothing plays twice.</p>
     </fieldset>
-    <h2>Sources</h2>
-    <ul id="sources" class="sources"></ul>
+    <div id="longpanel" hidden>
+      <h2>Listen</h2>
+      <div id="listen"></div>
+      <p id="latency" class="muted small">latency unknown (no compensation applied)</p>
+      <p class="muted small">One shared audio clock schedules every stem. Only audio near the playhead is fetched; spans with no stored audio are silent.</p>
+      <h2>Timeline</h2>
+      <p class="muted small">Per source: association, visibility, stem availability and identity are separate marks; a red mark means a refusal reason is recorded.</p>
+      <canvas id="tl-lanes" class="lanes" width="900" height="10" aria-hidden="true"></canvas>
+      <ul id="tl-details" class="tldetails" aria-label="Sources at the playhead"></ul>
+    </div>
+    <h2 class="legacy-only">Sources</h2>
+    <ul id="sources" class="sources legacy-only"></ul>
     <h2>Evidence</h2>
     <div id="inspector" class="inspector muted">Select a source or an object.</div>
     <h2>Metrics</h2>

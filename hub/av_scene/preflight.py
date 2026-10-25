@@ -172,6 +172,35 @@ def check_hf_access(repos=GATED_REPOS) -> dict:
 REQUIRED = ("versions", "cuda", "decode", "hf_access")
 
 
+def check_optional(online: bool = False) -> dict:
+    """Optional Phase 4 capabilities. None of these is REQUIRED: a missing one is `not_attempted` (an intentional
+    skip), distinct from a probe that crashed (`fail`). No credentials are printed, nothing is downloaded, and
+    there is no network call unless ``online`` is set (gated access is then probed metadata-only)."""
+    out: dict = {}
+
+    def probe(name, fn):
+        try:
+            out[name] = fn()
+        except Exception as e:
+            out[name] = {"status": "fail", "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+    from . import diar_windows
+    probe("diarization", lambda: diar_windows.availability(online=online))
+
+    def wavlm():
+        from separate.speaker_embed import wavlm_sv_status
+        st = wavlm_sv_status()
+        return {**st, "status": "ok" if st.get("ready") else "not_attempted"}
+    probe("wavlm_sv", wavlm)
+
+    def judge():
+        from replay.judge import availability
+        a = availability()
+        return {**a, "status": "ok" if any(v.get("ok") for v in a.values() if isinstance(v, dict)) else "not_attempted"}
+    probe("judge_clap", judge)
+    return out
+
+
 def run_av_checks(media: str | None = None, *, checks: dict | None = None) -> dict:
     """`checks` lets tests inject fakes: name -> zero-arg callable."""
     table = checks or {
@@ -185,4 +214,6 @@ def run_av_checks(media: str | None = None, *, checks: dict | None = None) -> di
         except Exception as e:  # a crashing probe is a failed capability, not a crashed report
             report[name] = {"status": "fail", "error": f"{type(e).__name__}: {str(e)[:200]}"}
     report["ok"] = all(report[n]["status"] == "ok" for n in REQUIRED)
+    if checks is None:                                   # injected fakes stay hermetic
+        report["optional"] = check_optional()
     return report

@@ -34,6 +34,7 @@ _SHOW = {"locked", "tracking", "ambiguous"}
 AMBIGUOUS_CONF_MAX = 0.5   # mirror/front-back ambiguity: show the bearing, but not confidently
 ACTIVE_MIN = 0.2           # level-frame activity above this counts as "the stream is heard"
 LAST_SEEN_S, LOST_S = 2.0, 10.0
+IDENTITY_MIN_CONF = 0.6    # a chunk's acoustic id counts as known at or above this confidence
 TDOA_WIN, TDOA_HOP = 1024, 800  # 64 ms frames every 50 ms at 16 kHz
 
 
@@ -58,6 +59,12 @@ class LiveLocator:
         self._last_pose_us = None
         self._pose_epoch = self.ingest.pose_epoch
         self.latest: dict[str, tuple] = {}  # stream_id -> (StreamChunk, BearingEstimate)
+        # The estimators have no per-stream reset, so a stream whose confident acoustic id changes
+        # gets a fresh estimator key (stream_id, then stream_id#1, ...): its direction state starts
+        # empty instead of carrying the previous talker's bearing. Published ids stay the stream ids.
+        self._gen: dict[str, int] = {}
+        self._conf_aid: dict[str, str] = {}
+        self.identity: dict[str, tuple[str | None, float]] = {}
         self.last_active_us: dict[str, int] = {}
         self.now_us = 0
 
@@ -78,17 +85,33 @@ class LiveLocator:
             if self._last_pose_us is None:
                 return  # no head pose yet: nothing to locate against
             for c in chunks:
+                aid, iconf = getattr(c, "acoustic_id", None), float(getattr(c, "identity_conf", 0.0) or 0.0)
+                self.identity[c.stream_id] = (aid, iconf)
+                if aid is not None and iconf >= IDENTITY_MIN_CONF:
+                    if self._conf_aid.get(c.stream_id, aid) != aid:
+                        self._gen[c.stream_id] = self._gen.get(c.stream_id, 0) + 1  # new voice: re-key
+                    self._conf_aid[c.stream_id] = aid
+                key = self._key(c.stream_id)
                 if self.method == "tdoa":
-                    self._add_delays(c)
+                    self._add_delays(c, key)
                 for t_us, lv, w in zip(c.level_ts_us, c.levels_db, c.activity):
                     if self.method == "level":
-                        self.est.add_levels(c.stream_id, t_us / 1e6, lv, float(w))
+                        self.est.add_levels(key, t_us / 1e6, lv, float(w))
                     if w > ACTIVE_MIN:
                         self.last_active_us[c.stream_id] = int(t_us)
                 self.now_us = max(self.now_us, int(c.level_ts_us[-1]))
-                self.latest[c.stream_id] = (c, self.est.estimate(c.stream_id, c.level_ts_us[-1] / 1e6))
+                self.latest[c.stream_id] = (c, self.est.estimate(key, c.level_ts_us[-1] / 1e6))
 
-    def _add_delays(self, c) -> None:
+    def _key(self, stream_id: str) -> str:
+        g = self._gen.get(stream_id, 0)
+        return stream_id if g == 0 else f"{stream_id}#{g}"
+
+    def identities(self) -> dict[str, tuple[str | None, float]]:
+        """stream_id -> (acoustic id, confidence) from the latest chunks; internal, never published."""
+        with self.lock:
+            return {sid: self.identity.get(sid, (None, 0.0)) for sid in self.latest}
+
+    def _add_delays(self, c, key: str | None = None) -> None:
         """Inter-mic delay of this stream's two mic images, frame by frame, weighted by activity
         and kept only for the sharper half of the GCC peaks."""
         if c.mic_audio.shape[0] < 2 or not np.any(c.mic_audio):
@@ -104,7 +127,7 @@ class LiveLocator:
         cut = np.median(sharp[on])
         for ti, di, wi, si in zip(t_us, tau, w, sharp):
             if wi > ACTIVE_MIN and si >= cut:
-                self.est.add_delay(c.stream_id, ti / 1e6, float(di), float(wi))
+                self.est.add_delay(key or c.stream_id, ti / 1e6, float(di), float(wi))
 
     def estimates(self) -> dict[str, BearingEstimate]:
         with self.lock:

@@ -369,3 +369,84 @@ alert messages, Meta glasses version, search and rescue.
   - The gate recovers the second talker that TalkNet misses; this is the first evidence on a real clip.
   - Caveat: one clip, one run each; the silent-bystander side of the gate is only tested on the synthetic silent
     case (0.8 s of rescued activity there, under the 1 s line).
+
+## AV Phase 4: long clips, chunked pipeline, inspection output (branch `feat/av-phase4-long-clips`, PR #58)
+
+`python -m av_scene run <media> --out DIR [--cache DIR]` runs one chunked offline pipeline (visual, speech, optional
+diarization, events, residual, export). It is NOT real time and makes no device claim. Details and decisions:
+`.agents/decisions.md` ("AV long clips, Phase 4").
+
+Evidence labels: **mocked** = CPU fakes through the real pipeline code; **replayed / hardware-tested** = real models on the
+RTX 5070 Ti Laptop; **untested** = not run.
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Chunk coverage, no missing or duplicated sample (incl. final partial region) | pass, 11 durations | mocked |
+| Identity survives pauses, crossings, re-entry, slot permutation every chunk | 0 switches, 0 fragmentation, 0 wrong-person on 7 deterministic scenes (60 s pause_return, crossing, reentry, silent_overlap, slot_swap_every_chunk, final_partial, silent_bystander) | mocked |
+| Silent-bystander highlight rate (< 2%) | 0.0 to 0.2% on the synthetic scenes. Whole-chunk status first gave 6 to 20%; segments are now split at the speaking activity | mocked |
+| Active-speaker recall and refusal precision/recall reported together | recall >= 0.97; reentry refusal P 0.91 / R 1.0; a refuse-everything prediction fails the gate | mocked |
+| Forced termination at 6 boundaries resumes bit-identically; corrupt entry recomputes only itself; model-revision change reruns speech only | pass | mocked |
+| Warm cache invokes no model and loads no checkpoint | pass (`model_passes_opened` all 0) | mocked |
+| Continuous events bounded (windows <= `event_max_window_s`, candidates <= 4, batch 2, frames <= 150) | pass | mocked |
+| Missing control / missing spatial evidence never "matched"; two-cat ambiguity kept; loud leaked audio for an absent target rejected | pass | mocked |
+| Memory, 30/120/300 s, pipeline plumbing only | peak RSS 645 / 654 / 659 MiB, growth 13.7 MiB (budget 256), slope -63 MiB/audio-min (budget 2) | mocked (fake models; says nothing about model memory) |
+| Viewer in a real browser (Chrome) | listen groups, four separate badges + refusal text, focus kept on toggle, aria-live, diagnostic-vs-default muting, play/pause/seek, windowed fetches (about 4 s back / 10 s ahead), no `_` paths served. One defect found and fixed (sources with no audio were not listed) | synthetic bundle, real browser; audio quality not judged |
+
+### Real-model smoke run (hardware-tested, one short clip)
+`stkM` (6 s, 2 people stacked, both speak), defaults, no Phase 3 switches, RTX 5070 Ti Laptop:
+- All passes ran on real S3FD, SAM 3, TalkNet, MossFormer2, AV-TSE and WavLM-SV. Events pass loaded no model (no event).
+- Peak GPU 3.97 GiB (budget 9.0 GiB: pass). Visual 80 s for 150 frames (SAM 3 per frame), speech 13 s.
+- **Peak RSS 7.69 GiB: exceeds the pre-set 6.0 GiB budget (FAIL).** It is a transient at about 9 s (SAM 3 checkpoint load);
+  steady state is about 2.4 GiB, and it does not depend on clip length. A first attempt peaked at 14.9 GiB because
+  event detection loaded SAM 3 and SAM Audio; fixed (AST detection is now separate, heavy event models load only when a
+  window computes).
+- Quality is not good enough to claim anything: SAM 3 produced 6 person tracks for 2 people, `src_1` was matched to a
+  track in 3 of 6 spans, `src_0` stayed unmatched (as in the Phase 3 baseline; the activity gate was off). No listening review.
+
+### Not done (untested)
+- Real-model 30 / 120 / 300 s workloads: the looped-clip run (`--loop-seconds`, duration-matched only, content repeats)
+  was started and stopped by the user's time limit before the 30 s case finished. No real long-run memory, identity
+  switches/minute or cold / warm / resume timing exist.
+- Additional real clip with visible silent people, annotated (silent-bystander gate on real data, `<2%`): no such clip exists
+  locally (longest recordings are 6 to 8 s; none has a visibly silent person). Annotation format and scorer are ready
+  (`eval/av_scene/LONG_ANNOTATIONS.md`, `long_annotations.py`).
+- `stkM` missed-speaker regression through the Phase 4 path with `--activity-gate`; listening review of stitched boundaries
+  and accepted / refused stems.
+- Non-speech on a real clip (SAM 3 nouns, SAM Audio, judge / CLAP ranking): adapters written, never exercised on a real
+  event. The pipeline passes no calibrated array, so non-speech attribution is expected to stay unmatched.
+- Diarization on real audio (pyannote not installed; stays OFF). `TorchcodecSource` works on `stkM`; other containers untested.
+- Gate floors in `long_metrics` (0.80 recall / refusal, 0.05 wrong-person) are provisional placeholders; only `<2%` is from the spec.
+
+Worktree note: gitignored checkpoints and FFmpeg DLLs live in the main checkout; a worktree needs
+`COCKTAIL_FFMPEG_BIN=<main>/hub/.local/ffmpeg/bin` and a directory junction for `hub/checkpoints`.
+
+
+## AV Phase 5: live selected-voice refinement bridge (branch `feat/av-phase5-live-refine`, PR #62; base `feat/av-phase4-long-clips`)
+
+`python -m refine [--refine]` is the live hub (refinement default OFF) (same composition as `separate/__main__.py`) plus `hub/refine/`: when a source is chosen, a
+bounded job (S3FD faces -> TalkNet -> AV-TSE, matched against the HUB slot audio; no SAM 3, no second MossFormer2) decides whether
+the chosen voice belongs to a visible face. It publishes a verdict only: it never changes selection, route, `/audio/out` audio
+or `sources.updated` (`audio_applied` is always false: measured job latency is 4.7-6.2 s, longer than the playback queue).
+
+States: `pending`, `accepted`, `refused`, `stale`, `unavailable` on `GET /refinement/status`. On `/events` the existing
+`TargetUpdated` carries `kind=person, assoc_conf>0` only for `accepted`; the other states are indistinguishable there
+(`kind=speech, assoc_conf=0`); stale is never published. Protocol proposal (NOT applied; frozen): an optional
+`refinement_state` field on `TargetUpdated`.
+
+Evidence labels: **mocked** = fakes; **replayed** = recorded/synthetic fixtures streamed into a real hub process by the mock
+client; **live** = real hub process with real models (RTX 5070 Ti Laptop); no headset was used.
+
+| Check | Result | Evidence |
+|---|---|---|
+| Stale epoch / selection / audio-reset / route / age / source-gone rejection, selection changed between completion and publish | pass (`tests/refine/test_bridge.py`, `test_install.py`, `test_ids_bridge.py`) | mocked |
+| Safe fallback: slow / raising / refusing / never-finishing runner leaves `/audio/out` frames, seq, `sources.updated` and underruns identical | pass (`test_fallback.py`) | mocked |
+| Real jobs through the live hub: stale results observed and rejected (`route moved`, `route or selection changed inside the window`) | observed in 4 runs, never published as current | replayed + live models |
+| Correct-match: stkM_x3 (18 s, 3x repeat of the 6 s clip), selected voice | `accepted`: matches visible face `f0`, TSE vs slot SI-SDR 17.5 dB, assoc_conf 0.87, latency 5.45 s, `TargetUpdated kind=person` | replayed + live models, looped content |
+| stkM unmatched voice stays refused | NOT shown: the select-all run only ever selected one source (stale), so the second voice was not exercised through the live path | untested live |
+| Memory (whole hub process tree, live separator + voice memory + refinement models + CUDA) | peak host RSS 3.2-3.7 GiB (budget 6.0: pass); GPU total peak 1.4-2.0 GiB over a 0.5 GiB desktop baseline | live |
+| Audio continuity with jobs running | seq breaks 0, ts regressions 0, hops_dropped 0, separator lag <= 0.1 s; BUT output underruns 4-8 with a job running vs 2-3 baseline (longest gap 0.30 s vs 0.14-0.18 s) | live; NOT mitigated. Refinement is therefore opt-in: `python -m refine --refine` (default off). A mitigation attempt (frame subsampling, yielding, pacing) was started and stopped unfinished |
+
+Not done / unverified: real long-clip, silent-bystander, listening review, non-speech and diarization gates (as scoped);
+fixtures are single-mic mono duplicated to 2 channels, so bearings are meaningless and sources are announced only through the
+identity rules (voice memory on); the Quest 3S real frame rate and the real mic/camera alignment are untested; PR #59's
+identity rules are simulated/mocked only (see decisions).

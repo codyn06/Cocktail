@@ -12,6 +12,7 @@ from separate.diarization import AnchorConfig
 from who.matcher import MatcherConfig
 
 from .cache import hash_config
+from .contracts import ChunkConfig, MemoryBudgets, MemoryCaps, Switches
 from .schemas import ArrayCalibration, CameraModel
 
 CONFIG_DIR = Path(__file__).parent / "configs"
@@ -59,6 +60,10 @@ class AvConfig:
     anchors: AnchorConfig = field(default_factory=AnchorConfig)
     matcher: MatcherConfig = field(default_factory=MatcherConfig)
     off_axis: OffAxisConfig = field(default_factory=OffAxisConfig)
+    chunking: ChunkConfig = field(default_factory=ChunkConfig)
+    memory: MemoryCaps = field(default_factory=MemoryCaps)
+    budgets: MemoryBudgets = field(default_factory=MemoryBudgets)
+    switches: Switches = field(default_factory=Switches)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -69,7 +74,8 @@ class AvConfig:
 
 _SECTIONS = {"acoustics": AcousticsConfig, "timing": TimingConfig, "spatial": SpatialConfig,
              "envelope": EnvelopeConfig, "residual": ResidualConfig, "anchors": AnchorConfig,
-             "matcher": MatcherConfig, "off_axis": OffAxisConfig}
+             "matcher": MatcherConfig, "off_axis": OffAxisConfig, "chunking": ChunkConfig,
+             "memory": MemoryCaps, "budgets": MemoryBudgets, "switches": Switches}
 
 
 def _build(cls, data: dict, where: str):
@@ -100,6 +106,9 @@ def load_config(path: str | Path | None = None) -> AvConfig:
         raise ValueError("acoustics.temperature_provenance must be 'assumed' or 'measured'")
     if cfg.off_axis.unknown_pose not in ("allow", "block"):
         raise ValueError("off_axis.unknown_pose must be 'allow' or 'block'")
+    if cfg.switches.diarization not in ('off', 'auto', 'on'):
+        raise ValueError("switches.diarization must be 'off', 'auto' or 'on'")
+    cfg.chunking.validate()
     return cfg
 
 
