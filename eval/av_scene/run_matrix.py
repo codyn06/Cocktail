@@ -205,6 +205,9 @@ def stage_sam(a, cases):
     span_cache: dict = {}
     plan = [(c, t, cond) for c, t in trials(cases) for cond in conditions(c, t)
             if (c.case_id in OVERLAP or c.case_id in OTHERS)]
+    if a.only:
+        import re
+        plan = [(c, t, cond) for c, t, cond in plan if re.search(a.only, f"{c.case_id}__{t.name}__{cid(cond)}")]
     if a.limit:
         plan = plan[: a.limit]
     print(f"{len(plan)} conditions, {len(done)} already done", flush=True)
@@ -402,6 +405,7 @@ def main() -> None:
     ap.add_argument("--out", default="sessions/av_matrix/run1")
     ap.add_argument("--sessions", default=str(X.SESSIONS))
     ap.add_argument("--limit", type=int, default=0, help="run only the first N conditions (smoke test)")
+    ap.add_argument("--only", default="", help="regex on case__target__condition ids to run")
     ap.add_argument("--no-labels", dest="labels", action="store_false")
     a = ap.parse_args()
     os.environ.setdefault("HF_HUB_OFFLINE", "1")

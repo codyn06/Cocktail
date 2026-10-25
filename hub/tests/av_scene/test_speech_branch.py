@@ -89,3 +89,42 @@ def test_missing_face_is_no_evidence_not_silence():
 def test_envelope():
     env = frame_envelope(np.ones(SR16, np.float32), 25)
     assert env.shape == (25,) and np.allclose(env, 1.0)
+
+
+class FakeTSE:
+    """Returns the clean voice of the person whose box it is given (or a leak of another voice)."""
+
+    def __init__(self, by_box):
+        self.by = by_box
+
+    def extract_target(self, audio, boxes, frames, fps):
+        return self.by[boxes[0]], {}
+
+
+def test_tse_path_selects_each_person_and_gates_silent_and_conflicts():
+    a, b = _bursts(A_ON, 1), _bursts(B_ON, 2)
+    boxes = {"tA": [BOX_A] * N25, "tB": [BOX_B] * N25}
+    r = run_speech_branch(a + b, FRAMES, 25.0, boxes, separator=FakeSep(a, b),
+                          scorer=FakeScorer({BOX_A: _speaking(A_ON), BOX_B: _speaking(B_ON)}),
+                          tse=FakeTSE({BOX_A: a, BOX_B: b}))
+    (sa, ea), (sb, eb) = r.selection["tA"], r.selection["tB"]
+    assert (sa, sb) == ("tse:tA", "tse:tB") and ea.status == eb.status == "ok"
+    assert {x.track_id for x in r.associations if x.status == "matched"} == {"tA", "tB"}
+
+    # A is briefly (falsely) "active" and its TSE leaks B's voice: both claim B -> the less active is refused
+    r = run_speech_branch(b, FRAMES, 25.0, boxes, separator=FakeSep(np.zeros_like(b), b),
+                          scorer=FakeScorer({BOX_A: _speaking([(0, 1.2)]), BOX_B: _speaking(B_ON)}),
+                          tse=FakeTSE({BOX_A: b, BOX_B: b}))
+    assert r.selection["tA"][0] is None and "same voice as tB" in r.selection["tA"][1].reason
+    assert r.selection["tB"][0] == "tse:tB"
+
+
+def test_tse_path_offscreen_voice_is_outside_view():
+    off = _bursts([(0, 8)], 3)
+    boxes = {"tA": [BOX_A] * N25, "tB": [BOX_B] * N25}
+    r = run_speech_branch(off, FRAMES, 25.0, boxes, separator=FakeSep(np.zeros_like(off), off),
+                          scorer=FakeScorer({BOX_A: _speaking([]), BOX_B: _speaking([])}),
+                          tse=FakeTSE({BOX_A: off, BOX_B: off}))
+    assert all(s is None for s, _ in r.selection.values())
+    assert any(x.visibility == "outside_view" for x in r.associations)
+    assert not any(x.status == "matched" for x in r.associations)
