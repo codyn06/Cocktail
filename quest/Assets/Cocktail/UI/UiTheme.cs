@@ -157,6 +157,20 @@ namespace Cocktail.Ui
         [Tooltip("Used when the camera hfov is unknown.")] public float fallbackCameraHfovDeg = 80f;
         [Tooltip("Camera frame width / height used to turn the horizontal fov into a vertical one.")] public float cameraAspect = 1.3333f;
 
+        // ---------------------------------------------------------------- speaker-only HUD
+        [Header("Speaker-only HUD (corner outline on whoever is speaking; dot at the edge if out of view; arrow toward the noise)")]
+        [Tooltip("Start in the speaker-only HUD (A on the right controller cycles speaker-only, full, glasses). Off = start in the full HUD.")] public bool speakerOnlyHud = true;
+        public Color speakerColor = Hex(0x00E7FF);
+        [Tooltip("Thin dark line around the outline, dot and arrow so they read on light walls.")] public Color speakerOutlineColor = Hex(0x0A0A14);
+        [Tooltip("Outline box around a speaker when the camera gives no box for them: full angle in degrees (width, height).")] public Vector2 speakerBoxDeg = new Vector2(22f, 46f);
+        [Tooltip("Corner bracket line width, arm length (fraction of the shorter side) and the dark outer line, in metres at the marker distance.")] public float speakerBracketThickness = 0.016f, speakerBracketArm = 0.22f, speakerOutlineExtra = 0.005f;
+        [Tooltip("A source counts as speaking when labelled speech, tracking, and at least this loud (dB).")] public float speakingMinDb = -50f;
+        [Tooltip("Keep the outline this long after the hub stops reporting speech, so it does not flicker.")] public float speakerHoldSeconds = 0.6f;
+        [Tooltip("The speaker is in view when within this many degrees of straight ahead; beyond that a dot is shown at the screen edge.")] public float speakerViewHalfDeg = 45f;
+        [Tooltip("Dot size, and the dashed uncertainty ring (small ring = sure, large ring = unsure), in metres.")] public float speakerDotSize = 0.05f, speakerRingMin = 0.14f, speakerRingMax = 0.34f;
+        [Tooltip("Head-locked arrow that always points toward the noise (up = ahead, right = to the right, down = behind).")] public Vector3 speakerArrowOffset = new Vector3(0f, -0.38f, 1.1f);
+        public float speakerArrowSize = 0.09f;
+
         // ---------------------------------------------------------------- unlocated chips
         [Header("Unlocated sources (no bearing)")]
         public Vector3 chipRowOffset = new Vector3(0f, -0.50f, 1.1f);

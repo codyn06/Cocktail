@@ -23,6 +23,11 @@ namespace Cocktail.Ui
         public static Sprite Ring => _ring != null ? _ring : (_ring = MakeRing());
         public static Sprite Triangle => _tri != null ? _tri : (_tri = MakeTriangle());
         public static Sprite Diamond => _diamond != null ? _diamond : (_diamond = MakeDiamond());
+        public static Sprite Disc => _disc != null ? _disc : (_disc = MakeDisc());
+        public static Sprite DashedRing => _dashed != null ? _dashed : (_dashed = MakeDashedRing());
+        /// <summary>Arrowhead pointing up (notched base), the speaker-direction arrow.</summary>
+        public static Sprite Chevron => _chevron != null ? _chevron : (_chevron = MakeChevron());
+        static Sprite _disc, _dashed, _chevron;
         static readonly System.Collections.Generic.Dictionary<int, Sprite> _sectors = new System.Collections.Generic.Dictionary<int, Sprite>();
         /// <summary>Filled sector pointing up, symmetric, with the given full angle (deg); 1 unit diameter.</summary>
         public static Sprite Sector(float fullAngleDeg)
@@ -176,6 +181,64 @@ namespace Cocktail.Ui
                     float a = Mathf.Clamp01(half - Mathf.Abs(x - (n - 1) * 0.5f));
                     if (y < 4 || y > n - 4) a = 0;
                     px[y * n + x] = new Color32(255, 255, 255, (byte)(a * 255f));
+                }
+            return Finish(t, px, n);
+        }
+
+        static Sprite MakeDisc()
+        {
+            int n = 64;
+            var t = NewTex(n, n);
+            var px = new Color32[n * n];
+            float c = (n - 1) * 0.5f, r = n * 0.5f - 2f;
+            for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                {
+                    float d = Mathf.Sqrt((x - c) * (x - c) + (y - c) * (y - c));
+                    px[y * n + x] = new Color32(255, 255, 255, (byte)(Mathf.Clamp01(r - d + 0.5f) * 255f));
+                }
+            return Finish(t, px, n);
+        }
+
+        static Sprite MakeDashedRing()
+        {
+            int n = 256, dashes = 24;
+            var t = NewTex(n, n);
+            var px = new Color32[n * n];
+            float c = (n - 1) * 0.5f, ro = n * 0.5f - 3f, thick = 4f;
+            for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                {
+                    float dx = x - c, dy = y - c;
+                    float d = Mathf.Sqrt(dx * dx + dy * dy);
+                    float a = Mathf.Clamp01(1f - (Mathf.Abs(d - (ro - thick * 0.5f)) - thick * 0.5f));
+                    float ang = (Mathf.Atan2(dy, dx) + Mathf.PI) / (2f * Mathf.PI) * dashes;
+                    if (ang - Mathf.Floor(ang) > 0.55f) a = 0f;   // dash, then gap
+                    px[y * n + x] = new Color32(255, 255, 255, (byte)(a * 255f));
+                }
+            return Finish(t, px, n);
+        }
+
+        static Sprite MakeChevron()
+        {
+            int n = 64;
+            var t = NewTex(n, n);
+            var px = new Color32[n * n];
+            // arrowhead, apex up: (0.5,1) -> (1,0) -> (0.5,0.28) -> (0,0), 3x3 supersampled
+            for (int y = 0; y < n; y++)
+                for (int x = 0; x < n; x++)
+                {
+                    int hit = 0;
+                    for (int sy = 0; sy < 3; sy++)
+                        for (int sx = 0; sx < 3; sx++)
+                        {
+                            float u = (x + (sx + 0.5f) / 3f) / n, v = (y + (sy + 0.5f) / 3f) / n;   // v: 0 bottom .. 1 top
+                            float half = 0.5f * (1f - v);                                          // outer edge: width shrinks to the apex
+                            bool inOuter = Mathf.Abs(u - 0.5f) <= half;
+                            float notch = 0.28f * (1f - Mathf.Abs(u - 0.5f) / 0.5f);               // base notch: V cut up to 0.28 at the middle
+                            if (inOuter && v >= notch) hit++;
+                        }
+                    px[y * n + x] = new Color32(255, 255, 255, (byte)(hit / 9f * 255f));
                 }
             return Finish(t, px, n);
         }
