@@ -358,6 +358,10 @@ controller input.
   `http://<laptop-ip>:8765/ingest/status` in the Quest browser. If it doesn't load,
   allow inbound TCP 8765 on private networks in Windows Defender Firewall.
 - **USB**: run `adb reverse tcp:8765 tcp:8765`, then use `http://localhost:8765` on the Quest.
+- **Point the app at the hub**: write the address to `/sdcard/Android/data/com.DefaultCompany.quest/files/hub_host.txt`
+  (`127.0.0.1` over USB), then restart the app. The forward is dropped on every reinstall, so run `adb reverse` again.
+  Using the headset HUD (picker, pinch, DevMode, the DEV chip, the event log) and fixes for problems seen in testing:
+  [`quest/README.md`](quest/README.md#using-the-app-headset-hud).
 
 The hub listens on all interfaces with no authentication, so only run it on a private
 hotspot or USB link.

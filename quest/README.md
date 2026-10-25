@@ -1,8 +1,9 @@
-# quest/: Quest display prototype (Unity)
+# quest/: Cocktail headset app (Unity)
 
-The PRD calls this a later layer. It shows Cocktail on display glasses and reads the
-same hub events as the phone app (`WS /events`, `WS /audio/out`). It is a thin client:
-the laptop hub still does all processing.
+The Quest app streams mic audio, head pose and camera frames to the laptop hub and shows a speaker HUD in passthrough:
+a picker of talking sources, hand pointing, pinch to choose, and marks on the chosen source. It reads the hub's
+`WS /events` and plays `WS /audio/out`. It is a thin client: the laptop hub does all processing. Glasses mode is out of
+scope for now; the Quest is the product.
 
 ## Target devices
 
@@ -11,8 +12,8 @@ the laptop hub still does all processing.
 | Quest 3S | Full prototype: glasses-view panel, mixed-reality mode, passthrough camera frames to SAM 3, Depth API | Passthrough Camera API supports only Quest 3 / 3S on Horizon OS v74+ |
 | Quest 2 | Hub display only: glasses-view panel and spatial audio driven by hub events | No Passthrough Camera API, and its passthrough is grayscale |
 
-None of these roles is built yet; today the app is an empty passthrough scene. Camera
-access will need `horizonos.permission.HEADSET_CAMERA` (or `android.permission.CAMERA`)
+Built so far: streaming (mic, pose, camera), the speaker HUD and DevMode (see **Using the app**). Camera
+access needs `horizonos.permission.HEADSET_CAMERA` (or `android.permission.CAMERA`)
 with Passthrough enabled. It doesn't run in the simulator.
 Source: [Passthrough Camera API overview](https://developers.meta.com/horizon/documentation/unity/unity-pca-overview/)
 (read 2026-10-24).
@@ -90,8 +91,51 @@ adb shell am start -n com.DefaultCompany.quest/com.unity3d.player.UnityPlayerGam
 ```
 
 On the headset, the app is in **App Library > Unknown Sources > quest**. It shows your
-room through passthrough, with a small gray cube about 1.2 m above eye level (look up).
+room through passthrough with the HUD (the marker cube from the first prototype was removed).
 The rig uses the eye-level tracking origin.
+
+## Using the app (headset HUD)
+
+What the wearer sees (Quest 3S, passthrough):
+- **Picker** (lower right): one row per talking source, a coloured block and a name (human, object, unknown), nearest first.
+- **Pointing**: the right hand points (head gaze if no hand is tracked); a cursor dot shows where. Pinch to choose a speaker
+  or a picker row; pinch the chosen one again to stop. Nothing is chosen automatically.
+- **Marks**: a pointed-at speaker gets a tint; the chosen one gets a rectangle with a label tab; out of view, an arrow at the
+  edge of the view; a source with no direction, a plain dot. The rectangle sits at the sound's direction with a default size:
+  the hub does not send a box around the person yet (`bbox` is empty, C5/M4).
+- **DevMode** (off by default, `UiTheme.devMode`): pinch the **DEV** chip (upper left) to toggle it; B + Y together also
+  toggles it when controllers are held. It shows the DEMO panel (fake-data fallback, test cubes and their sound, numbers on
+  rows, mode, volumes, stop / next / prev), a readout (DATA FAKE/REAL, HUB UP/DOWN, chosen source, hand flags T/P/pinch,
+  sources), the last events (`--- LOG`) and the diagnostics text. Fake data only runs in DevMode, so with DevMode off and no
+  hub the HUD is empty. Turn `UiTheme.showDevToggle` off to hide the chip for a demo.
+- **Event log**: while DevMode is on, events also go to logcat (tag `[Dev]`) and to
+  `/sdcard/Android/data/com.DefaultCompany.quest/files/devlog.txt` (`adb pull` it).
+
+Controls with controllers: right trigger = choose, B or right grip = stop, Y or right stick right = next, left stick click
+or right stick left = previous, right stick up/down = scroll the picker, A = cycle the older HUD modes (keep speaker-only).
+
+### Connecting to a hub
+
+1. Start the hub on the laptop (`cd hub && uv run --group gpu python -m separate`), or the mock hub
+   (`uv run --project hub python quest/tools/mock_hub.py`, no GPU).
+2. USB: `adb reverse tcp:8765 tcp:8765` and point the app at `127.0.0.1`:
+   `adb shell "echo 127.0.0.1 > /sdcard/Android/data/com.DefaultCompany.quest/files/hub_host.txt"`.
+   Wi-Fi/hotspot: put the laptop IP there instead (the default `192.168.137.1` is the Windows mobile hotspot address).
+3. Start or restart the app: `adb shell am force-stop com.DefaultCompany.quest` then
+   `adb shell monkey -p com.DefaultCompany.quest -c android.intent.category.LAUNCHER 1`.
+   The hub's 0 deg is where the headset faced when the app started, so face the scene when you launch it.
+4. Check: the DEMO readout says `DATA REAL` and `HUB UP`; the hub's `/ingest/status` shows audio messages rising.
+
+### Things that went wrong in testing (and the fix)
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| All five sockets say "Unable to connect" after a reinstall | the `adb reverse` forward is dropped on install / reconnect | run `adb reverse tcp:8765 tcp:8765` again |
+| `adb devices` says `offline` | the headset's USB debugging link dropped | replug the cable, accept **Allow USB debugging** in the headset |
+| Hub audio counter frozen | the app is not in the foreground (home, room setup or boundary screen) | open the app (launch command above) |
+| Room layout / boundary screen in the way | the system boundary or space setup UI pauses the app | finish or dismiss it in the headset; see Meta's boundary settings |
+| App closes a few seconds after the hub connects (signal 11 in logcat) | fixed: `EnsureInit` recursed when the hub sent an empty list (PR #61 / #66) | update to a build with the fix |
+| Hub `separate/status` stuck at `hops_done: 100` | display only: it is the length of a list capped at 100 | check that the streams' `start_ts_us` still advance |
 
 ## Re-applying the configuration
 
@@ -110,7 +154,7 @@ It exits with code 1 if a step fails. The script does the following:
 - Creates or repairs `Assets/Scenes/Main.unity`:
   - an `OVRCameraRig` with an `OVRPassthroughLayer` underlay;
   - eye cameras that clear to transparent black;
-  - a marker cube;
+  - tracked hands under the hand anchors (hand tracking: controllers and hands, frequency high);
   - a light, added only when the scene is first created.
 - Keeps any other scenes in the build list, with Main first.
 - Applies Meta's Project Setup Tool fixes for Android, including minimum API 32,
@@ -128,4 +172,8 @@ gitignored. Don't commit them.
   - the app installs and runs;
   - the runtime reports one passthrough layer on;
   - the user saw the room in color and the marker cube.
+- Quest 3S, live loop (hardware-tested, 2026-10-25): the app connects to the real hub over USB, streams 4 mic
+  channels at 48 kHz (only ch0 and ch1 carry sound), camera frames and pose; DevMode toggles by pinch; the picker,
+  pointing and pinch work with fake data. With real voices the hub now locates sources (PR #63), but the rectangle is
+  not yet on the talker: the direction estimate is off (see ARCHITECTURE.md D8 and `hub/locate/TUNING.md`).
 - Quest 2: untested.
