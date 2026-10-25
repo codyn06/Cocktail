@@ -40,6 +40,10 @@ ap.add_argument("--out-gains-in-layers", action="store_true",
                 help="hub applies inner/outer dB in the Quest 'layers' layout (default: the Quest applies them)")
 ap.add_argument("--merge-ild-db", type=float, default=0.0,
                 help="one-talker merge threshold in dB; 0 = off. Calibrate per device (4.5 = simulator)")
+ap.add_argument("--no-person-box", action="store_true",
+                help="disable the camera face box for the selected non-wearer speaker")
+ap.add_argument("--camera-flipped", action="store_true",
+                help="camera frames are upside-down: mirror the person-box bbox vertically")
 a = ap.parse_args()
 logging.basicConfig(level=logging.INFO)
 
@@ -71,6 +75,18 @@ if not a.no_speakers:
     from speakers import install_speakers
 
     install_speakers(app, events_state, worker)
+
+from vision.person_box import PersonBox  # noqa: E402
+
+person_box = PersonBox(state, events_state.selection, camera_flipped=a.camera_flipped,
+                       enabled=not a.no_person_box)
+events_state.source_overlays.append(person_box.overlay)
+person_box.start()
+
+
+@app.get("/person-box/status")
+def person_box_status():
+    return person_box.status()
 
 
 @app.get("/sources")
