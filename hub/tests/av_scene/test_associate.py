@@ -101,3 +101,37 @@ def test_track_activity_and_degraded():
     sid, ex = select_for_track("A", associate_streams(env, trk), env,
                                n_suspected_talkers=3)
     assert sid == "s1" and ex.status == "degraded"
+
+
+def _visible_plus_offscreen():
+    a_on = blocks((20, 100), (160, 200))
+    env = {"s1": env_of(a_on, 1), "s2": env_of(blocks((85, 135), (185, 235)), 2)}
+    trk = {"A": 0.05 + 0.9 * a_on}
+    return env, trk
+
+
+def test_visible_speaker_plus_offscreen_voice():
+    env, trk = _visible_plus_offscreen()
+    default = {a.source_id: a for a in associate_streams(env, trk)}
+    assert default["s2"].visibility == "unknown"  # unchanged default
+    r = {a.source_id: a for a in associate_streams(env, trk, active_face_offscreen=True)}
+    assert r["s1"].status == "matched" and r["s1"].track_id == "A"
+    assert r["s1"].visibility == "visible"
+    assert r["s2"].status == "unmatched" and r["s2"].visibility == "outside_view"
+
+
+def test_two_visible_speakers_none_outside_view():
+    env, trk = two_speakers()
+    rs = associate_streams(env, trk, active_face_offscreen=True)
+    assert all(a.status == "matched" and a.visibility == "visible" for a in rs)
+
+
+def test_tdoa_only_confirms_never_matches():
+    env, trk = _visible_plus_offscreen()
+    r = {a.source_id: a for a in associate_streams(
+        env, trk, active_face_offscreen=True, tdoa_outside={"s2": True})}
+    assert r["s2"].visibility == "outside_view"
+    assert any("TDOA" in (c.note or "") for c in r["s2"].components)
+    # TDOA alone must not create outside_view or a match without the visual rule
+    r = {a.source_id: a for a in associate_streams(env, trk, tdoa_outside={"s2": True})}
+    assert r["s2"].visibility == "unknown" and r["s2"].track_id is None
