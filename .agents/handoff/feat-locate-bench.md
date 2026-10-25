@@ -1,6 +1,6 @@
 # feat/locate-bench
 Status: in progress (2026-10-25)
-Owner: Sadie / Claude Code   PR: not opened (GitHub CLI not installed on this machine yet)
+Owner: Sadie / Claude Code   PR: https://github.com/codyn06/Cocktail/pull/46 (draft)
 
 Goal (Sadie's plan, milestone "location you can trust"): a scoreboard for direction finding
 on real Quest 3S takes, then use it to improve the delay method and fusion. Folders:
@@ -32,6 +32,6 @@ on real Quest 3S takes, then use it to improve the delay method and fusion. Fold
 ## Next steps
 - Get the real takes from Cody and Lalitha (the 6 calibration takes named in
   `hub/locate/calib/quest3s.json`) into `hub/recordings/`, run the bench, record the baseline.
-- Install `gh`, `gh auth login`, push the branch, open a draft PR.
+- Recordings: Shayaan owns the shared recordings folder (docs/STATUS.md, "Scope"); get the link.
 - reviewer pass before marking ready.
 - Then plan step 3 (delay method): per-headset calibration files, improve until it beats baseline.
