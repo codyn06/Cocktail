@@ -59,7 +59,7 @@ try:  # direction finding (C4) if hub/locate is present
     # Gated by default: on the real 4-channel Quest the plain level model "locks" on a bearing it does not
     # fit (locate/TUNING.md), so withhold the bearing (unknown direction) unless the fit is good.
     gates = None if a.locate_ungated else LocateConfig(profile_diff=True, max_resid_chi2=3.0, min_fit_gain=0.05)
-    locator = LiveLocator(state, cfg=gates, method=a.locate_method)
+    locator = LiveLocator(state, cfg=gates, method=a.locate_method, mic_channels=(0, 1))
     worker.listeners.append(locator.on_chunks)
 except ImportError:
     logging.getLogger("separate").exception("direction finding disabled: hub/locate failed to import")
