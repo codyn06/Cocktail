@@ -21,6 +21,7 @@ import wave
 from pathlib import Path
 
 import numpy as np
+from scipy import signal
 
 from .estimator import BearingEstimator, LocateConfig
 from .pair import PairCalibration, PairLocator, fit_calibration, frame_delay_phase
@@ -29,6 +30,7 @@ from .tdoa import gcc_phat
 BANDS = (500.0, 1000.0, 2000.0, 4000.0, 8000.0)
 MIN_SNR_DB = 6.0  # the source must be at least this much louder than the room, or the take is invalid
 WIN, HOP = 4096, 2400  # 85 ms window, 50 ms hop at 48 kHz
+LIVE_RATE, LIVE_WIN = 16000, 1024  # how the live hub measures delays (locate/live.py TDOA_WIN)
 
 
 def load(take: Path):
@@ -66,12 +68,24 @@ def frame_delay(x2: np.ndarray, rate: int, max_tau_s: float) -> tuple[float, flo
     return float(lags[k]), float(cc[k] / (np.median(np.abs(cc)) + 1e-12))
 
 
-def delay_observations(take: Path, within_db: float = 12.0, max_tau_s: float = 0.3e-3):
+def delay_audio(x: np.ndarray, rate: int, rate_hz: int | None = None, win: int | None = None):
+    """The two mic channels at the rate delays are measured at, and a frame cutter there:
+    returns (frame(t) -> (win, 2) samples centred on t seconds, rate)."""
+    x2, r, n = x[:, :2], rate, win or WIN
+    if rate_hz and rate_hz != rate:
+        x2, r = signal.resample_poly(x2, rate_hz, rate, axis=0), rate_hz  # zero-phase: timing kept
+        n = win or round(WIN * rate_hz / rate)
+    return (lambda t: x2[max(int(t * r - n / 2), 0):int(t * r + n / 2)]), r
+
+
+def delay_observations(take: Path, within_db: float = 12.0, max_tau_s: float = 0.3e-3,
+                       rate_hz: int | None = None, win: int | None = None):
     """Frames of a take where the source is on and the GCC peak is in the sharper half:
-    returns (frame times s, head yaw deg at those times, delays s, meta). For calibration."""
+    returns (frame times s, head yaw deg at those times, delays s, meta). For calibration.
+    rate_hz/win: measure the delays at that rate and frame length (default: the take's, WIN)."""
     t, w, x, rate, pt, yaw, meta = _active_frames(take, within_db)
-    obs = [(ti,) + frame_delay(x[int(ti * rate - WIN / 2):int(ti * rate + WIN / 2)], rate, max_tau_s)
-           for ti, wi in zip(t, w) if wi > 0]
+    frame, r = delay_audio(x, rate, rate_hz, win)
+    obs = [(ti,) + frame_delay(frame(ti), r, max_tau_s) for ti, wi in zip(t, w) if wi > 0]
     if not obs:
         return np.array([]), np.array([]), np.array([]), meta
     ot, tau, sharp = np.array(obs).T
@@ -79,12 +93,13 @@ def delay_observations(take: Path, within_db: float = 12.0, max_tau_s: float = 0
     return ot[keep], np.interp(ot[keep], pt, yaw), tau[keep], meta
 
 
-def phase_observations(take: Path, within_db: float = 12.0):
+def phase_observations(take: Path, within_db: float = 12.0, rate_hz: int | None = None, win: int | None = None):
     """Like delay_observations, with phase-slope delays (pair.frame_delay_phase) and their own
     standard errors, for every frame where the source is on: (times, yaw, delays, sigmas, meta)."""
     t, w, x, rate, pt, yaw, meta = _active_frames(take, within_db)
-    obs = [(ti,) + frame_delay_phase(x[int(ti * rate - WIN / 2):int(ti * rate + WIN / 2), :2], rate)
-           for ti, wi in zip(t, w) if wi > 0]
+    frame, r = delay_audio(x, rate, rate_hz, win)
+    sub = min(512, (win or WIN) // 4)
+    obs = [(ti,) + frame_delay_phase(frame(ti), r, sub=sub) for ti, wi in zip(t, w) if wi > 0]
     obs = [o for o in obs if np.isfinite(o[2])]
     if not obs:
         return np.array([]), np.array([]), np.array([]), np.array([]), meta
@@ -153,9 +168,11 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True,
         calib = calib or PairCalibration.default()
         est = PairLocator(calib)
         phase = calib.delay_method == "phase"
-        delay = frame_delay_phase if phase else (lambda f, r: frame_delay(f, r, calib.max_tau_s))
-        d = [delay(x[int(t * rate - WIN / 2):int(t * rate + WIN / 2), :2], rate)
-             if weight[i] > 0 else (0.0, np.inf if phase else 0.0) for i, t in enumerate(t_audio)]
+        frame, r = delay_audio(x, rate, calib.rate_hz, calib.win)  # as the calibration was fitted
+        sub = min(512, calib.win // 4)
+        delay = ((lambda f: frame_delay_phase(f, r, sub=sub)) if phase
+                 else (lambda f: frame_delay(f, r, calib.max_tau_s)))
+        d = [delay(frame(t)) if weight[i] > 0 else (0.0, np.inf if phase else 0.0) for i, t in enumerate(t_audio)]
         sharp = np.array([v[1] for v in d])
         on = weight > 0
         if phase:  # the more precise half (lower sigma), each weighted by its own sigma
@@ -234,25 +251,42 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True,
     return res
 
 
-def observations(take: Path, delay: str = "gcc"):
+def observations(take: Path, delay: str = "gcc", rate_hz: int | None = None, win: int | None = None):
     """(yaw, delays, [sigmas,] meta) of a labeled take for fit_calibration."""
     if delay == "phase":
-        _, y, tau, sig, meta = phase_observations(take)
+        _, y, tau, sig, meta = phase_observations(take, rate_hz=rate_hz, win=win)
         return (y, tau, sig), meta
-    _, y, tau, meta = delay_observations(take)
+    _, y, tau, meta = delay_observations(take, rate_hz=rate_hz, win=win)
     return (y, tau), meta
 
 
-def calibrate(takes: list[Path], out: Path | None, device: str = "quest3s", delay: str = "gcc") -> PairCalibration:
-    """Fit the mic-pair constants from labeled takes and report a leave-one-out check."""
+def framing(rate_hz: int | None) -> tuple[int, int]:
+    """(rate, frame length) delays are measured at for a requested rate: the live hub's framing
+    at 16 kHz, the take's own (48 kHz, WIN) otherwise."""
+    if rate_hz == LIVE_RATE:
+        return LIVE_RATE, LIVE_WIN
+    return (rate_hz, round(WIN * rate_hz / 48000)) if rate_hz else (48000, WIN)
+
+
+def fit_at(obs, device, names, rate_hz: int | None) -> PairCalibration:
+    cal = fit_calibration(obs, device, names)
+    cal.rate_hz, cal.win = framing(rate_hz)
+    return cal
+
+
+def calibrate(takes: list[Path], out: Path | None, device: str = "quest3s", delay: str = "gcc",
+              rate_hz: int | None = None) -> PairCalibration:
+    """Fit the mic-pair constants from labeled takes and report a leave-one-out check.
+    rate_hz: measure delays at this rate (16000 = as the live hub does)."""
+    rate_hz, win = framing(rate_hz)
     obs = []
     for tk in takes:
-        (y, tau, *sig), meta = observations(tk, delay)
+        (y, tau, *sig), meta = observations(tk, delay, rate_hz, win)
         if len(tau) < 20:
             print(f"skip {tk.name}: too few usable frames ({len(tau)})")
             continue
         obs.append((tk, y, tau, float(meta["truth_deg"]), *sig))
-    cal = fit_calibration([o[1:] for o in obs], device, [o[0].name for o in obs])
+    cal = fit_at([o[1:] for o in obs], device, [o[0].name for o in obs], rate_hz)
     print(f"calibration from {len(obs)} takes: delay amplitude {cal.delay_amp_s * 1e6:.1f} us "
           f"(spacing ~{cal.delay_amp_s * 343 * 100:.2f} cm), axis {cal.axis_deg:+.1f} deg, "
           f"offset {cal.offset_s * 1e6:+.1f} us, residual {cal.noise_s * 1e6:.1f} us"
@@ -261,7 +295,7 @@ def calibrate(takes: list[Path], out: Path | None, device: str = "quest3s", dela
         print("leave-one-out (calibrate on the others, locate the held-out take):")
         errs = []
         for i, (tk, _, _, truth, *_) in enumerate(obs):
-            sub = fit_calibration([o[1:] for k, o in enumerate(obs) if k != i], device)
+            sub = fit_at([o[1:] for k, o in enumerate(obs) if k != i], device, None, rate_hz)
             r = run(tk, truth, 12.0, verbose=False, method="tdoa", calib=sub)
             err = abs(circ_diff(r["world_deg"], truth))
             errs.append(err)
@@ -284,8 +318,10 @@ def main() -> None:
         ap.add_argument("--device", default="quest3s")
         ap.add_argument("--delay", choices=["gcc", "phase"], default="gcc",
                         help="gcc: GCC-PHAT peak per frame; phase: cross-spectrum phase slope with its own sigma")
+        ap.add_argument("--rate", type=int, default=None,
+                        help="measure delays at this sample rate; 16000 = as the live hub does (use for live)")
         a = ap.parse_args(sys.argv[2:])
-        calibrate([Path(t) for t in a.takes], a.out, a.device, a.delay)
+        calibrate([Path(t) for t in a.takes], a.out, a.device, a.delay, a.rate)
         return
     ap = argparse.ArgumentParser()
     ap.add_argument("take")

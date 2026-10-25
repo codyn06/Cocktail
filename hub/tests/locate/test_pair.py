@@ -73,7 +73,8 @@ def test_frame_delays_measures_a_sub_sample_delay():
 def test_live_locator_tdoa_mode_finds_a_stream(monkeypatch):
     rng = np.random.default_rng(3)
     st = IngestState()
-    loc = LiveLocator(st, method="tdoa", calib=CAL)
+    from dataclasses import replace
+    loc = LiveLocator(st, method="tdoa", calib=replace(CAL, rate_hz=16000, win=1024))  # a live-rate calibration
     truth, sr, hop_s = 70.0, 16000, 1.0
     n_hops = 24
     yaw_t = lambda t: 45 * np.sin(2 * np.pi * t / 8)

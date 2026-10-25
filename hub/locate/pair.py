@@ -43,6 +43,12 @@ class PairCalibration:
     takes: list = field(default_factory=list)
     delay_method: str = "gcc"   # how frame delays are measured: "gcc" (frame_delays) or "phase"
     model_s: float | None = None  # phase only: model error added to each frame's own sigma
+    # Sample rate and frame length the delays were measured at. They are part of the calibration:
+    # mics whose responses differ a little show a different channel offset in a narrower band
+    # (pairsim: ~5 us more at 16 kHz than at 48 kHz), so fit at the rate the locator runs at
+    # (live hub: 16 kHz, 1024-sample frames; `real_eval calibrate --rate 16000`).
+    rate_hz: int = 48000
+    win: int = 4096
 
     def save(self, path: str | Path) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)

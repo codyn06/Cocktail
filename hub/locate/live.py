@@ -20,6 +20,7 @@ Only calls the A8 estimator's public API; it does not change hub/locate's other 
 from __future__ import annotations
 
 import threading
+import warnings
 
 import numpy as np
 
@@ -45,6 +46,10 @@ class LiveLocator:
         if self.calib is not None and self.calib.delay_method != "gcc":
             raise ValueError("live tdoa measures GCC-PHAT delays; this calibration was fitted on "
                              f"{self.calib.delay_method!r} delays")
+        if self.calib is not None and (self.calib.rate_hz, self.calib.win) != (16000, TDOA_WIN):
+            warnings.warn(f"tdoa calibration was fitted at {self.calib.rate_hz} Hz, {self.calib.win}-sample "
+                          f"frames; live measures at 16000 Hz, {TDOA_WIN}: its channel offset may not hold "
+                          "(refit with `real_eval calibrate --rate 16000`)", stacklevel=2)
         self.lock = threading.Lock()
         self._reset()
 
