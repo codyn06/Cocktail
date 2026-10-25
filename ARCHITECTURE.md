@@ -4,6 +4,12 @@ How the system fits together and why. Plan and requirements are in
 [`docs/QUEST_PRD.txt`](docs/QUEST_PRD.txt), live progress in [`docs/STATUS.md`](docs/STATUS.md),
 and setup in [`README.md`](README.md).
 
+The proposed recorded-scene expansion is specified in
+[`docs/AV_SOUND_DISCOVERY_SPEC.md`](docs/AV_SOUND_DISCOVERY_SPEC.md): autonomous sound
+and speaker discovery, instance association, prompted stems, and synchronized mask
+highlighting. It maps to the existing hub modules and distinguishes verified model
+contracts from planned implementation; it does not change the current live defaults.
+
 Each decision has a status:
 
 - **Merged**: in `main` and working (evidence label given).
