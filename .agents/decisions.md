@@ -91,6 +91,33 @@ status does not belong here (see `AGENTS.md` > Continuity).
   `frame_transform` (manifest `capabilities` and `frames.json`). The synthetic second pair (demo voice1/voice2) is not a
   real second speaker pair; no recording has clean per-speaker references.
 
+- AV long clips, Phase 4 (branch `feat/av-phase4-long-clips`, PR #58): one chunked offline pipeline,
+  `python -m av_scene run` (visual -> speech -> optional diarization -> events -> residual -> export), NOT real time and
+  no device claim. Contracts (`hub/av_scene/contracts.py`): canonical time is an integer sample index at the stream's own
+  rate, intervals half-open, microseconds derived and never round-tripped; 4 s windows / 2 s overlap, the boundary is the
+  overlap midpoint, each chunk OWNS one nonduplicated region (final partial region included) and activity/enrollment
+  seconds are counted on owned samples only. Three identity layers are never interchangeable: chunk-local separator slot,
+  persistent acoustic `src_<n>` (IdentityStore, content-addressed spill files under the cache root), visual track id.
+  Slot permutation is resolved before any crossfade; an ambiguous slot abstains (`unresolved`, no stem, a reason) and never
+  blends; a speaker with too little audio to enroll abstains with `short_utterance`. Timeline segments carry FOUR
+  independent fields (association_status, visibility, stem_availability, refusal_reason) and are split at the speaking
+  activity inside a chunk (sub-chunk resolution; whole-chunk status inflated the silent-bystander rate to 6-20% on the
+  synthetic scenes). The `long_run` manifest extension and the `timeline/` + `audio/` indexes are versioned separately
+  (`LONG_RUN_SCHEMA_VERSION`), optional, and leave Phase 1-3 bundles readable; `SCHEMA_VERSION` (the cache key) was not
+  bumped. StageCache entries are checksummed and validated on lookup (corrupt ones quarantined), one writer per key
+  (O_EXCL lock, dead-pid locks stolen, Windows-safe liveness probe: `os.kill(pid, 0)` terminates processes on Windows),
+  keys include implementation fingerprint, model revisions, seeds, upstream keys, the incoming-state hash and the
+  predecessor chunk's key. Model passes load lazily from static revisions, so a fully warm cache loads no checkpoint.
+  Missing spatial evidence or a missing silent control can never produce "matched" (`nonspeech_attr`), the control's track
+  ids are paired to the event's by mask overlap (ids are only meaningful inside one tracker call), extraction/judge scores
+  never feed attribution, and the pipeline passes no calibrated array so non-speech attribution is expected to stay
+  unmatched on ordinary single-mic clips. The residual Nyquist guard uses each stem's real origin bandwidth (16 kHz speech
+  = 8 kHz). Diarization is OFF by default (bounded 30 s windows mapped to identities by overlap; not_attempted vs skipped
+  vs failed are distinct; never demonstrated on real audio). Numeric budgets fixed before any model run
+  (`MemoryBudgets`): RSS peak 6144 MiB, GPU peak 9216 MiB, RSS slope <= 2 MiB per audio minute after 5 warm-up chunks,
+  peak growth 30 s -> 300 s <= 256 MiB, browser heap <= 700 MiB. The optional 8 kHz three-speaker checkpoint experiment is
+  permanently skipped. Metrics treat an abstention as neither an identity nor a switch; it still costs recall.
+
 ## Open items
 - Each teammate: confirm their tool loads the roles/skills (README "pending runtime
   checks" and smoke checks).

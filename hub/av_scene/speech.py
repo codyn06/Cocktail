@@ -55,14 +55,28 @@ def run_speech_branch(audio_16k: np.ndarray, frames: np.ndarray, fps: float,
                       separator: Callable[[np.ndarray], np.ndarray],
                       scorer=None, tse=None, n_suspected_talkers: int | None = None,
                       activity_gate: bool = False, offscreen_upgrade: bool = False,
-                      peel: bool = False) -> SpeechResult:
+                      peel: bool = False, own_frames: tuple[int, int] | None = None,
+                      min_active_s: float | None = None) -> SpeechResult:
     """frames: uint8 RGB [N,H,W,3]; boxes_by_track: per-frame head box or None for each track.
 
     Phase 3 switches (all default off, so behaviour is unchanged unless asked for):
       activity_gate    combine TalkNet with per-track TSE energy (``activity_gate.combine_activity``); TSE path only.
       offscreen_upgrade  an active voice no visible face explains is ``outside_view`` even while a face speaks.
       peel             run bounded residual speech peeling for a third voice (``peeling.peel_residual_speech``).
+
+    Chunked runs (Phase 4) pass ``own_frames`` = [start, end) in 25 fps frames of the window the chunk OWNS:
+    activity seconds are then counted on that nonduplicated region only (the overlap with the neighbouring
+    chunk is context, never counted twice) and ``min_active_s`` (default ``MIN_ACTIVE_S``) is the threshold
+    against it. Both default to the old whole-window behaviour.
     """
+    min_active_s = MIN_ACTIVE_S if min_active_s is None else min_active_s
+
+    def _own(act):
+        if own_frames is None:
+            return act
+        lo, hi = own_frames[0] * 1_000_000 // FPS, own_frames[1] * 1_000_000 // FPS
+        return {t: [(max(a, lo), min(b, hi)) for a, b in v if min(b, hi) > max(a, lo)] for t, v in act.items()}
+
     n25 = int(len(audio_16k) / SR16 * FPS)
     peel_info = None
     if peel:
@@ -100,9 +114,9 @@ def run_speech_branch(audio_16k: np.ndarray, frames: np.ndarray, fps: float,
         info["tracks"][tid] = {"face_coverage": float(np.mean(valid)), **{k: v for k, v in sinfo.items()
                                                                            if isinstance(v, (int, float))}}
 
-    activity = track_activity(scores)
+    activity = _own(track_activity(scores))
     active_s = {t: sum(b - a for a, b in v) / 1e6 for t, v in activity.items()}
-    active = {t: s >= MIN_ACTIVE_S for t, s in active_s.items()}   # absolute: short windows refuse
+    active = {t: s >= min_active_s for t, s in active_s.items()}   # absolute: short windows refuse
 
     if tse is None:
         assoc = associate_streams(env, scores, active_face_offscreen=offscreen_upgrade)
@@ -124,11 +138,12 @@ def run_speech_branch(audio_16k: np.ndarray, frames: np.ndarray, fps: float,
         speaking_override = {t: np.pad(g, (0, max(0, n25 - len(g))))[:n25] for t, g in gated.items()}
         for tid in boxes_by_track:
             if tid in speaking_override:
-                active_s[tid] = float(speaking_override[tid].sum()) / FPS
-                active[tid] = active_s[tid] >= MIN_ACTIVE_S
+                so = speaking_override[tid] if own_frames is None else speaking_override[tid][own_frames[0]:own_frames[1]]
+                active_s[tid] = float(so.sum()) / FPS
+                active[tid] = active_s[tid] >= min_active_s
         tse_out = {t: x for t, x in tse_out.items() if active.get(t)}
-        activity = track_activity({t: np.where(speaking_override[t], 1.0, np.nan_to_num(scores[t], nan=0.0))
-                                   if t in speaking_override else scores[t] for t in scores})
+        activity = _own(track_activity({t: np.where(speaking_override[t], 1.0, np.nan_to_num(scores[t], nan=0.0))
+                                        if t in speaking_override else scores[t] for t in scores}))
         info["activity_source"] = "talknet+tse_gate"
     else:
         for tid, boxes in boxes_by_track.items():
