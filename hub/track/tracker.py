@@ -40,6 +40,9 @@ class TrackConfig:
     merge_deg: float = 12.0          # a same-label extra stream this close to a track is a duplicate
     confirm_hits: int = 3            # updates needed before a new source is announced
     bearingless_hits: int = 15       # a source with no direction yet needs this many (and no same-label one active)
+    # Speech with no direction (the live Quest withholds unfit bearings) can confirm sooner: None = off, else the
+    # hop count for a speech-labelled direction-less source. Identity then rests on slot continuity + voice memory.
+    bearingless_speech_hits: int | None = None
     hold_s: float = 1.5              # unheard this long: tracking -> last_seen
     lost_s: float = 8.0              # unheard this long: last_seen -> lost
     forget_s: float = 60.0           # unheard this long: dropped (the id is never reused)
@@ -56,6 +59,12 @@ class TrackConfig:
     fov_deg: float = 90.0            # horizontal field of view used for in_view
     silent_db: float = -100.0        # level_db reported while a source is not being heard
     identity_min_conf: float = 0.6   # acoustic-id confidence needed before an id is trusted (opt-in)
+    # A bearing older than this (time since the last usable bearing observation) is not published:
+    # bearing_deg None, bearing_conf 0, in_view False. The track keeps it internally to re-find the
+    # talker. 8 s = lost_s and the estimator's own memory (tau_s); a 5 s pause is a normal conversational
+    # gap (scene slot_reused_by_other_sound expects the direction to survive it). A walking talker
+    # (1.4 m/s at 2 m = ~45 deg in 5 s) is the reason not to go longer. None = never expire (old behaviour).
+    bearing_max_age_s: float | None = 8.0
 
 
 @dataclass
@@ -74,6 +83,7 @@ class _Track:
     confirmed: bool = False
     state: p.TrackState = p.TrackState.tracking
     aid_run: tuple[str, int] | None = None  # (confident acoustic id, consecutive observations)
+    bearing_us: int = 0  # when the bearing was last refreshed by a usable observation
 
     @property
     def label(self) -> str:
@@ -282,7 +292,8 @@ class Tracker:
                     t.confirmed = True
             elif t.tid in self._tid_aid:
                 t.confirmed = True  # a distinct voice, direction unsure: announce it without a bearing
-            elif t.hits >= c.bearingless_hits and not any(
+            elif t.hits >= (c.bearingless_speech_hits if c.bearingless_speech_hits is not None and t.label == "speech"
+                            else c.bearingless_hits) and not any(
                     o is not t and o.label == t.label and o.state == p.TrackState.tracking for o in self.tracks.values()):
                 t.confirmed = True
 
@@ -297,6 +308,7 @@ class Tracker:
         t.label_scores[o.label] = t.label_scores.get(o.label, 0.0) + max(o.label_conf, 0.05)
         if has_b:
             t.b_hits += 1
+            t.bearing_us = now_us
             if t.bearing is None:
                 t.bearing, t.bearing_conf = o.bearing_deg, o.bearing_conf
             else:
@@ -316,7 +328,8 @@ class Tracker:
             tid=tid, label_scores={o.label: max(o.label_conf, 0.05)},
             bearing=o.bearing_deg if has_b else None, bearing_conf=o.bearing_conf if has_b else 0.0,
             bearing_source=(o.bearing_source or p.BearingSource.head_motion) if has_b else None,
-            stream=o.source_id, first_us=now_us, last_obs_us=now_us, level_db=o.level_db, b_hits=int(has_b))
+            stream=o.source_id, first_us=now_us, last_obs_us=now_us, level_db=o.level_db, b_hits=int(has_b),
+            bearing_us=now_us)
         return self.tracks[tid]
 
     # ------------------------------------------------------------------ output
@@ -326,13 +339,16 @@ class Tracker:
         for t in self.tracks.values():
             if not t.confirmed:
                 continue
-            in_view = (t.bearing is not None and head_yaw_deg is not None
+            fresh = (t.bearing is not None and (c.bearing_max_age_s is None
+                                                or (now_us - t.bearing_us) / 1e6 <= c.bearing_max_age_s))
+            in_view = (fresh and head_yaw_deg is not None
                        and t.state != p.TrackState.lost
                        and abs(wrap180(t.bearing - head_yaw_deg)) <= c.fov_deg / 2)
             out.append(p.Source(
                 source_id=t.tid, label=t.label, label_conf=t.label_conf,
-                bearing_deg=t.bearing, bearing_conf=min(max(t.bearing_conf, 0.0), 1.0),
-                bearing_source=t.bearing_source, state=t.state, in_view=bool(in_view),
+                bearing_deg=t.bearing if fresh else None,
+                bearing_conf=min(max(t.bearing_conf, 0.0), 1.0) if fresh else 0.0,
+                bearing_source=t.bearing_source if fresh else None, state=t.state, in_view=bool(in_view),
                 level_db=t.level_db if t.state == p.TrackState.tracking else c.silent_db,
                 last_observed_us=t.last_obs_us))
         return out
