@@ -272,6 +272,14 @@ def return_near_other() -> list[Check]:
              f"{getattr(a0, 'source_id', None)} -> {getattr(a1, 'source_id', None)}")]
 
 
+def low_conf_second_talker() -> list[Check]:
+    def frame(t, rng):  # the locator is sure of A but calls B "ambiguous" (conf 0.15) the whole time
+        return [raw("s1", "speech", jit(rng, -30), conf=0.8), raw("s2", "speech", jit(rng, 40), conf=0.15)]
+    r = simulate(frame, 20)
+    return [("a second talker whose direction stays unsure is still announced", len(r.at(19.5)) == 2,
+             f"{[(s.source_id, s.bearing_deg) for s in r.at(19.5)]}")]
+
+
 def unreliable_bearings() -> list[Check]:
     def frame(t, rng):  # every other reading is junk from anywhere, flagged with low confidence
         if int(t * 10) % 2:
@@ -294,7 +302,8 @@ def alternating_near_talkers() -> list[Check]:
 
 
 PROBES = [near_talkers(8), near_talkers(15), near_talkers(20), pause_beyond_forget, two_bearingless_births,
-          pause_while_crossing, return_near_other, unreliable_bearings, alternating_near_talkers]
+          pause_while_crossing, return_near_other, low_conf_second_talker, unreliable_bearings,
+          alternating_near_talkers]
 
 
 def main() -> int:

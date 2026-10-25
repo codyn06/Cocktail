@@ -156,7 +156,7 @@ def run_case(d: Path, calib, swaps_s=(), cfg: TrackConfig | None = None, pair_cf
             k += 1
         out = tr.update(now, raw[k][1], None)
         events.append(p.SourcesUpdated(device_ts_us=now, sources=out).model_dump_json())
-        ticks.append((now, {t.tid: (t.stream, t.bearing, t.state, t.last_obs_us) for t in tr.tracks.values() if t.confirmed},
+        ticks.append((now, {t.tid: (t.stream, t.bearing, t.state, t.last_obs_us, t.bearing_conf) for t in tr.tracks.values() if t.confirmed},
                       {x.source_id: x.bearing_deg for x in raw[k][1]}))
     return {"session": s, "ticks": ticks, "events": events,
             "swaps_us": [s.start_ts_us + int(t * 1e6) for t in swaps_s]}
@@ -196,6 +196,7 @@ def score_case(res: dict, forget_s: float = TrackConfig.forget_s, settle_s: floa
     carry = [[] for _ in srcs]          # per talker: (tick index, tid or None)
     err = [[] for _ in srcs]
     raw_err = [[] for _ in srcs]
+    confs = [[] for _ in srcs]
     tids_seen: dict[str, set] = {}
     all_tids = set()
     for i, (now, tracks, rawb) in enumerate(ticks):
@@ -203,12 +204,12 @@ def score_case(res: dict, forget_s: float = TrackConfig.forget_s, settle_s: floa
         m = carried_by(len(srcs), swaps_us, now)
         all_tids |= set(tracks)
         best: dict[int, tuple] = {}
-        for tid, (stream, b, state, last) in tracks.items():
+        for tid, (stream, b, state, last, conf) in tracks.items():
             k = m.get(stream)
             if k is None or state != p.TrackState.tracking:
                 continue
             if k not in best or last > best[k][1]:
-                best[k] = (tid, last, b)
+                best[k] = (tid, last, b, conf)
         for k, q in enumerate(srcs):
             tid = best.get(k, (None,))[0]
             carry[k].append((i, tid))
@@ -217,6 +218,7 @@ def score_case(res: dict, forget_s: float = TrackConfig.forget_s, settle_s: floa
                 tb = true_bearing(q, t_s)
                 if t_s >= settle_s and best[k][2] is not None:
                     err[k].append(abs(float(wrap180(best[k][2] - tb))))
+                    confs[k].append(best[k][3])
                     sid = next((sd for sd, kk in m.items() if kk == k), None)
                     if rawb.get(sid) is not None:
                         raw_err[k].append(abs(float(wrap180(rawb[sid] - tb))))
@@ -242,7 +244,8 @@ def score_case(res: dict, forget_s: float = TrackConfig.forget_s, settle_s: floa
             "coverage": round(covered / len(cov_ticks), 3) if cov_ticks else None,
             "first_id_s": None if first_id is None else round((first_id - first) * DT_US / 1e6, 1),
             "err_med": q50(err[k], 50), "err_p90": q50(err[k], 90),
-            "raw_err_med": q50(raw_err[k], 50), "raw_err_p90": q50(raw_err[k], 90)})
+            "raw_err_med": q50(raw_err[k], 50), "raw_err_p90": q50(raw_err[k], 90),
+            "conf_med": None if not confs[k] else round(float(np.median(confs[k])), 2)})
     return out
 
 
@@ -274,7 +277,24 @@ def print_case(key: str, sc: dict) -> None:
     for r in sc["talkers"]:
         print(f"  {r['name']:8s} ids {','.join(r['ids']) or '-':10s} switches {r['switches']}  "
               f"coverage {r['coverage']}  first id {r['first_id_s']} s  "
-              f"err {r['err_med']}/{r['err_p90']}  (locator {r['raw_err_med']}/{r['raw_err_p90']})")
+              f"err {r['err_med']}/{r['err_p90']} conf {r['conf_med']}  (locator {r['raw_err_med']}/{r['raw_err_p90']})")
+
+
+def summary(results: dict) -> list[str]:
+    """One line per case (seeds pooled): talkers never announced, switches, merged ids, bearing
+    error of the carrying track (median of per-talker medians), confidence of wrong (> 25 deg) ones."""
+    by: dict[str, list] = {}
+    for key, sc in results.items():
+        by.setdefault(key.rsplit("-s", 1)[0], []).append(sc)
+    out = [f"{'case':12s} talkers  unannounced  switches  merged  err_med  conf_when_>25deg"]
+    for name, scs in by.items():
+        tk = [r for sc in scs for r in sc["talkers"]]
+        errs = [r["err_med"] for r in tk if r["err_med"] is not None]
+        wrong = [r["conf_med"] for r in tk if r["err_med"] is not None and r["err_med"] > 25]
+        out.append(f"{name:12s} {len(tk):7d}  {sum(not r['ids'] for r in tk):11d}  {sum(r['switches'] for r in tk):8d}  "
+                   f"{sum(bool(sc['merged_ids']) for sc in scs):6d}  {np.median(errs) if errs else float('nan'):7.1f}  "
+                   f"{wrong}")
+    return out
 
 
 def main(argv=None) -> int:
@@ -297,6 +317,7 @@ def main(argv=None) -> int:
         setattr(cfg, k, type(getattr(cfg, k))(v))
     names = [n for n in CASES if not a.only or any(w in n for w in a.only)]
     res = run_suite(a.root, PairCalibration.load(a.calib), names, range(a.seed0, a.seed0 + a.seeds), cfg, a.log_dir)
+    print("\n" + "\n".join(summary(res)))
     if a.json:
         a.json.write_text(json.dumps(res, indent=1))
     return 0
