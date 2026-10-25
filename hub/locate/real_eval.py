@@ -81,7 +81,7 @@ def delay_observations(take: Path, within_db: float = 12.0, max_tau_s: float = 0
 
 
 def run(take: Path, truth: float | None, within_db: float, verbose: bool = True, method: str = "level",
-        calib: PairCalibration | None = None, keep_frames: bool = False) -> dict:
+        calib: PairCalibration | None = None, keep_frames: bool = False, timeline_s: float = 5.0) -> dict:
     meta, x, rate, pose = load(take)
     cue = meta.get("cue") or {}
     nu, go, stop = cue.get("noise_until", 0.0), cue.get("go"), cue.get("stop")
@@ -143,7 +143,7 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True,
                 est.add_delay("src", float(t), d[i][0], 1.0)
         else:
             est.add_levels("src", float(t), lev[i], float(weight[i]))
-        if i % int(5 / (HOP / rate)) == 0 and i > 0 and weight[i] > 0:
+        if i % max(1, round(timeline_s / (HOP / rate))) == 0 and i > 0 and weight[i] > 0:
             e = est.estimate("src", float(t))
             timeline.append((t, e.world_deg, e.confidence, e.state))
     e = est.estimate("src")
@@ -157,6 +157,7 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True,
         "yaw_std": float(yaw[motion].std()), "active_frac": float(weight[in_win].mean()) if in_win.any() else 0.0,
         "world_deg": e.world_deg, "confidence": e.confidence, "state": e.state,
         "alt_head_deg": e.alt_bearing_deg, "truth": truth, "snr_db": snr_db, "method": method,
+        "go": go, "stop": stop, "timeline": timeline,
     }
     if keep_frames:
         res["_frames"] = {"t": t_audio, "weight": weight, "x": x, "rate": rate, "pt": pt, "yaw": yaw, "meta": meta}
