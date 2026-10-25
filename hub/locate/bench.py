@@ -11,7 +11,8 @@ room) is listed but left out of the summary.
 
 Methods: `level` (head-shadow levels, estimator.py), `tdoa` (inter-mic delay with the stored
 calibration, pair.py), `tdoa-loo` (GCC-PHAT delays, calibration refitted without the take
-being scored) and `phase-loo` (phase-slope delays with per-frame sigma, same refit). Takes inside the stored calibration are marked `*`: their `tdoa` score is
+being scored), `phase-loo` (phase-slope delays with per-frame sigma, same refit) and
+`adapt-loo` (GCC refit, each source's delay swing and offset estimated around it). Takes inside the stored calibration are marked `*`: their `tdoa` score is
 in-sample and flatters the method; `tdoa-loo` is the honest number.
 
 Per method it prints:
@@ -36,11 +37,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .pair import PairCalibration, fit_calibration
-from .real_eval import circ_diff, is_valid, observations, run
+from .pair import PairCalibration, PairConfig
+from .real_eval import circ_diff, fit_at, framing, is_valid, observations, run
 
-METHODS = ("level", "tdoa", "tdoa-loo", "phase-loo")
-LOO = {"tdoa-loo": "gcc", "phase-loo": "phase"}
+METHODS = ("level", "tdoa", "tdoa-loo", "phase-loo", "adapt-loo")
+LOO = {"tdoa-loo": "gcc", "phase-loo": "phase", "adapt-loo": "gcc"}
+ADAPT = {"adapt-loo"}  # PairConfig(adapt=True): per-source delay swing and offset
 LOCK_TOL_DEG = 25.0
 HIT_DEG = 20.0          # matches the +-20 deg window that defines BearingEstimate.confidence
 SIDE_BAND_DEG = 15.0
@@ -102,7 +104,7 @@ def score_take(take: Path, method: str, calib: PairCalibration | None) -> dict:
     meta = json.loads((take / "meta.json").read_text())
     truth = float(meta["truth_deg"])
     r = run(take, truth, 12.0, verbose=False, method="level" if method == "level" else "tdoa",
-            calib=calib, timeline_s=TIMELINE_S)
+            calib=calib, timeline_s=TIMELINE_S, pair_cfg=PairConfig(adapt=method in ADAPT))
     tl = [(t, w, c, s) for t, w, c, s in r["timeline"] if r["go"] is None or t >= r["go"]]
     t0 = tl[0][0] if tl else 0.0
     final = (tl[-1][0] + 1e-3 if tl else t0, r["world_deg"], r["confidence"], r["state"])
@@ -118,20 +120,22 @@ def score_take(take: Path, method: str, calib: PairCalibration | None) -> dict:
 
 
 def loo_calibrations(takes: list[Path], device: str, delay: str = "gcc",
-                     valid: set[Path] | None = None) -> dict[Path, PairCalibration]:
-    """For each take, the delay calibration fitted on all the other valid labeled takes."""
+                     valid: set[Path] | None = None, rate_hz: int | None = None) -> dict[Path, PairCalibration]:
+    """For each take, the delay calibration fitted on all the other valid labeled takes, with
+    delays measured at rate_hz (16000: as the live hub measures them)."""
+    rate_hz, win = framing(rate_hz)
     obs = {}
     for tk in takes:
         if valid is not None and tk not in valid:
             continue  # no head motion or source lost in the room: not calibration data
-        (y, tau, *sig), meta = observations(tk, delay)
+        (y, tau, *sig), meta = observations(tk, delay, rate_hz, win)
         if len(tau) >= 20:
             obs[tk] = (y, tau, float(meta["truth_deg"]), *sig)
     out = {}
     for tk in takes:
         others = {k: o for k, o in obs.items() if k != tk}
         if len(others) >= 2:
-            out[tk] = fit_calibration(list(others.values()), device, [k.name for k in others])
+            out[tk] = fit_at(list(others.values()), device, [k.name for k in others], rate_hz)
     return out
 
 
@@ -184,7 +188,7 @@ def print_report(rows: list[dict], summaries: dict[str, dict]) -> None:
         if s["fb_right_rate"] is not None:
             print(f"  front/back right     {100 * s['fb_right_rate']:5.1f}%  ({s['n_fb']} takes, side takes not counted)")
         locks = [x for x in s["lock_s"] if x is not None]
-        print(f"  seconds to lock      median {_q(locks, 50)}   locked within 3 s: {100 * s['locked_3s_rate']:.0f}%  "
+        print(f"  seconds to lock      median {_q(locks, 50)}   committed within 3 s: {100 * s['locked_3s_rate']:.0f}%  "
               f"never: {sum(x is None for x in s['lock_s'])}/{len(s['lock_s'])}")
         if s["ece"] is not None:
             print(f"  confidence honesty   ECE {s['ece']:.2f}   final: says {s['final_mean_conf']:.2f}, "
@@ -195,10 +199,10 @@ def print_report(rows: list[dict], summaries: dict[str, dict]) -> None:
                 print(f"    conf {lo:.1f}-{min(lo + 0.2, 1.0):.1f}  says {mc:.2f}  right {hr:.2f}  (n={n})")
 
 
-def bench(takes: list[Path], methods=METHODS, calib: PairCalibration | None = None):
+def bench(takes: list[Path], methods=METHODS, calib: PairCalibration | None = None, rate_hz: int | None = None):
     calib = calib or PairCalibration.default()
     valid = {tk for tk in takes if is_valid(tk)} if any(m in LOO for m in methods) else None
-    loo = {m: loo_calibrations(takes, calib.device, LOO[m], valid) for m in methods if m in LOO}
+    loo = {m: loo_calibrations(takes, calib.device, LOO[m], valid, rate_hz) for m in methods if m in LOO}
     rows = []
     for tk in takes:
         for m in methods:
@@ -215,6 +219,8 @@ def main(argv=None) -> None:
     ap.add_argument("--methods", default=",".join(METHODS), help=f"comma list from {','.join(METHODS)}")
     ap.add_argument("--calib", type=Path, default=None, help="tdoa calibration JSON (default: quest3s)")
     ap.add_argument("--json", type=Path, default=None, help="also write all rows and summaries here")
+    ap.add_argument("--rate", type=int, default=None,
+                    help="leave-one-out methods measure delays at this rate; 16000 = as the live hub does")
     a = ap.parse_args(argv)
     methods = [m for m in a.methods.split(",") if m]
     if bad := [m for m in methods if m not in METHODS]:
@@ -227,7 +233,7 @@ def main(argv=None) -> None:
             takes.append(tk)
     if not takes:
         raise SystemExit("no labeled takes found")
-    rows, summaries = bench(takes, methods, PairCalibration.load(a.calib) if a.calib else None)
+    rows, summaries = bench(takes, methods, PairCalibration.load(a.calib) if a.calib else None, a.rate)
     print_report(rows, summaries)
     if a.json:
         a.json.write_text(json.dumps({"rows": rows, "summaries": summaries}, indent=1))

@@ -43,6 +43,12 @@ class PairCalibration:
     takes: list = field(default_factory=list)
     delay_method: str = "gcc"   # how frame delays are measured: "gcc" (frame_delays) or "phase"
     model_s: float | None = None  # phase only: model error added to each frame's own sigma
+    # Sample rate and frame length the delays were measured at. They are part of the calibration:
+    # mics whose responses differ a little show a different channel offset in a narrower band
+    # (pairsim: ~5 us more at 16 kHz than at 48 kHz), so fit at the rate the locator runs at
+    # (live hub: 16 kHz, 1024-sample frames; `real_eval calibrate --rate 16000`).
+    rate_hz: int = 48000
+    win: int = 4096
 
     def save(self, path: str | Path) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -167,11 +173,38 @@ class PairConfig:
     lock_conf: float = 0.7
     lock_sigma_deg: float = 15.0
     ambiguous_ratio: float = 0.35
+    alt_exclude_deg: float = 40.0  # a rival hypothesis must be at least this far from the peak
+    # Systematic bearing error (delay-model mismatch, reverb, calibration) the likelihood does not
+    # model: the posterior is blurred by this Gaussian sd before confidence, spread and the
+    # alternative hypothesis are read off it. 0 = report the raw posterior. It can only lower
+    # confidence. It also caps it near 0.8, which is no protection against a confidently wrong
+    # bearing (the real 3S "locked" 79 deg miss read 0.80): that needs real-take validation.
+    sys_sd_deg: float = 16.0
+    # adapt: each source gets its own delay swing A and offset c, with Gaussian priors around the
+    # calibration (A ~ N(D, (amp_sd_ratio D)^2), c ~ N(offset, offset_sd_s^2)), marginalised
+    # exactly per bearing. Reverb and the source's spectrum change both (pairsim: a voice shows a
+    # 30% larger swing than the pink-noise calibration takes). The prior keeps A > 0, i.e. the
+    # device geometry, so the source and its opposite stay distinct. Outlying frames get a Huber
+    # weight against each bearing's current fit instead of the fixed inlier mixture.
+    adapt: bool = False
+    amp_sd_ratio: float = 0.3
+    offset_sd_s: float = 2e-6
+    huber_k: float = 2.5
+
+
+def sim_tuned(**kw) -> PairConfig:
+    """Settings fitted on SIMULATED takes and scenes (pairsim) so that confidence matches the
+    observed hit rate there: less tempering (neff_ratio 0.5), a rival must be 60 deg from the
+    peak and hold 0.6 of its mass to flag "ambiguous". Not the default: the real 3S was
+    overconfident where the simulation is underconfident, so check on real takes first
+    (`--sim-tuned` in locate.scenes)."""
+    return PairConfig(**{"neff_ratio": 0.5, "ambiguous_ratio": 0.6, "alt_exclude_deg": 60.0, **kw})
 
 
 class _Src:
     def __init__(self, n):
         self.loglik = np.zeros(n)
+        self.stats = np.zeros((6, n))  # adapt: weighted sums of s^2, s, 1, s tau, tau, tau^2 per bearing
         self.last_t = None
         self.n = 0
         self.yw = self.ym = self.ymm = 0.0
@@ -205,28 +238,69 @@ class PairLocator:
         if s.last_t is not None:
             lam = float(np.exp(-max(t - s.last_t, 0.0) / self.cfg.tau_s))
             s.loglik *= lam
+            s.stats *= lam
             s.yw *= lam; s.ym *= lam; s.ymm *= lam
         s.last_t = t
         yaw = self._yaw_at(t)
         c = self.calib
-        r = tau_s - c.predict(self.az, yaw)
         sig = c.frame_sigma(sigma_s)
-        inl = self.cfg.p_inlier * np.exp(-0.5 * (r / sig) ** 2) / (sig * np.sqrt(2 * np.pi))
-        out = (1 - self.cfg.p_inlier) / (2 * c.max_tau_s)
-        s.loglik += weight * self.cfg.neff_ratio * np.log(inl + out)
+        if self.cfg.adapt:
+            sn = np.sin(np.radians(self.az - c.axis_deg - yaw))  # tau = A sn + c for bearing az
+            v = weight * self.cfg.neff_ratio / sig ** 2
+            if s.n >= 10:  # Huber weight against each bearing's current (A, c)
+                a_hat, c_hat = self._fit(s)
+                r = np.abs(tau_s - (a_hat * sn + c_hat))
+                v = v * np.minimum(1.0, self.cfg.huber_k * sig / np.maximum(r, 1e-12))
+            s.stats += v * np.stack([sn * sn, sn, np.ones_like(sn), sn * tau_s,
+                                     np.full_like(sn, tau_s), np.full_like(sn, tau_s * tau_s)])
+        else:
+            r = tau_s - c.predict(self.az, yaw)
+            inl = self.cfg.p_inlier * np.exp(-0.5 * (r / sig) ** 2) / (sig * np.sqrt(2 * np.pi))
+            out = (1 - self.cfg.p_inlier) / (2 * c.max_tau_s)
+            s.loglik += weight * self.cfg.neff_ratio * np.log(inl + out)
         s.yw += weight; s.ym += weight * yaw; s.ymm += weight * yaw * yaw
         s.n += 1
+
+    def _posterior(self, s):
+        """Per bearing: the (A, c) posterior's precision matrix entries, mean and the log
+        marginal likelihood of the delays (up to a constant shared by all bearings)."""
+        c = self.calib
+        la = 1 / (self.cfg.amp_sd_ratio * c.delay_amp_s) ** 2
+        lc = 1 / self.cfg.offset_sd_s ** 2
+        ss, s1, n, st, t1, tt = s.stats
+        a, b, d = la + ss, s1, lc + n
+        h0, h1 = la * c.delay_amp_s + st, lc * c.offset_s + t1
+        det = a * d - b * b
+        m0, m1 = (d * h0 - b * h1) / det, (a * h1 - b * h0) / det
+        ll = -0.5 * (tt - h0 * m0 - h1 * m1) - 0.5 * np.log(det)
+        return m0, m1, ll
+
+    def _fit(self, s):
+        m0, m1, _ = self._posterior(s)
+        return m0, m1
+
+    def _blur(self, p):
+        step = 360.0 / self.cfg.n_az
+        d = np.arange(self.cfg.n_az)
+        d = np.minimum(d, self.cfg.n_az - d) * step
+        k = np.exp(-0.5 * (d / self.cfg.sys_sd_deg) ** 2)
+        q = np.fft.irfft(np.fft.rfft(p) * np.fft.rfft(k / k.sum()), self.cfg.n_az)
+        q = np.maximum(q, 0.0)
+        return q / q.sum()
 
     def estimate(self, source_id, t=None) -> BearingEstimate:
         s = self._src.get(source_id)
         if s is None or s.n == 0 or not self._poses:
             return BearingEstimate(source_id, 0.0, 0.0, 0.0, 180.0, "unobserved", None, 0.0, 0)
         yaw = self._yaw_at(t if t is not None else self._poses[-1][0])
-        lp = s.loglik - s.loglik.max()
+        loglik = self._posterior(s)[2] if self.cfg.adapt else s.loglik
+        lp = loglik - loglik.max()
         p = np.exp(lp)
         p /= p.sum()
+        k = int(np.argmax(p))  # the answer is the sharp posterior's peak ...
+        if self.cfg.sys_sd_deg > 0:
+            p = self._blur(p)  # ... the confidence is read off the blurred one
         N, step = self.cfg.n_az, 360.0 / self.cfg.n_az
-        k = int(np.argmax(p))
         w20 = int(round(20 / step))
         idx = (np.arange(-w20, w20 + 1) + k) % N
         conf = float(p[idx].sum())
@@ -234,7 +308,7 @@ class PairLocator:
         wl = p[idx] / p[idx].sum()
         sig = float(np.degrees(np.sqrt((wl * dd ** 2).sum())))
         mask = np.ones(N, bool)
-        mask[(np.arange(-int(40 / step), int(40 / step) + 1) + k) % N] = False
+        mask[(np.arange(-int(self.cfg.alt_exclude_deg / step), int(self.cfg.alt_exclude_deg / step) + 1) + k) % N] = False
         k2 = int(np.argmax(np.where(mask, p, -1)))
         mass2 = p[(np.arange(-w20, w20 + 1) + k2) % N].sum()
         alt = float(wrap180(self.az[k2] - yaw)) if mass2 >= self.cfg.ambiguous_ratio * conf and mass2 > 0.05 else None

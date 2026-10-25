@@ -7,6 +7,11 @@ Writes take folders in the recorder's format (audio.wav, pose.csv, meta.json), s
     uv run python -m locate.pairsim sessions/pairsim --angles 0,90,180,-90,45,135,-45,-135
     uv run python -m locate.bench sessions/pairsim
 
+With --scene it instead writes one mockclient session (session.json, audio.wav, pose.jsonl,
+stems/) with a speech-like talker at each angle, for the live path (`locate.score_live`):
+
+    uv run python -m locate.pairsim sessions/two-talkers --scene --angles -30,40
+
 Same protocol as quest/tools/run_locate_take.ps1: room only until 4 s, pink noise from the
 source, head still until the turn cue at 8 s, then slow left/right turns (~+-40 deg) until 28 s.
 
@@ -28,6 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from scipy import signal
+from scipy.io import wavfile
 
 C_SOUND = 343.0
 CUE = {"noise_until": 4.0, "go": 8.0, "stop": 28.0}
@@ -61,9 +68,30 @@ def pink(n, rng):
     return x / x.std()
 
 
-def head_yaw(t, rng, amp):
+def talker(n, rng, rate=48000):
+    """Speech-like source: speech-shaped noise with a syllable-rate envelope, in phrases of
+    1.5-4 s separated by 0.3-1.5 s pauses (unit RMS while talking)."""
+    X = np.fft.rfft(rng.standard_normal(n))
+    f = np.fft.rfftfreq(n, 1 / rate)
+    X *= (f > 100) / (1 + (np.maximum(f, 1) / 500.0) ** 0.5 * (1 + (f / 4000.0) ** 2))
+    x = np.fft.irfft(X, n)
+    E = np.fft.rfft(rng.standard_normal(n))
+    env = np.fft.irfft(E * (f < 6.0), n)  # syllable-rate (< 6 Hz) envelope
+    env = np.maximum(env / (env.std() + 1e-12) + 0.8, 0.0)
+    on = np.zeros(n, bool)
+    i = int(rng.uniform(0, 1.0) * rate)
+    while i < n:
+        k = int(rng.uniform(1.5, 4.0) * rate)
+        on[i:i + k] = True
+        i += k + int(rng.uniform(0.3, 1.5) * rate)
+    y = x * env * on
+    return y / (y[on].std() + 1e-12)
+
+
+def head_yaw(t, rng, amp, go=None, stop=None):
     """Still before the turn cue and after the stop cue; slow irregular turns in between."""
-    go, stop = CUE["go"], CUE["stop"]
+    go = CUE["go"] if go is None else go
+    stop = CUE["stop"] if stop is None else stop
     f = rng.uniform(0.12, 0.3, 2)
     ph = rng.uniform(0, 2 * np.pi, 2)
     s = np.clip((t - go) / 0.8, 0, 1) * np.clip((stop - t) / 0.8, 0, 1)
@@ -93,16 +121,25 @@ def simulate(truth_deg, seed=0, room: Room | None = None, secs=30.0, rate=48000)
     n = int(secs * rate)
     t = np.arange(n) / rate
     src = pink(n, rng) * (t >= CUE["noise_until"])
-    N, H = 1024, 256
-    tf = (np.arange((n - N) // H + 1) * H + N / 2) / rate
     pt = np.arange(0, secs, 1 / 72)  # the 3S sends head pose at ~72 Hz
     yaw = head_yaw(pt, rng, r.head_amp_deg)
+    ch0, ch1 = _render(src, truth_deg, pt, yaw, r, rng, rate)
+    x = _finish(ch0, ch1, r, rng, rate)
+    return 0.1 * x / np.abs(x).max() * 3, pt, yaw
+
+
+def _render(src, az_deg, pt, yaw, r: Room, rng, rate):
+    """One source at world bearing az_deg as the two mics hear it: direct path, early
+    reflections from fixed world directions, and a late reverberant tail (coherent, zero delay)."""
+    n = len(src)
+    N, H = 1024, 256
+    tf = (np.arange((n - N) // H + 1) * H + N / 2) / rate
     yf = np.interp(tf, pt, yaw)
     D = r.spacing_m / C_SOUND
     f = np.fft.rfftfreq(N, 1 / rate)
 
     # direct path + early reflections: (world azimuth, elevation, gain, extra delay in samples)
-    paths = [(truth_deg, r.elev_deg, 1.0, 0)]
+    paths = [(az_deg, r.elev_deg, 1.0, 0)]
     for _ in range(r.n_reflections):
         paths.append((rng.uniform(-180, 180), rng.uniform(-30, 40), rng.uniform(*r.reflection_gain),
                       int(rng.uniform(*r.reflection_delay_ms) * rate / 1000)))
@@ -119,14 +156,54 @@ def simulate(truth_deg, seed=0, room: Room | None = None, secs=30.0, rate=48000)
     tail = rng.standard_normal(k) * np.exp(-6.9 * np.arange(k) / k)
     late = np.fft.irfft(np.fft.rfft(src, n + k) * np.fft.rfft(tail, n + k), n + k)[:n]
     late *= 10 ** (r.reverb_db / 20) * src.std() / (late.std() + 1e-12)
+    return ch0 + late, ch1 + late
+
+
+def _finish(ch0, ch1, r: Room, rng, rate):
+    """Room noise (diffuse: the same at both mics), the channel-0 phase mismatch, sensor noise."""
+    n = len(ch0)
     room_n = pink(n, rng) * 10 ** (r.room_db / 20)
-    ch0 += late + room_n
-    ch1 += late + room_n
+    ch0 = ch0 + room_n
+    ch1 = ch1 + room_n
     a = math.exp(-2 * math.pi * r.mismatch_hz / rate)  # one-pole lowpass: frequency-dependent phase
     ch0 = np.fft.irfft(np.fft.rfft(ch0) * (1 - a) / (1 - a * np.exp(-2j * np.pi * np.fft.rfftfreq(n))), n)
     x = np.stack([ch0, ch1], 1)
     x += rng.standard_normal(x.shape) * 10 ** (r.sensor_db / 20)
-    return 0.1 * x / np.abs(x).max() * 3, pt, yaw
+    return x
+
+
+def write_session(out: Path, angles, seed=0, room: Room | None = None, secs=40.0, rate=48000,
+                  start_ts_us: int = 1_000_000):
+    """A mockclient session (see mockclient/session.py) with a speech-like talker at each world
+    bearing, the head turning slowly from 1 s on. stems/ hold each talker alone as the mics
+    hear it (mean over mics), 16 kHz, same scale as audio.wav, for scoring and oracle masks."""
+    from mockclient import Session
+    from mockclient.simulate import quat_yaw_pitch
+
+    r = room or Room()
+    rng = np.random.default_rng(seed)
+    n = int(secs * rate)
+    pt = np.arange(0, secs, 1 / 72)
+    yaw = head_yaw(pt, rng, r.head_amp_deg, go=1.0, stop=secs - 0.5)
+    images = [_render(talker(n, rng, rate), float(a), pt, yaw, r, rng, rate) for a in angles]
+    x = _finish(sum(i[0] for i in images), sum(i[1] for i in images), r, rng, rate)
+    scale = 0.3 / np.abs(x).max()
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "stems").mkdir(exist_ok=True)
+    sources = []
+    for k, (a, (c0, c1)) in enumerate(zip(angles, images)):
+        name = f"talker{k + 1}"
+        ref = signal.resample_poly((c0 + c1) / 2 * scale, 1, rate // 16000).astype(np.float32)
+        wavfile.write(out / "stems" / f"{name}.wav", 16000, ref)
+        sources.append({"name": name, "bearing_deg": float(a), "stem": f"stems/{name}.wav"})
+    poses = [{"device_ts_us": start_ts_us + int(ti * 1e6), "pos": [0.0, 1.6, 0.0],
+              "rot_xyzw": list(quat_yaw_pitch(float(yi), 0.0))} for ti, yi in zip(pt, yaw)]
+    meta = {"device": "pairsim", "simulated": True, "sample_rate": rate, "mic_channels": 2,
+            "camera": False, "start_ts_us": start_ts_us, "duration_s": secs,
+            "yaw_amp_deg": r.head_amp_deg, "seed": seed, "sources": sources}
+    sess = Session(out, meta, (x * scale).astype(np.float32), rate, poses)
+    sess.save()
+    return sess
 
 
 def write_take(out: Path, truth_deg: float, seed=0, room: Room | None = None, secs=30.0, rate=48000,
@@ -153,7 +230,14 @@ def main(argv=None) -> None:
     ap.add_argument("out", type=Path)
     ap.add_argument("--angles", default="0,90,180,-90", help="source bearings, deg (+ = right)")
     ap.add_argument("--seeds", type=int, default=1, help="takes per angle (different rooms and head motion)")
+    ap.add_argument("--scene", action="store_true",
+                    help="one mockclient session with a talker at every angle (for locate.score_live)")
+    ap.add_argument("--seconds", type=float, default=40.0, help="--scene length")
     a = ap.parse_args(argv)
+    if a.scene:
+        write_session(a.out, [float(v) for v in a.angles.split(",")], seed=a.seeds - 1, secs=a.seconds)
+        print(f"wrote {a.out}")
+        return
     for ang in (float(v) for v in a.angles.split(",")):
         for s in range(a.seeds):
             name = f"sim-t{ang:+.0f}-s{s}".replace("+", "")
