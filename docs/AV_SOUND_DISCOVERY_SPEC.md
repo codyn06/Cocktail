@@ -229,7 +229,43 @@ Translation affects a finite-distance point; it cannot be applied as a fixed ang
 
 Distinguish the **wearer's head/camera pose**, which rotates the sensor frame, from the **observed speaker's face pose**, which primarily changes mouth visibility and acoustic directivity. Use a mouth landmark when reliable; use a larger region with lower confidence otherwise. Do not shift the measured source bearing merely because a person turns their face.
 
-For overlapping sounds, do not assign one mixture-level GCC peak to every active source. Estimate on source-isolated time-frequency regions or retain multiple peaks and uncertainty. Validate that multichannel reconstruction preserves inter-mic phase; a mono generated stem alone contains no microphone delay geometry.
+For overlapping sounds, use **W-Disjoint Orthogonality (WDO) raw-array masking** as an approximate dominance model, not a claim that speech bins are perfectly disjoint. On a shared STFT grid, form `W_k(t,f) = |S_hat_k(t,f)| / (sum_j |S_hat_j(t,f)| + epsilon)` from aligned mono stem/proposal magnitudes, then apply the same real non-negative weight to every original microphone spectrum: `X_m,k = W_k * X_m`. Inter-microphone phase belongs strictly to the original multichannel master `X_m`, never to a generated mono stem. Low-energy or poorly dominated bins supply no confident spatial evidence. [WDO/time-frequency masking research](https://doi.org/10.1109/TSP.2004.828896)
+
+Preserve dominance weights in the GCC/SRP accumulation **after PHAT normalization**, or select bins explicitly: applying an identical soft mask to two channels and then normalizing their cross-spectrum can cancel that mask. Use weighted raw cross-phase, not a single mixture-level peak reused for all sources. Record mask provenance, effective bandwidth and retained peaks; validate phase preservation and source-specific delay recovery in fixtures.
+
+### 5.5 Acoustic physics and psychoacoustic contracts
+
+The following four invariants bind the proposed `locate/`, `who/`, `separate/`, `replay/`, `render/` and `eval/` adapters. Configuration values below are project defaults or physical approximations where stated; they are not new fields in the frozen wire protocol.
+
+**1. Preserve acoustic time-of-flight (ToF).** Use dry-air `c_sound(T) ≈ 331.3 + 0.606*T_C` m/s, defaulting to 20 °C with an explicit “assumed” temperature flag. This gives about 343.4 m/s, 2.91 ms/m, and `tau_tof(r) = r/c_sound`: approximately 15 ms at 5 m or 29 ms at 10 m. Optical propagation is negligible at room distances; acoustic arrival follows the emitting motion. [Temperature approximation, NASA report, Eq. 3](https://ntrs.nasa.gov/api/citations/20190025444/downloads/20190025444.pdf)
+
+After clock/codec offsets are accounted for, `who/asd.py` and onset-synchrony scoring must allow causal audio lag in `[0, 35] ms` without a timing penalty and penalize audio lead beyond clock/frame uncertainty. This is a default room-range prior, not permission to absorb arbitrary transport delay; farther sources require an explicit range-dependent extension. Align scoring windows or marginalize over allowed lags without shifting exported stem samples/timestamps to erase physical propagation. Keep speech articulatory-onset uncertainty separate from clock error. Section 10's playback gate includes ToF once, not as an additional allowance.
+
+**2. Score 3D delay likelihoods, including ambiguity and calibration error.** A constant pairwise range difference defines a 3D hyperboloid (degenerating to a plane at zero delay); its far-field directions form a cone of confusion. Horizontal `atan2(ray_x, ray_z)` compared directly with `asin(c_sound*tau/d)` loses elevation (`cos(elevation)` compression) and front/back alternatives. `locate/av_spatial.py` must instead use:
+
+```text
+p1 = calibrated position of input channel 0; p2 = position of channel 1
+b = p2 - p1; d = norm(b); b_hat = b/d
+r_hat = R_cam_to_array * inverse(K) * [u,v,1] / norm(inverse(K) * [u,v,1])
+tau_geom(r_hat) = d * dot(r_hat, b_hat) / c_sound
+tau_exact(s) = (norm(s-p1) - norm(s-p2)) / c_sound
+```
+
+Rays point **toward the source**. For this channel ordering, positive delay means channel 0 arrives later, matching [`gcc_phat`](../hub/locate/tdoa.py) and [`frame_delays`](../hub/locate/pair.py). Compare predicted delay plus calibrated channel offset against measured TDOA likelihoods across calibrated pairs, or evaluate SRP-PHAT on the unit sphere `S^2`. Define camera/array axes and handedness before applying the transform. Known depth uses `s = R*(r*r_hat_camera) + t`; unknown depth retains angular uncertainty.
+
+The existing pair model is `delay_amp_s * sin((theta - axis_deg - yaw)*pi/180) + offset_s`, with positive world bearing/yaw to the right. Its `delay_amp_s` is an empirical fitted amplitude. `axis_deg` is the sine phase: for a horizontal ideal model its equivalent baseline direction is proportional to `(cos(phi), 0, -sin(phi))`, i.e. baseline azimuth `phi + 90°`, not `phi`. Do not reinterpret the fit as independently measured geometry. Current `frame_delays` selects one GCC `argmax`; `PairLocator` retains an angular posterior/alternative but does not retain multiple raw delay peaks, and its pose path uses yaw only. Full 3D likelihoods are a proposed extension.
+
+- **Parallax and curvature:** with unknown depth, require `r_min_m` (default 0.5 m) and `parallax_sigma` in radians of at least `atan(norm(t_cam_to_array)/r_min_m)` as a configured uncertainty floor; add its square to angular variance. That expression is a lateral-offset approximation, not an all-direction worst-case bound. For camera-to-source range at least `r_min_m > norm(t)`, use the stronger `asin(norm(t)/r_min_m)` bound for a conservative angular support; otherwise withhold a confident far-field match. Track curvature risk below the approximate Fraunhofer screen `r_FF = 2*D_aperture^2/lambda`, where `D_aperture` is the array aperture in metres and `lambda=c_sound/f`; use exact range differences or inflate delay uncertainty when the plane-wave approximation is inadequate. Do not confuse aperture with the code's fitted delay amplitude.
+- **Aliasing:** use each pair's spacing to compute `f_alias,ij = c_sound/(2*d_ij)`. The requested array warning `f > c_sound/(2*d_min)` puts even the shortest pair above its half-wavelength criterion; longer pairs can be ambiguous at lower frequencies. Measure active-frame spectral flatness/effective bandwidth. For narrowband high-frequency content, retain multimodal GCC/SRP peaks and widen uncertainty rather than forcing `argmax`. A 3–5 kHz chirp or beep is an aliasing stress case only for an appropriate baseline, not automatically for every wearable pair. [Microphone-array spatial aliasing](https://vocal.com/echo-cancellation/spatial-aliasing-in-a-microphone-array/)
+- **Head/visor/chassis diffraction:** allow an optional calibrated `baffle_scale = beta_baffle >= 1.0` effective-baseline approximation, default 1.0, plus frequency-dependent head-shadow confidence penalties or a measured array-response model. A scalar is a restricted engineering approximation, not the Woodworth law for arbitrary devices; Woodworth assumes spherical-head geometry and its errors depend on frequency/position. Do not multiply an already fitted `delay_amp_s` by an extra baffle factor: choose one calibrated prediction model and retain its residual uncertainty. Any headset profile requires device evidence before it is enabled. [Woodworth model analysis](https://pmc.ncbi.nlm.nih.gov/articles/PMC3985894/)
+
+**3. Prefer onset evidence in reverberation.** Under a diffuse-room, omnidirectional-source approximation, `d_c ≈ 0.057*sqrt(V/RT60)` metres, with `V` in m³ and `RT60` in seconds; source directivity adds a factor `sqrt(Q)`. At critical distance direct and reverberant energies are equal; beyond it the model predicts `DRR < 0 dB`. Values around 1–2 m are a useful indoor stress range, not a universal room constant. [Room-acoustics model](https://live.ocw.mit.edu/courses/21m-380-music-and-technology-recording-techniques-and-audio-production-fall-2016/d315c75efb01cb76ca897958570bab87_MIT21M_380F16_ses18_note.pdf)
+
+Use computational **onset precedence (Haas-inspired weighting)**: `onset_flux_weight` increases for the first configurable 10–30 ms after positive broadband spectral-flux onsets and decreases for sustained vowels/reverberant tails. Estimate flux on raw-array/source-dominant evidence, not a potentially generated onset. This is a heuristic inspired by measured onset dominance, not proof that the first sampled peak is direct sound. Without a reliable onset, or when reflection peaks remain competitive, preserve ambiguity rather than attaching a wall reflection to a silent bystander. Store RT60/DRR estimates with confidence or `unknown`. [Reverberation and onset-dominance research](https://pmc.ncbi.nlm.nih.gov/articles/PMC5805551/)
+
+**4. Separate vocal radiation from geometric origin.** Speech is broadly omnidirectional at low frequencies (roughly below 500 Hz) and increasingly forward-directed above about 2 kHz. Use 6–10 dB high-band attenuation as a turned-away stress-test range, not a fixed cardioid law or a correction valid for every speaker/angle. [Measured voice directivity](https://pmc.ncbi.nlm.nih.gov/articles/PMC3407162/)
+
+For an associated speaker with observed `abs(face_yaw_deg) > 60°` or mouth occlusion: mark visual lip-sync ASD `unavailable`, widen high-frequency spatial uncertainty for possible reduced DRR, and freeze voice-profile learning. Do not move the geometric ray origin because of yaw. Gate **enrollment, return-window direct profile creation, history appends, learning-duration counters and periodic adaptation**, not just the final EMA write; recognition against an existing clean profile may continue. Bind eligibility to the audio interval and resolved identity/slot so a later clear face cannot approve previously contaminated audio. Existing [`VoiceMemory.reorder`](../hub/separate/voice_memory.py) accepts only voices and timestamps; its `_learning_blocked` handles uncertain identity, not pose. A future private quality input must combine both gates. Unknown pose is distinct from observed off-axis pose and requires an explicit learning policy.
 
 ## 6. Discovery, counting and anchors
 
@@ -267,12 +303,12 @@ For every candidate source/track pair, store valid intervals and quality-weighte
 
 | Evidence | Useful for | Important distinction |
 |---|---|---|
-| Speech turn versus ASD timing | Linking solo turns to visible people | Simultaneous speakers can have identical activity timelines. |
+| Speech turn versus ASD timing | Linking solo turns to visible people | Marginalize over the causal ToF window from Section 5.5; off-axis/occluded lips make ASD unavailable. Simultaneous speakers can have identical activity timelines. |
 | Candidate stem versus face synchrony | Testing a proposed speaker assignment | Separation artifacts can alter sync; keep original-mixture evidence too. |
 | Audio/video embedding similarity | Ranking plausible sounding objects | Similar objects can share semantics; similarity alone does not establish instance causality. |
 | Mouth/object motion | Supporting temporally plausible activity | A moving silent cat, chewing person or vibrating camera is a negative-control case. |
-| DOA distribution versus camera ray | Disambiguating calibrated visible candidates | Missing or ambiguous geometry must reduce confidence, not force a match. |
-| Voice identity/profile continuity | Linking speech across pauses and track breaks | Similarity from very short or contaminated speech is weak evidence. |
+| DOA distribution versus camera ray | Compare 3D ray-predicted delays with calibrated pair/SRP likelihoods | Record `onset_flux_weight`, `aliasing_multimodal_flag`, `parallax_sigma` (radians), bandwidth, peaks and calibration/DRR quality; a scalar bearing delta is insufficient. |
+| Voice identity/profile continuity | Linking speech across pauses and track breaks | Apply Section 5.5 learning eligibility to enrollment/history/adaptation; recognition does not authorize a profile update. |
 | Track continuity and visibility | Preventing unnecessary identity switches | A visual track can disappear while the acoustic source persists. |
 
 Start with an interpretable score using only available evidence. Normalize weights over valid signals, calibrate thresholds on held-out clips, and store the component values. A missing face, microphone array or embedding is “unavailable,” not a numerical zero pretending to be a negative observation.
@@ -308,13 +344,18 @@ Use a 5-second context window with a 1-second overlap as an initial tuning point
 
 Align and trim returned samples, preserve a controlled gain convention, and use overlap weights that sum to one. Recheck identity across chunk boundaries; crossfading two different speakers produces a smooth but incorrect stem. Store per-chunk errors and support resume at the failed source/window.
 
-Keep three different residual concepts:
+Keep four different residual concepts in `hub/replay/residual.py`:
 
 - **Per-query model residual:** the remainder predicted for one target extraction; it still contains other selected sources.
-- **Arithmetic reconstruction remainder:** a declared mono analysis mixture minus the sum of aligned, gain-managed mono stems. The current SAM Audio processor averages input channels; preserve that downmix rule in the manifest. Keep the original multichannel master separately. Multichannel playback/remainders require an explicitly validated channel reconstruction; never implicitly broadcast mono stems across the array. The remainder can contain cancellation and model error as well as unmodeled sound. See the [processor channel handling](https://github.com/facebookresearch/sam-audio/blob/main/sam_audio/processor.py).
-- **Unexplained acoustic events:** activity in the remainder that survives semantic/activity checks and cannot be attributed confidently.
+- **Raw waveform reconstruction remainder:** `r_wave(t) = x(t) - sum_k s_hat_k(t)` in a declared mono downmix, with alignment/gain metadata. Keep this difference as a diagnostic artifact, not the input to unexplained-event discovery. The current SAM Audio processor averages channels; preserve that rule and the multichannel master separately. Never implicitly broadcast mono stems across the array. [Processor channel handling](https://github.com/facebookresearch/sam-audio/blob/main/sam_audio/processor.py)
+- **Spectral unexplained-event remainder:** phase-projected complex STFT residual or non-negative unexplained power, defined below. Use it for semantic/activity rediscovery and remainder/leakage scoring; label the projection method and its assumptions.
+- **Unexplained acoustic events:** supported activity discovered from that spectral remainder, with confidence and source attribution still unresolved. It is not a new emitter merely because residual energy exists.
 
-Do not sum per-query residuals. Do not treat any high-energy remainder as proof of an off-screen object. Independently generated targets are not guaranteed to add back to the mixture. Retain raw outputs; optionally produce a separately labeled mixture-consistent playback set after evaluating whether correction damages target purity.
+SAM Audio uses a flow-based generator and a `DACVAE` decoder; its waveform outputs must not be assumed sample-phase-locked to the input. [Generator/decoder source](https://github.com/facebookresearch/sam-audio/blob/main/sam_audio/model/model.py) For equal-power copies of one clean signal, raw difference power is `2*P*(1-cos(phi))`: quadrature or decorrelated phase gives about +3 dB relative to `P`, and opposite phase gives about +6 dB. These are illustrative phase-mismatch cases, not measured universal SAM Audio errors; zero mismatch gives zero remainder.
+
+On a common, delay-aligned STFT grid, fit bounded non-negative gains `alpha_k` over short windows with smoothness/regularization. Either project candidate powers onto mixture phase with non-negative Wiener-style masks `M_k`, constrained by `sum_k M_k <= 1`, and compute `R_complex = X - sum_k M_k*X`; or use `P_unexplained = max(0, |X|^2 - sum_k alpha_k*|S_hat_k|^2)`. A complex short-window least-squares variant must constrain its transfer functions; never fit a free complex gain per bin that can explain away every observation. Store gain bounds, STFT settings, masks and projection error. An incomplete source inventory must retain unexplained mass; do not normalize known-source masks to sum to one by construction.
+
+For detectors requiring a waveform, synthesize the projected residual, or use `sqrt(P_unexplained)` with mixture phase and documented overlap-add; mark the result as a projection proxy. Power subtraction assumes approximately additive/uncorrelated source powers, so test coherent-source cancellation and shared-bin interference separately. Phase robustness does not establish leakage accuracy: retain reference-stem/listening checks and a genuinely missing-source control. Do not sum per-query residuals or interpret high-energy remainder as proof of an off-screen object. Keep raw stems unchanged and evaluate any separately labeled mixture-consistent playback set for target purity.
 
 Validate stems using reference separation scores where clean stems exist, interference/activity leakage, duplicate-stem similarity, speaker continuity and human listening. Generative quality and exact waveform reconstruction need separate reporting. Preserve faint valid sources; energy reduction alone is not a source-discovery objective.
 
@@ -324,16 +365,18 @@ Use typed dataclasses or Pydantic models with explicit schema versions. Do not p
 
 | Artifact | Required fields |
 |---|---|
-| `MediaIndex` | run/input hashes, original PTS, sample rates/layout, epoch/origin, stream transforms, calibration ID, gaps |
+| `MediaIndex` | run/input hashes, original PTS, sample rates/layout, epoch/origin, stream transforms, calibration ID, gaps; `ambient_temperature_c` (default 20 with assumed/measured provenance), `r_min_m` (default 0.5) |
+| `ArrayCalibration` (private) | mic positions/channel order, axes/units, camera intrinsics/distortion and camera-to-array transform; prediction model/version, channel offsets/noise, optional `baffle_scale` (default 1), bandwise scatterer uncertainty; fitted `PairCalibration` parameters kept distinct from physical geometry |
 | `AcousticEvent` | event ID, label alternatives, start/end, activity score, audio prompt, visual noun candidates, provenance |
 | `SpeakerTrack` | speaker ID, regular overlapping turns, optional identity profile, count evidence, anchor intervals/reasons |
 | `MaskletTrack` | namespaced visual ID, concept, per-frame mask reference, image shape/transform, bbox, confidence, visibility |
-| `Association` | source/visual IDs, validity interval, status, score components, runner-up margin, evidence dependencies |
+| `Association` | source/visual IDs, validity interval, status, score components, runner-up margin, evidence dependencies; spatial peaks, `onset_flux_weight`, `aliasing_multimodal_flag`, `parallax_sigma`, bandwidth/DRR/RT60 confidence; causal lag prior, face quality and interval-level profile-learning eligibility |
 | `SceneSource` | stable source ID, event/speaker/emitter links, lifecycle, visibility, current association revision |
-| `StemResult` | source ID, model revision, prompt/anchor hashes, sample rate/count, offset, channels, raw/normalized output paths, errors |
-| `RunManifest` | schema/config/code/model revisions, input hashes, stages, assets, timing, metrics, hardware and evidence labels |
+| `StemResult` | source ID, model revision, prompt/anchor hashes, sample rate/count, offset, channels, raw/normalized output paths, errors; preserved arrival-time alignment and linked remainder IDs |
+| `RemainderResult` (private) | kind: model / raw waveform diagnostic / phase-projected STFT / unexplained power; source stem IDs, mono downmix, sample/time base, STFT/gain/projection config, artifact path, diagnostic-versus-discovery use and proxy-waveform provenance |
+| `RunManifest` | schema/config/code/model revisions, input hashes, stages, assets, timing, metrics, hardware and evidence labels; envelope filter/gate config, timing sign/reference, ToF/clock uncertainty and measured quantization budget |
 
-Cache keys include input content, preprocessing transforms, relevant config, checkpoint/code revisions, calibration and prompt/anchor changes. Invalidate downstream stages when those inputs change. Use atomic completed-stage markers; a directory left by a crashed job is not a valid cache hit. Store source-specific artifacts independently so a mask correction need not rerun all discovery.
+These are internal artifacts and proposed private adapter inputs; do not add them to `hub/protocol/messages.py` or silently change current `PairCalibration`/`VoiceMemory` signatures. Cache keys include input content, preprocessing transforms, relevant config, checkpoint/code revisions, calibration and prompt/anchor changes, plus temperature, projection method and envelope/gating settings. Invalidate affected downstream stages when those inputs change. Use atomic completed-stage markers; a directory left by a crashed job is not a valid cache hit. Store source-specific artifacts independently so a mask correction need not rerun all discovery.
 
 GPU lifecycle requirements:
 
@@ -347,9 +390,11 @@ GPU lifecycle requirements:
 
 ## 10. Renderer and inspection player
 
-Compute RMS in a short analysis window, convert to dBFS with a numerical floor, and interpolate onto actual frame timestamps. Forty milliseconds is an envelope window; it equals one video frame only at 25 fps. Label instantaneous values as dBFS/RMS. If LUFS is added, use a defined loudness implementation and its appropriate integration windows.
+In `hub/render/envelope.py`, apply an **ITU-R BS.1770 K-weighting biquad cascade strictly inside the visual-envelope branch**: shelving plus high-pass stages with coefficients validated for the actual sample rate. An explicitly selected IEC 61672 A-weighted alternative needs its own verified response. Neither path mutates exported WAV stems or the raw-array spatial branch. K-weighting reduces low-frequency influence and favors the chirp/consonant region, but is not a brick-wall sub-100 Hz rejection filter. Pair it with noise/activity gating to stop HVAC/handling leakage from activating silent people. [ITU-R BS.1770-5, Annex 1](https://www.itu.int/dms_pubrec/itu-r/rec/bs/R-REC-BS.1770-5-202311-I!!PDF-E.pdf)
 
-Start with approximately 30 ms attack and 180 ms release, then tune from clips. Gate mask activation with source activity, association confidence and mask validity, not stem RMS alone. Leakage can otherwise make a silent bystander glow. Use stable per-source normalization with bounds so quiet sources are visible without amplifying noise.
+Compute short-window RMS on that branch, apply a numerical floor, and map it to actual frame timestamps. Forty milliseconds is an envelope window, equal to one frame only at 25 fps. Label the weighted envelope explicitly; retain unweighted dBFS diagnostics. A weighted short-window RMS value is not LUFS. Full LUFS measurement requires the specified integration/gating process.
+
+Pair approximately 30 ms attack / 180 ms release smoothing with a **reverberant-decay hysteresis gate**: separate activation and lower sustain thresholds, a fresh-activity/onset requirement to reopen, and a bounded tail hold after trusted source offset. A decaying room tail alone must not renew activity. Use RT60/DRR estimates when supported, otherwise a recorded fallback policy; do not suppress sustained speech or tonal sources merely because they lack repeated broadband onsets. Gate additionally on association and mask validity. Smooth visual fading is separate from the source's active flag and must not prolong “speaking” status. Test sub-80 Hz leakage against 2–6 kHz events at specified input levels; preserve quiet real sources with bounded normalization.
 
 Render a consistent high-contrast palette, translucent fill, clear contours and compact labels. Provide a motion-reduced style. Encode identity through text/outline as well as color. The annotation must distinguish “speaking,” “possible match,” and “unattributed sound.” Do not display false precision such as an uncalibrated association percentage.
 
@@ -362,7 +407,9 @@ hub/sessions/<run_id>/av/
   source_video.mp4
   mixture.wav
   stems/source_<id>.wav
-  residual.wav
+  residual.wav                         projected playback proxy; method in manifest
+  diagnostics/residual_waveform.wav    raw difference; never discovery input
+  residuals/unexplained_power.npz      optional spectral discovery artifact
   masks/<track_id>.jsonl
   activity/<source_id>.json
   viewer.html
@@ -376,7 +423,11 @@ The player uses one WebAudio clock for all stems, shared scheduling offsets and 
 
 Mute the video's embedded soundtrack when stems are active to avoid doubled audio. Provide an explicit original-mixture mode. Include play/pause, seeking, mute, additive solo, reset mix, source selection, residual toggle and evidence inspection. Clicking a mask resolves against that frame's masks in display coordinates; overlapping masks need an inspectable candidate choice.
 
-Measure export sync and browser playback sync separately. Account for decode/encode priming, frame timestamps, resampler delay and seek offsets. A target of under 40 ms measured A/V error must state the tested FPS and quantization floor; low-frame-rate recordings may not support that bound visually.
+Measure export sync and browser playback sync separately. Define `delta_audio_ms = t_audio_onset - t_visual_truth` and `delta_mask_ms = t_mask_onset - t_visual_truth`; **positive means late**. For a synchronized causal-onset fixture, both must lie in Cocktail's asymmetric **`[-15 ms, +45 ms]`** gate, expanded only by the measured visual quantization floor `q = 1000/(2*FPS)` ms: `[-15-q, +45+q]`. Report audio-to-mask skew too and require it within the same gate so opposite endpoint errors cannot hide a large mismatch. For variable frame rate use half the actual local bracketing-frame interval. Record clock/annotation uncertainty separately; it is not an unlimited pass allowance.
+
+This is a **project acceptance gate informed by psychoacoustic asymmetry**, not a verbatim ITU/EBU limit. ITU-R BT.1359-1 reports detectability around 45 ms audio lead / 125 ms lag using the opposite sign convention; EBU R37-2007 specifies 5 ms early / 15 ms late per stage and 40 ms early / 60 ms late end-to-end. [ITU-R BT.1359-1](https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.1359-1-199811-I!!PDF-E.pdf), [EBU R37-2007](https://tech.ebu.ch/docs/r/r037.pdf)
+
+The `[0,35] ms` ToF prior consumes part of the +45 ms budget; do not add it again or advance exported stems to remove it. Measure decode/encode priming, resampler/filter group delay, envelope threshold crossing, scheduling and seek offsets within the remaining budget. A 30 ms attack constant is not permission to add 30 ms onset delay; compensate envelope-branch timestamps or revise gating while preserving captured audio timing. Test distance-dependent natural lag and non-causal audio lead separately. Sources beyond the configured ToF range need an explicitly declared evaluation profile, not a hidden timestamp correction.
 
 ## 11. Phase 0 findings and runtime plan
 
@@ -415,7 +466,16 @@ Owner: integration engineer for `av_scene/`; ingest owner for `ingest/media_io.p
 
 Build the media index, typed artifacts, span math, gated matcher, mask codec and envelope logic. Produce a fixture with known audio stems, hand-authored masks and activity truth; render/export it before loading heavy models. This validates the whole output contract without confusing fixture success with learned perception.
 
-Acceptance: timeline and mask round trips; empty anchors for total overlap; no bystander highlights under known truth; unmatched candidates remain unmatched; seek/solo stays aligned. Label all fixture results **mocked/synthetic**.
+Add these deterministic contracts under `hub/tests/av_scene/` before model integration (test descriptions only at this stage):
+
+1. **3D pair-delay projection:** for nonzero elevations, compare camera-ray dot products with exact far-field limits, show the error of naive horizontal `atan2`/`asin` matching, and assert channel 0-later-positive sign. Swapping channels/baseline negates delay. Cover fitted `axis_deg` conversion, camera translation/depth, parallax floors and no double baffle correction.
+2. **Narrowband multi-peak retention:** choose spacing and a tone above its pair aliasing cutoff; analytically enumerate admissible delay aliases, then ensure GCC/SRP evidence retains competing peaks and sets `aliasing_multimodal_flag`. Do not force source ID from a tied peak. Include a broadband control, temperature changes and a weighted-PHAT case proving soft dominance masks survive normalization.
+3. **Phase-rotated residual:** use a real synthetic clean source and a unit-magnitude STFT phase rotation (conjugate symmetry for real synthesis), including polarity inversion. Verify that the raw difference can be large while a correctly gain-scaled projected/power remainder does not trigger an unexplained event. Add a genuinely omitted second source that must remain detectable; this rejects a projection that simply zeroes every bin. Assert mono channel shapes and unchanged raw stems.
+4. **Perceptual envelope:** validate the K-weighting frequency response at the configured sample rate, then test equal-RMS sub-80 Hz rumble versus a 4 kHz chirp at documented levels. The combined weighted/activity gate rejects specified rumble leakage while detecting the chirp; test low-level chirps, sustained tones and an RT60 decay that cannot reopen the active flag. Assert exported WAV samples remain unchanged. Filtering alone is not the rejection guarantee.
+
+Also exercise `[0,35] ms` causal lags, excessive audio lead, Section 10's signed mask/playback gate, and observed off-axis/occlusion blocking of every voice-profile learning path, including returning-speaker enrollment and history accumulation. Record exact fixture levels, STFT/filter/gate settings and expected values so tests are reproducible.
+
+Acceptance: timeline and mask round trips; empty anchors for total overlap; no bystander highlights under known truth; unmatched candidates remain unmatched; seek/solo and mask onset satisfy Section 10's asymmetric gate with measured quantization. All deterministic contracts above must pass before learned inference claims. Label fixture results **mocked/synthetic**, not room/device validation.
 
 ### Phase 2 — First real model slice
 
@@ -482,6 +542,8 @@ Maintain separate fixture-unit and learned end-to-end suites. Split recordings b
 | Occlusion, camera motion, scene cut | Track breaks and mask age handled explicitly. |
 | Same direction, different speakers | Bearing duplicate heuristic does not erase distinct supported identities. |
 | Mono, program stereo, calibrated array | Spatial capabilities enabled only for the valid input mode; distinct left/right-content fixture asserts declared mono downmix, exact output shapes and no implicit channel broadcasting. |
+| Narrowband high-frequency source above array aliasing cutoff (`f > c_sound/(2*d_min)`) | Retain multimodal grating lobes; no confident wrong-cat/object assignment. Also test longer pairs at their lower individual cutoffs. |
+| Reverberant room / reflective wall near silent bystander + speaker turned more than 60° off-axis | Onset weighting must reject the reflection-driven match or abstain; mark lip-ASD unavailable and block profile enrollment/history/adaptation without shifting the geometric ray origin. Measure against an unweighted baseline; do not assume precedence always removes reflections. |
 | VFR, dropped frames, audio gap, epoch reset | No fabricated timing evidence or cross-epoch association. |
 | Long clip, OOM, interrupted export | Bounded resources, explicit partial result and resumable stages. |
 
@@ -492,9 +554,10 @@ Report:
 - Event detection precision/recall and onset/offset error by class.
 - Association precision, coverage/abstention, wrong-object highlight time and calibration reliability. High precision obtained by rejecting everything is not success.
 - Mask quality on labeled frames, track continuity and overlay age.
-- SI-SDR improvement where reference stems are meaningful, interference leakage, duplicate-source extraction and listening scores.
-- A/V alignment error, browser seek error, peak VRAM/RAM, load/inference/render time and real-time factor.
+- SI-SDR improvement where reference stems are meaningful, interference leakage, duplicate-source extraction and listening scores; false unexplained-event rate under phase perturbations, split by remainder method, plus omitted-source recall.
+- Spatial likelihood coverage and wrong-object attribution versus elevation, range, bandwidth and RT60; onset-weighting ablation; off-axis learning-block coverage and clean-profile drift.
+- Signed audio/visual and mask/visual onset error, audio-to-mask skew and browser seek error under Section 10's `[-15 ms, +45 ms]` gate plus measured half-frame uncertainty; ToF, clock uncertainty and processing delay reported separately. Also peak VRAM/RAM, load/inference/render time and real-time factor.
 
-Suggested initial engineering gates, to be reviewed against a named held-out set: association precision at least 90% at at least 70% coverage on the supported cases; silent-bystander highlight below 2% of annotated visible time; under 40 ms measured alignment error on clips whose frame rate permits it; no duplicate identities in deterministic fixtures. These are proposed targets, not measured claims. Publish results per difficult case, including always-overlapping speech and same-class objects, rather than hiding them inside an average.
+Suggested initial engineering gates, to be reviewed against a named held-out set: association precision at least 90% at at least 70% coverage on supported cases; silent-bystander highlight below 2% of annotated visible time; signed mask/playback onset and audio-to-mask skew inside **`[-15 ms, +45 ms]`**, with only the measured `±1000/(2*FPS)` ms quantization allowance (local frame intervals for VFR); no duplicate identities in deterministic fixtures. Preserve natural ToF within this budget and apply the corresponding lead penalty during association. Require the four Phase 1 physics fixtures, off-axis learning guards and signed timing cases to pass; real-room reflection/aliasing cases must meet attribution gates or remain explicitly ambiguous. These are proposed targets, not measured claims or a declaration of broadcast-standard compliance. Publish per-case results, including always-overlapping speech and same-class objects, rather than hiding them inside an average.
 
 The first milestone is a short real clip that a teammate can open, inspect and listen to: source-specific masks, separate stems, a preserved residual, synchronized controls and traceable evidence. Expand to larger source counts, more object classes and live capture by adding measured evidence to that same end-to-end path.
