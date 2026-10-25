@@ -1,0 +1,10 @@
+{
+  "comment": "Shared Python/JS golden vectors for the row-major, background-first RLE (foreground=True).",
+  "cases": [
+    {"name": "3x4_blob", "h": 3, "w": 4, "rows": ["0110", "0110", "0000"], "counts": [1, 2, 2, 2, 5]},
+    {"name": "starts_foreground", "h": 2, "w": 3, "rows": ["110", "001"], "counts": [0, 2, 3, 1]},
+    {"name": "empty", "h": 2, "w": 2, "rows": ["00", "00"], "counts": [4]},
+    {"name": "full", "h": 2, "w": 2, "rows": ["11", "11"], "counts": [0, 4]},
+    {"name": "wide_1x7", "h": 1, "w": 7, "rows": ["0101101"], "counts": [1, 1, 1, 2, 1, 1]}
+  ]
+}
