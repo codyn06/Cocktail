@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ingest.media_io import locate_ffmpeg, read_wav, write_png
+from ingest.media_io import locate_ffmpeg, read_wav, write_png, write_wav
 from render.envelope import compute_envelope
 from render.video import OverlayItem, overlay_frame
 from render.viewer import BundleInput, build_bundle
@@ -46,6 +46,7 @@ from .phase1 import _git_rev, frame_sample_times
 from .runtime import StageReport, run_stage
 from .schemas import (AcousticEvent, Association, ComponentScore, LabelScore, MaskletTrack, RemainderResult,
                       RunManifest, SceneSource, SpeakerTrack, StageRecord, StemResult)
+from .speech import SpeechResult, head_box, run_speech_branch
 
 SPEAKER_ID = "spk0"
 
@@ -164,7 +165,10 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
         reuse_tracks: bool = False, concept: str = "person", text: str = sa.DEFAULT_TEXT, max_seconds: float = 10.0,
         max_side: int = 640, stride: int = 1, device: str = "cuda", probe_bystanders: int = 2,
         ffmpeg_path: str | None = None, sam3_threshold: float = 0.25,
-        vram_fraction: float | None = 0.75) -> RunManifest | None:
+        vram_fraction: float | None = 0.75, speech_backend: str = "sam_audio",
+        use_tse: bool = False) -> RunManifest | None:
+    if speech_backend not in ("sam_audio", "mossformer2"):
+        raise ValueError(f"speech_backend must be sam_audio or mossformer2, got {speech_backend!r}")
     t_run = time.perf_counter()
     out, work = Path(out_dir), Path(out_dir) / "_work"
     work.mkdir(parents=True, exist_ok=True)
@@ -236,37 +240,62 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
     bystanders = [t for t in tracks if t.track_id != sid]
     stage("association(mock)", t0, f"HARDCODED: {SPEAKER_ID} -> {sid}; {len(bystanders)} bystander track(s) unassigned")
 
-    # ---- separation: SAM Audio small-tv with the speaker masklet as visual prompt
-    t0 = time.perf_counter()
     by_frame = {r.frame_idx: r.rle for r in records[sid]}
-    masks = [by_frame.get(i) for i in range(T)]
-    diag: dict[str, dict] = {}
+    speech = None
+    if speech_backend == "mossformer2":
+        # ---- speech branch (D11): MossFormer2 separates voices, TalkNet + envelope correlation attributes them
+        t0 = time.perf_counter()
+        speech = _speech_stage(clip, records, work, reports, device=device, vram_fraction=vram_fraction,
+                               use_tse=use_tse)
+        sel_stream, sel_ext = speech.selection[sid]
+        diag: dict[str, dict] = {}
+        if sel_stream is not None:
+            stem = _fit(sa.resample_audio(speech.streams[sel_stream], 16000, rate)[0].numpy().astype(np.float32),
+                        len(mix))
+        else:
+            stem = np.zeros(len(mix), np.float32)       # no confident stream: silence, never the dominant voice
+        rel = f"stems/{SPEAKER_ID}.wav"
+        (work / "stems").mkdir(exist_ok=True)
+        write_wav(work / rel, stem, rate)
+        stem_res = StemResult(source_id=SPEAKER_ID, model_revision="MossFormer2_SS_16K+TalkNet_TalkSet",
+                              sample_rate=rate, n_samples=len(stem), raw_path=rel,
+                              errors=[] if sel_stream else [f"no stream: {sel_ext.reason}"])
+        diag["speaker"] = {"result": stem_res, "prompts": {"backend": "mossformer2", "selected_stream": sel_stream,
+                                                             "extraction": sel_ext.model_dump()}}
+        stage("separation(mossformer2+talknet)", t0, f"selected {sel_stream} for {sid} ({sel_ext.status}: "
+                                                     f"{sel_ext.reason or 'matched'}); models unloaded")
+    else:
+        # ---- separation: SAM Audio small-tv with the speaker masklet as visual prompt
+        t0 = time.perf_counter()
 
-    def separate(mgr, bundle):
-        with mgr.phase("inference"):
-            _log(work, f"sam_audio: model loaded, extracting speaker stem ({T} frames, {len(mix) / rate:.1f} s)")
-            st, prompts = sa.extract_stem(bundle, audio=clip.audio, sample_rate=clip.audio_rate, frames=clip.frames,
-                                          masks=masks, source_id=SPEAKER_ID, out_dir=work, text=text)
-            diag["speaker"] = {"result": st, "prompts": prompts}
-            _log(work, "sam_audio: speaker stem done")
-            # measure visual-prompt selectivity: the same text with a silent bystander's masklet as the prompt
-            for t in sorted(bystanders, key=lambda t: -t.n_frames)[:probe_bystanders]:
-                bf = {r.frame_idx: r.rle for r in records[t.track_id]}
-                _log(work, f"sam_audio: bystander probe {t.track_id}")
-                bst, _ = sa.extract_stem(bundle, audio=clip.audio, sample_rate=clip.audio_rate, frames=clip.frames,
-                                         masks=[bf.get(i) for i in range(T)], source_id="probe_" + t.track_id,
-                                         out_dir=work, text=text)
-                diag[t.track_id] = {"result": bst}
-        mgr.report.output_seconds = round(len(mix) / rate, 3)
+        masks = [by_frame.get(i) for i in range(T)]
+        diag: dict[str, dict] = {}
 
-    run_stage("sam_audio_small_tv", lambda: sa.load_sam_audio(device=device), separate, reports=reports,
-              device=device, vram_fraction=vram_fraction,
-              workload={"frames": T, "audio_s": round(len(mix) / rate, 2), "text": text,
-                        "bystander_probes": min(probe_bystanders, len(bystanders))})
-    _log(work, "sam_audio: unloaded")
-    stem_res: StemResult = diag["speaker"]["result"]
-    stem = _fit(read_wav(work / stem_res.raw_path)[0][:, 0], len(mix))
-    stage("separation(sam_audio_small_tv)", t0, f"stem {stem_res.n_samples} samples @ {rate} Hz; model unloaded")
+        def separate(mgr, bundle):
+            with mgr.phase("inference"):
+                _log(work, f"sam_audio: model loaded, extracting speaker stem ({T} frames, {len(mix) / rate:.1f} s)")
+                st, prompts = sa.extract_stem(bundle, audio=clip.audio, sample_rate=clip.audio_rate, frames=clip.frames,
+                                              masks=masks, source_id=SPEAKER_ID, out_dir=work, text=text)
+                diag["speaker"] = {"result": st, "prompts": prompts}
+                _log(work, "sam_audio: speaker stem done")
+                # measure visual-prompt selectivity: the same text with a silent bystander's masklet as the prompt
+                for t in sorted(bystanders, key=lambda t: -t.n_frames)[:probe_bystanders]:
+                    bf = {r.frame_idx: r.rle for r in records[t.track_id]}
+                    _log(work, f"sam_audio: bystander probe {t.track_id}")
+                    bst, _ = sa.extract_stem(bundle, audio=clip.audio, sample_rate=clip.audio_rate, frames=clip.frames,
+                                             masks=[bf.get(i) for i in range(T)], source_id="probe_" + t.track_id,
+                                             out_dir=work, text=text)
+                    diag[t.track_id] = {"result": bst}
+            mgr.report.output_seconds = round(len(mix) / rate, 3)
+
+        run_stage("sam_audio_small_tv", lambda: sa.load_sam_audio(device=device), separate, reports=reports,
+                  device=device, vram_fraction=vram_fraction,
+                  workload={"frames": T, "audio_s": round(len(mix) / rate, 2), "text": text,
+                            "bystander_probes": min(probe_bystanders, len(bystanders))})
+        _log(work, "sam_audio: unloaded")
+        stem_res: StemResult = diag["speaker"]["result"]
+        stem = _fit(read_wav(work / stem_res.raw_path)[0][:, 0], len(mix))
+        stage("separation(sam_audio_small_tv)", t0, f"stem {stem_res.n_samples} samples @ {rate} Hz; model unloaded")
 
     # ---- render: Phase 1 envelope gating, residual accounting, overlays, bundle
     t0 = time.perf_counter()
@@ -343,6 +372,11 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
                                                      if (preflight.DEFAULT_FFMPEG_BIN / "ffmpeg.exe").is_file() else None))
     manifest.capabilities = {"ffmpeg": ff.to_dict(), "learned_models": ["sam3_image", "sam_audio_small_tv"],
                              "discovery": "MOCK", "association": "MOCK", "gpu": gpu}
+    if speech is not None:
+        _add_speech_to_manifest(manifest, speech)
+        manifest.capabilities.update(learned_models=["sam3_image", "MossFormer2_SS_16K", "TalkNet_TalkSet"]
+                                     + (["AV_MossFormer2_TSE_16K"] if use_tse else []),
+                                     association="talknet_envelope_correlation", max_separable_talkers=2)
     build_bundle(BundleInput(
         out_dir=out, manifest=manifest, mixture=mix, sample_rate=rate, stems={SPEAKER_ID: stem},
         residual_proxy=proj.proxy_waveform.astype(np.float32), residual_waveform=r_wave.astype(np.float32),
@@ -367,6 +401,7 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
                        "visual_prompt_probe": probes,
                        "probe_note": "same text prompt with the bystander's masklet as visual prompt; a silent bystander "
                                      "should give a stem far below the speaker's (vs_speaker_stem_db strongly negative)"},
+        "speech": _speech_metrics(speech) if speech is not None else None,
         "stages": [r.to_dict() for r in reports],
         "peak_vram_mib": {r.name: {"allocated": r.peak_allocated_mib, "reserved": r.peak_reserved_mib,
                                    "after_release": r.allocated_after_release_mib} for r in reports},
@@ -378,6 +413,78 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
     (out / "manifest.json").write_text(manifest.to_json(indent=1), encoding="utf-8")
     shutil.rmtree(frames_dir, ignore_errors=True)
     return manifest
+
+
+# --------------------------------------------------------------------------- speech branch (mossformer2)
+def _boxes_by_track(records: dict[str, list[MaskRecord]], n_frames: int) -> dict[str, list]:
+    out = {}
+    for tid, recs in records.items():
+        by = {r.frame_idx: r.rle for r in recs}
+        out[tid] = [head_box(by[i].decode()) if by.get(i) is not None else None for i in range(n_frames)]
+    return out
+
+
+def _speech_stage(clip, records, work, reports, *, device, vram_fraction, use_tse) -> SpeechResult:
+    from separate.models import VoiceSeparator
+    from vision.talknet import TalkNetScorer
+
+    a16 = sa.resample_audio(clip.audio, clip.audio_rate, 16000)[0].numpy().astype(np.float32)
+    rgb = clip.frames.permute(0, 2, 3, 1).contiguous().numpy()
+    boxes = _boxes_by_track(records, len(rgb))
+
+    def load():
+        tse = None
+        if use_tse:
+            from separate.av_tse import AVTargetSpeakerExtractor
+            tse = AVTargetSpeakerExtractor(device=device)
+        return VoiceSeparator(device), TalkNetScorer(device=device), tse
+
+    def go(mgr, models):
+        sep, scorer, tse = models
+        with mgr.phase("inference"):
+            _log(work, f"speech: separating + scoring {len(boxes)} track(s)")
+            return run_speech_branch(a16, rgb, clip.fps, boxes, separator=sep, scorer=scorer, tse=tse)
+
+    res = run_stage("speech_mossformer2_talknet", load, go, reports=reports, device=device,
+                    vram_fraction=vram_fraction, workload={"tracks": len(boxes), "tse": use_tse})
+    sd = work / "speech"
+    sd.mkdir(exist_ok=True)
+    for k, x in res.streams.items():
+        write_wav(sd / f"{k}.wav", x, 16000)
+    for k, x in res.tse.items():
+        write_wav(sd / f"tse_{k.replace(':', '_')}.wav", x, 16000)
+    _log(work, "speech: unloaded")
+    return res
+
+
+def _add_speech_to_manifest(manifest: RunManifest, sp: SpeechResult) -> None:
+    """One source per separated stream (attributed or not) and one per visible track (its listen status)."""
+    from .schemas import Extraction
+
+    for a in sp.associations:
+        chosen = [t for t, (s, _) in sp.selection.items() if s == a.source_id]
+        manifest.associations.append(a.model_copy(update={"association_id": f"assoc_{a.source_id}"}))
+        manifest.sources.append(SceneSource(
+            source_id=a.source_id, kind="speech", label="speech", visibility=a.visibility,
+            current_association_id=f"assoc_{a.source_id}",
+            extraction=Extraction(status="ok", method="mossformer2_ss", stem_source_id=a.source_id,
+                                  reason=f"selected for {chosen}" if chosen else f"not attributed ({a.status})")))
+    for tid, (_, ext) in sp.selection.items():
+        manifest.sources.append(SceneSource(source_id=f"track:{tid}", kind="unknown", label="visible person",
+                                            visibility="visible", activity_us=sp.activity_us.get(tid, []),
+                                            extraction=ext))
+
+
+def _speech_metrics(sp: SpeechResult) -> dict:
+    return {
+        "associations": [{"stream": a.source_id, "track": a.track_id, "status": a.status, "visibility": a.visibility,
+                          "score": None if a.score is None else round(a.score, 3),
+                          "margin": None if a.runner_up_margin is None else round(a.runner_up_margin, 3)}
+                         for a in sp.associations],
+        "selection": {t: {"stream": s, "status": e.status, "reason": e.reason} for t, (s, e) in sp.selection.items()},
+        "track_activity_us": sp.activity_us, "tracks": sp.info.get("tracks", {}), "tse_tracks": sorted(sp.tse),
+        "note": "speaking scores are TalkNet on heuristic head crops from SAM 3 person masks",
+    }
 
 
 def _log(work: Path, msg: str) -> None:
@@ -416,13 +523,16 @@ def main(argv=None) -> int:
     ap.add_argument("--vram-fraction", type=float, default=0.75,
                     help="cap this process's CUDA memory (fraction of the card); 0 disables the cap")
     ap.add_argument("--ffmpeg", default=None)
+    ap.add_argument("--speech-backend", choices=["sam_audio", "mossformer2"], default="mossformer2",
+                    help="mossformer2: separate voices then attribute with TalkNet (D11); sam_audio: visual prompt")
+    ap.add_argument("--tse", action="store_true", help="also run AV_MossFormer2_TSE per active face track")
     a = ap.parse_args(argv)
     xy = tuple(float(v) for v in a.speaker_xy.split(",")) if a.speaker_xy else None
     out = Path(a.out) if a.out else Path("sessions") / a.run_id / "av"
     m = run(a.video, out, run_id=a.run_id, speaker_xy=xy, speaker_track=a.speaker_track, reuse_tracks=a.reuse_tracks,
             concept=a.concept, text=a.text, max_seconds=a.max_seconds, max_side=a.max_side, stride=a.stride,
             device=a.device, probe_bystanders=a.probe_bystanders, ffmpeg_path=a.ffmpeg, sam3_threshold=a.sam3_threshold,
-            vram_fraction=a.vram_fraction or None)
+            vram_fraction=a.vram_fraction or None, speech_backend=a.speech_backend, use_tse=a.tse)
     if m is None:
         return 2
     print(f"bundle: {out.resolve()}\nserve:  uv run python -m av_scene serve {out}")

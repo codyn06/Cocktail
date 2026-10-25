@@ -141,3 +141,51 @@ def test_select_speaker_track_by_point_and_id():
         phase2.select_speaker_track(records, xy=(0.5, 0.5))      # in the gap between people
     with pytest.raises(SystemExit):
         phase2.select_speaker_track(records, track_id="zzz")
+
+
+def test_mossformer2_backend_attributes_and_refuses(clip, fakes, tmp_path, monkeypatch):
+    """Speech branch wiring: the selected person gets their stream; a silent person gets silence, not the
+    dominant voice. Separator and TalkNet are faked (mocked)."""
+    import separate.models as sm
+    import vision.talknet as tk
+
+    class Sep:
+        def __init__(self, *a, **k):
+            pass
+
+        def __call__(self, x):
+            n = len(x)
+            t = np.arange(n) / 16000
+            on = (np.sin(2 * np.pi * 0.7 * t) > 0).astype(np.float32)
+            return np.stack([np.zeros(n, np.float32), 0.3 * on * np.sin(2 * np.pi * 300 * t).astype(np.float32)])
+
+    class Scorer:
+        def __init__(self, *a, **k):
+            pass
+
+        def score_track(self, audio, boxes, frames, fps):
+            n = int(len(audio) / 16000 * 25)
+            t = np.arange(n) / 25
+            left = next(b for b in boxes if b is not None)[0] < frames.shape[2] / 2
+            s = np.where(np.sin(2 * np.pi * 0.7 * t) > 0, 4.0, -4.0) if left else np.full(n, -4.0)
+            return s, t, {}
+
+    monkeypatch.setattr(sm, "VoiceSeparator", Sep)
+    monkeypatch.setattr(tk, "TalkNetScorer", Scorer)
+    out = tmp_path / "av"
+    assert phase2.run(clip, out, run_id="t", device="cpu") is None
+    m = phase2.run(clip, out, run_id="t", speaker_xy=(0.2, 0.5), reuse_tracks=True, device="cpu",
+                   speech_backend="mossformer2")
+    metrics = json.loads((out / "metrics.json").read_text())
+    sel = metrics["speech"]["selection"]
+    left = m.associations[0].track_id
+    right = next(t.track_id for t in m.tracks if t.track_id != left)
+    assert sel[left]["stream"] == "voice_1" and sel[left]["status"] == "ok"
+    assert sel[right]["stream"] is None and sel[right]["status"] == "unavailable"
+    assert fakes.calls == []                                      # SAM Audio not used for speech selection
+
+    m2 = phase2.run(clip, out, run_id="t", speaker_xy=(0.8, 0.5), reuse_tracks=True, device="cpu",
+                    speech_backend="mossformer2")
+    assert any("no stream" in e for e in m2.stems[0].errors)
+    stem = json.loads((out / "metrics.json").read_text())["speaker"]["stem_rms_dbfs"]
+    assert stem < -100                                            # silence, not the other person's voice
