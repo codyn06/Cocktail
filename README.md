@@ -6,6 +6,8 @@ room's sound into separate labeled sources, works out where each one is, and sen
 chosen sound back to the headset in 3D. Plan: [`docs/QUEST_PRD.txt`](docs/QUEST_PRD.txt). Architecture and decisions:
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
 Live progress: [`docs/STATUS.md`](docs/STATUS.md).
+Research and implementation proposal for autonomous audio-visual discovery:
+[`docs/AV_SOUND_DISCOVERY_SPEC.md`](docs/AV_SOUND_DISCOVERY_SPEC.md).
 
 > **Status (2026-10-24):** the hub runs end to end on simulated data: ingest, a mock
 > headset, live separation with labels, and direction finding (`GET /sources`). The Quest
