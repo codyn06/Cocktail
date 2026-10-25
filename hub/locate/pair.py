@@ -186,6 +186,19 @@ class PairConfig:
     # 30% larger swing than the pink-noise calibration takes). The prior keeps A > 0, i.e. the
     # device geometry, so the source and its opposite stay distinct. Outlying frames get a Huber
     # weight against each bearing's current fit instead of the fixed inlier mixture.
+    # drift_dps > 0 turns the evidence into a forward filter for a MOVING talker: before each frame the
+    # log-posterior is diffused by a random walk of drift_dps * sqrt(dt) degrees (dt = time since the
+    # last frame), so old evidence about where the talker was loses weight smoothly instead of
+    # by the fixed tau_s clock. Use with a long tau_s (e.g. 60). 0 = static talker (old behaviour).
+    # Not available with adapt=True (its sufficient statistics cannot be diffused).
+    drift_dps: float = 0.0
+    # Calibration sanity gate: the delay of a legitimate source stays within +-delay_amp of the
+    # calibrated offset on average. When the running mean delay is further than this many delay_amps
+    # from calibration.offset_s the calibration does not describe the channels (e.g. another
+    # channel mode with a different inter-channel latency) and the bearing is withheld as
+    # "calibration_mismatch". None = off.
+    max_offset_dev_ratio: float | None = None
+    min_gate_weight: float = 20.0
     adapt: bool = False
     amp_sd_ratio: float = 0.3
     offset_sd_s: float = 2e-6
@@ -205,6 +218,9 @@ class _Src:
     def __init__(self, n):
         self.loglik = np.zeros(n)
         self.stats = np.zeros((6, n))  # adapt: weighted sums of s^2, s, 1, s tau, tau, tau^2 per bearing
+        self.tw = 0.0                  # decayed weight and weighted sum of delays (calibration sanity gate)
+        self.tsum = 0.0
+        self.t_diff = None             # last time the posterior was diffused (drift_dps)
         self.last_t = None
         self.n = 0
         self.yw = self.ym = self.ymm = 0.0
@@ -239,8 +255,12 @@ class PairLocator:
             lam = float(np.exp(-max(t - s.last_t, 0.0) / self.cfg.tau_s))
             s.loglik *= lam
             s.stats *= lam
+            s.tw *= lam; s.tsum *= lam
             s.yw *= lam; s.ym *= lam; s.ymm *= lam
         s.last_t = t
+        s.tw += weight; s.tsum += weight * float(np.clip(tau_s, -self.calib.max_tau_s, self.calib.max_tau_s))
+        if self.cfg.drift_dps > 0 and not self.cfg.adapt:
+            self._diffuse(s, t)
         yaw = self._yaw_at(t)
         c = self.calib
         sig = c.frame_sigma(sigma_s)
@@ -260,6 +280,24 @@ class PairLocator:
             s.loglik += weight * self.cfg.neff_ratio * np.log(inl + out)
         s.yw += weight; s.ym += weight * yaw; s.ymm += weight * yaw * yaw
         s.n += 1
+
+    def _diffuse(self, s, t):
+        """Random-walk step of the bearing posterior: the log-evidence is blurred (as a probability)
+        by drift_dps * sqrt(dt) degrees. Steps smaller than a third of a bin wait until they add up."""
+        if s.t_diff is None:
+            s.t_diff = t
+            return
+        sd = self.cfg.drift_dps * np.sqrt(max(t - s.t_diff, 0.0))
+        if sd < 0.3 * 360.0 / self.cfg.n_az:
+            return
+        s.t_diff = t
+        N, step = self.cfg.n_az, 360.0 / self.cfg.n_az
+        d = np.arange(N)
+        d = np.minimum(d, N - d) * step
+        k = np.exp(-0.5 * (d / sd) ** 2)
+        p = np.exp(s.loglik - s.loglik.max())
+        q = np.fft.irfft(np.fft.rfft(p) * np.fft.rfft(k / k.sum()), N)
+        s.loglik = np.log(np.maximum(q, 1e-9 * q.max()))
 
     def _posterior(self, s):
         """Per bearing: the (A, c) posterior's precision matrix entries, mean and the log
@@ -314,7 +352,12 @@ class PairLocator:
         alt = float(wrap180(self.az[k2] - yaw)) if mass2 >= self.cfg.ambiguous_ratio * conf and mass2 > 0.05 else None
         mu = s.ym / s.yw
         exc = float(np.sqrt(max(s.ymm / s.yw - mu * mu, 0.0)))
-        if alt is not None:
+        dev_ok = True
+        if self.cfg.max_offset_dev_ratio is not None and s.tw >= self.cfg.min_gate_weight:
+            dev_ok = abs(s.tsum / s.tw - self.calib.offset_s) <= self.cfg.max_offset_dev_ratio * self.calib.delay_amp_s
+        if not dev_ok:
+            state = "calibration_mismatch"
+        elif alt is not None:
             state = "ambiguous"
         elif exc < self.cfg.min_excite_deg:
             state = "insufficient_motion"

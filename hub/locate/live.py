@@ -12,6 +12,9 @@ Only calls the A8 estimator's public API; it does not change hub/locate's other 
   (recentring shifts it).
 - state: tracking while the stream is heard, last_seen after LAST_SEEN_S of silence, lost after
   LOST_S. last_observed_us is when the stream was last heard, not the latest hop.
+- Withheld bearings: when the estimator reports model_mismatch (level) or calibration_mismatch (tdoa),
+  the Source has bearing_deg None and bearing_conf 0. Turn those gates on with LocateConfig(max_resid_chi2,
+  min_fit_gain) and PairConfig(max_offset_dev_ratio); see hub/locate/TUNING.md.
 - method: "level" (default) uses the head-shadow level estimator (A8). "tdoa" uses the
   inter-mic delay of each stream's two mic images plus head yaw (pair.py), calibrated per device;
   experimental, for closely spaced mics such as the Quest 3S, where "level" fails.
@@ -40,8 +43,13 @@ TDOA_WIN, TDOA_HOP = 1024, 800  # 64 ms frames every 50 ms at 16 kHz
 
 class LiveLocator:
     def __init__(self, ingest, cfg: LocateConfig | None = None, method: str = "level",
-                 calib: PairCalibration | None = None, pair_cfg: PairConfig | None = None):
+                 calib: PairCalibration | None = None, pair_cfg: PairConfig | None = None,
+                 mic_channels: tuple | None = None):
         assert method in ("level", "tdoa")
+        # mic_channels: which delivered mic channels to use, in order (default: the first M for "level",
+        # the first two for "tdoa"). The 4-channel Quest mode delivers sound only on 0 and 1, and in the
+        # measured take channel 0 was 15-29 dB weaker than 1 in the speech bands.
+        self.mic_channels = tuple(mic_channels) if mic_channels is not None else None
         self.ingest, self.cfg, self.method, self.pair_cfg = ingest, cfg or LocateConfig(), method, pair_cfg
         self.calib = (calib or PairCalibration.default()) if method == "tdoa" else None
         if self.calib is not None and self.calib.delay_method != "gcc":
@@ -98,7 +106,9 @@ class LiveLocator:
                     if self.method == "level":
                         # the headset may deliver more mic channels than the estimator models (the Quest app asks for 4
                         # native channels first): use the first M, the same two the delay path already uses
-                        if lv.ndim == 2 and lv.shape[0] > self.est.M:
+                        if lv.ndim == 2 and self.mic_channels is not None:
+                            lv = lv[list(self.mic_channels)]
+                        elif lv.ndim == 2 and lv.shape[0] > self.est.M:
                             lv = lv[:self.est.M]
                         self.est.add_levels(key, t_us / 1e6, lv, float(w))
                     if w > ACTIVE_MIN:
@@ -120,7 +130,8 @@ class LiveLocator:
         and kept only for the sharper half of the GCC peaks."""
         if c.mic_audio.shape[0] < 2 or not np.any(c.mic_audio):
             return
-        t, tau, sharp = frame_delays(c.mic_audio[:2].T, 16000, TDOA_WIN, TDOA_HOP, self.calib.max_tau_s)
+        pair = c.mic_audio[list(self.mic_channels[:2])] if self.mic_channels else c.mic_audio[:2]
+        t, tau, sharp = frame_delays(pair.T, 16000, TDOA_WIN, TDOA_HOP, self.calib.max_tau_s)
         if len(t) == 0:
             return
         t_us = c.start_ts_us + t * 1e6
