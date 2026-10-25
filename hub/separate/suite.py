@@ -27,6 +27,7 @@ from .live import SR, LiveSeparator
 from .score import run_session, sisdr
 
 DUR = 12.0
+SIM_MERGE_ILD_DB = 4.5
 SPEECH_RMS = 0.05
 
 
@@ -144,7 +145,8 @@ def main():
     a = ap.parse_args()
     from .models import SoundLabeler, VoiceSeparator
 
-    live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler())
+    # The simulator's ear-level mics: the one-talker merge threshold calibrated for them.
+    live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler(), merge_ild_db=SIM_MERGE_ILD_DB)
     ids = [int(x) for x in a.only.split(",")] if a.only else list(SCENES)
     results = {}
     for sid in ids:

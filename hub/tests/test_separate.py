@@ -148,7 +148,7 @@ def test_direction_gate_merges_one_source_split_in_two():
     rng2 = np.random.default_rng(3)
     v = rng2.standard_normal(SR * 4).astype(np.float32) * 0.1
     x = np.stack([v, 0.3 * v], axis=1)  # one source on the left: same level difference everywhere
-    live = LiveSeparator(SplitOracle())
+    live = LiveSeparator(SplitOracle(), merge_ild_db=4.5)
     est, _ = run(live, x)
     loud, quiet = sorted([est["s1"], est["s2"]], key=lambda e: -np.sum(e**2))
     assert live.last_gates["merged"] and np.sum(quiet**2) == 0
@@ -170,7 +170,7 @@ def test_direction_gate_keeps_two_sources_from_different_directions():
             return np.stack([0.65 * a[i : i + len(x)], 0.65 * b[i : i + len(x)]])
 
     x = np.stack([a + 0.3 * b, 0.3 * a + b], axis=1)  # a on the left, b on the right
-    live = LiveSeparator(TwoOracle())
+    live = LiveSeparator(TwoOracle(), merge_ild_db=4.5)
     run(live, x)
     assert not live.last_gates["merged"] and live.last_gates["ild_diff_db"] > live.merge_ild_db
 
@@ -183,7 +183,7 @@ def test_merged_voice_stays_in_one_stream_across_a_pause():
     a = rng2.standard_normal(SR * 3).astype(np.float32) * 0.1
     left = np.concatenate([a, np.zeros(SR, np.float32), a])
     x = np.stack([left, 0.3 * left], axis=1)
-    est, _ = run(LiveSeparator(SplitOracle()), x)
+    est, _ = run(LiveSeparator(SplitOracle(), merge_ild_db=4.5), x)
     e = {k: np.sum(est[k] ** 2) for k in ("s1", "s2")}
     assert min(e.values()) == 0
 
@@ -204,3 +204,34 @@ def test_ild_diff_is_per_band_average_not_sum():
     E[:, 0, lo | hi] += 1e-3                       # each half leaks a little into the other band
     E[:, 1, lo | hi] += 1e-3 * 10 ** (3 / 10)      # with the same 3 dB ILD
     assert LiveSeparator._ild_diff(E, f) < 1.0
+
+
+def test_gate_is_off_by_default():
+    assert LiveSeparator(OracleSeparator(), win_s=2.0).merge_ild_db == 0
+
+
+def test_faint_leftover_does_not_pull_a_voice_into_the_empty_slot():
+    """Live bug: one talker alone (slot 2 holds only a faint copy of them), then a second talker
+    starts. The first talker must stay in their slot."""
+    rng2 = np.random.default_rng(7)
+    you = rng2.standard_normal(SR * 6).astype(np.float32) * 0.1
+    other = rng2.standard_normal(SR * 6).astype(np.float32) * 0.03
+    other[: SR * 3] = 0
+
+    class Live:
+        n_out = 2
+        pos = 0
+
+        def __call__(self, x):
+            i = self.pos
+            self.pos += SR
+            y, o = you[i : i + len(x)], other[i : i + len(x)]
+            if not o.any():                      # alone: slot 1 = you, slot 2 = faint copy of you
+                return np.stack([y, 1e-3 * y])
+            return np.stack([o, y])              # the separator now puts you second
+
+    x = np.stack([you + other, you + other], axis=1)
+    est, _ = run(LiveSeparator(Live(), win_s=2.0), x)
+    n = len(est["s1"])
+    assert sisdr(est["s1"][: 3 * SR], you[: 3 * SR]) > 20
+    assert sisdr(est["s1"][3 * SR : n], you[3 * SR : n]) > 10   # still you after the onset
