@@ -26,6 +26,7 @@ namespace Cocktail.Stream
         /// <summary>Hub events decoded on the network thread (SourcesUpdated, StateChanged, TargetUpdated,
         /// AlertFired, ReplayReady, Metrics). HubClient drains this on the main thread.</summary>
         public readonly ConcurrentQueue<object> IncomingEvents = new ConcurrentQueue<object>();
+        const int MaxBacklog = 512;   // about 50 s of updates at 10 Hz; HubClient.Update normally empties this every frame
 
         /// <summary>Audio-out frame, invoked on the network thread. payload = s16le interleaved (layers: ch0 inner, ch1 outer).
         /// Buffer is reused after the call returns.</summary>
@@ -114,7 +115,9 @@ namespace Cocktail.Stream
         void OnEventText(string json)
         {
             var ev = HubEventParser.Parse(json);
-            if (ev != null) IncomingEvents.Enqueue(ev);
+            if (ev == null) return;
+            IncomingEvents.Enqueue(ev);
+            if (IncomingEvents.Count > MaxBacklog) IncomingEvents.TryDequeue(out _);   // bounded: the oldest event goes first
         }
 
         void OnAudioOutBinary(byte[] buf, int count)

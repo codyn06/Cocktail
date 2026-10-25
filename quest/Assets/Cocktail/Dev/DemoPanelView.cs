@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Cocktail.Dev;
 using TMPro;
 using UnityEngine;
 
@@ -43,9 +44,9 @@ namespace Cocktail.Ui
             t = theme;
             UiLayers.Base = UiLayers.Banner;
             _plate = new SpriteBox(transform, "Plate", UiAssets.Plate, 0);
-            _readout = UiText.Make(transform, "Readout", t, 0.018f, TextAlignmentOptions.TopLeft, 2f * Bw + Gap, 0.2f, 5);
+            _readout = UiText.Make(transform, "Readout", t, 0.018f, TextAlignmentOptions.TopLeft, 2f * Bw + Gap, 0.34f, 5);
             gameObject.name = "DemoPanel";
-            AddButton("DEMO", () => SetOpen(!_open), 0, 2, -1, true);
+            AddButton("DEV", () => DevMode.Toggle(), 0, 2, -1, true);   // the chip is the DevMode switch; CocktailUI opens and closes the panel to match
             Layout();
         }
 
@@ -79,7 +80,7 @@ namespace Cocktail.Ui
         {
             // the plate runs from just under the chip to below the readout lines
             float lastRowY = RowY(new Btn { row = _rows - 1 });
-            float top = -Bh * 0.5f - Gap, bottom = lastRowY - Bh * 0.5f - 0.2f;
+            float top = -Bh * 0.5f - Gap, bottom = lastRowY - Bh * 0.5f - 0.34f;
             _plate.SetActive(_open);
             if (_open)
             {

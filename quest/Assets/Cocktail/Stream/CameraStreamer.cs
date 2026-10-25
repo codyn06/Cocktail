@@ -85,6 +85,7 @@ namespace Cocktail.Stream
             Active = false;
             if (_pcaHost != null) Destroy(_pcaHost);
             _pcaHost = null; _pca = null; _setupStarted = false;
+            CameraAvailable = false; Resolved = false;   // set up again on the next enable
             if (_small != null) { _small.Release(); Destroy(_small); _small = null; }
         }
 

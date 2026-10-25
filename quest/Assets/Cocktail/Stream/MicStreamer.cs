@@ -58,6 +58,7 @@ namespace Cocktail.Stream
         public float InterChannelCorrelation = float.NaN; // ch0/ch1 correlation over ~1 s; ~1.0 = identical (not a real array)
 
         bool _started;
+        float _nextStartAt;   // a failed start is retried every 3 s, not every frame
         bool _permWarned;
         float _startedAt;
         bool _gotNativeData;
@@ -94,6 +95,7 @@ namespace Cocktail.Stream
         {
             if (!_started)
             {
+                if (Time.realtimeSinceStartup < _nextStartAt) return;
                 if (!PermissionHelper.Ensure(PermissionHelper.RecordAudio))
                 {
                     if (PermissionHelper.Denied(PermissionHelper.RecordAudio) && !_permWarned)
@@ -107,6 +109,7 @@ namespace Cocktail.Stream
                     return;
                 }
                 StartBackend();
+                if (!_started) _nextStartAt = Time.realtimeSinceStartup + 3f;
                 return;
             }
 

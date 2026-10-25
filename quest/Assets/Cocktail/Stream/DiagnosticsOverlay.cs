@@ -1,5 +1,6 @@
 using System.Text;
 using Cocktail.Audio;
+using Cocktail.Dev;
 using Cocktail.UserInput;
 using UnityEngine;
 
@@ -51,15 +52,19 @@ namespace Cocktail.Stream
             mr.sharedMaterial = font.material;
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             mr.receiveShadows = false;
+            go.SetActive(false);   // LateUpdate shows it, and only while DevMode is on
         }
+
+        float _nextRigScan;
 
         void LateUpdate()
         {
-            if (rig == null) rig = FindFirstObjectByType<OVRCameraRig>();
+            if (rig == null && Time.unscaledTime >= _nextRigScan) { _nextRigScan = Time.unscaledTime + 1f; rig = FindFirstObjectByType<OVRCameraRig>(); }
             if (rig == null) return;
-            if (OVRInput.GetDown(OVRInput.Button.SecondaryThumbstick, OVRInput.Controller.RTouch)) visible = !visible;
-            _text.gameObject.SetActive(visible);
-            if (!visible) return;
+            if (DevMode.On && OVRInput.GetDown(OVRInput.Button.SecondaryThumbstick, OVRInput.Controller.RTouch)) visible = !visible;
+            bool show = visible && DevMode.On;
+            _text.gameObject.SetActive(show);
+            if (!show) return;
 
             Transform head = rig.centerEyeAnchor;
             Vector3 target = head.position + head.right * offsetFromHead.x + head.up * offsetFromHead.y + head.forward * offsetFromHead.z;
