@@ -1,0 +1,18 @@
+{
+ "example": true,
+ "note": "Hand-made numbers in the shape of `locate.bench --json` (only the fields results_table.py reads). Not measurements.",
+ "summaries": {
+  "level": {
+   "n": 6, "n_invalid": 1, "median_err": 31.0, "p90_err": 80.0,
+   "by_region": {"front": [14, 22, 40], "side": [30], "behind": [35, 60]},
+   "fb_right_rate": 0.75, "n_fb": 4, "lock_s": [4.1, null, 5.0, null, 2.9, 6.2], "locked_3s_rate": 0.17,
+   "ece": 0.21, "hit_rate_when_90": 0.5, "n_90": 12, "final_mean_conf": 0.6, "final_hit_rate": 0.5
+  },
+  "tdoa-loo": {
+   "n": 11, "n_invalid": 1, "median_err": 14.0, "p90_err": 38.0,
+   "by_region": {"front": [6, 9, 12, 20, 11], "side": [10, 35], "behind": [18, 22, 31, 40]},
+   "fb_right_rate": 0.89, "n_fb": 9, "lock_s": [1.2, 2.0, 2.5, null, 3.4, 1.8, 2.2, 2.9, 1.5, 2.7, 3.8], "locked_3s_rate": 0.73,
+   "ece": 0.12, "hit_rate_when_90": 0.8, "n_90": 40, "final_mean_conf": 0.7, "final_hit_rate": 0.64
+  }
+ }
+}

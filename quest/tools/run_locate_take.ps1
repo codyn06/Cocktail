@@ -11,6 +11,9 @@ each way, three beeps = stop. Then it scores the take (PASS/FAIL per check).
 Run from the repo root:
     powershell -ExecutionPolicy Bypass -File quest/tools/run_locate_take.ps1
 Options: -Truths 0,90,180,-90   -Quiet (no spoken prompts; just wait)   -Seconds 28
+Coverage-grid labels (stored in meta.json for eval/dataset_check.py; all optional):
+    -Distance 1.0 (source distance in meters)   -Motion small|normal|large   -Stimulus pink|speech
+    -Stimulus speech needs -StimulusWav <PCM .wav> (the script itself only generates pink noise).
 Angles: 0 = laptop straight ahead, 90 = directly on your right, 180 = behind you, -90 = on your left.
 #>
 param(
@@ -21,10 +24,41 @@ param(
     [int]$GoAt = 8,
     [int]$StopAt = 28,
     [string]$Adb = "C:\Program Files\Unity\Hub\Editor\6000.0.80f1\Editor\Data\PlaybackEngines\AndroidPlayer\SDK\platform-tools\adb.exe",
-    [int]$Port = 8765
+    [int]$Port = 8765,
+    [double]$Distance = [double]::NaN,                      # meters; NaN = not labeled
+    [ValidateSet("", "small", "normal", "large")][string]$Motion = "",
+    [ValidateSet("", "pink", "speech")][string]$Stimulus = "",
+    [string]$StimulusWav = ""                                # PCM wav to loop instead of the generated pink noise
 )
 
 $ErrorActionPreference = "Stop"
+# Check the labels and the stimulus file before anything starts (recorder, headset app): a mistake
+# found later would kill the hidden recorder after the headset app is already running.
+$callerDir = (Get-Location).Path     # relative -StimulusWav paths are taken from where the user ran this
+if ($StimulusWav -and $Stimulus -eq "pink") { throw "-StimulusWav with -Stimulus pink would mislabel the take; use -Stimulus speech (or omit -Stimulus)." }
+if ($Stimulus -eq "speech" -and -not $StimulusWav) { throw "-Stimulus speech needs -StimulusWav <PCM .wav>: this script only generates pink noise." }
+$Motion = $Motion.ToLower(); $Stimulus = $Stimulus.ToLower()   # ValidateSet ignores case, the recorder's argparse does not
+$userWav = $null
+if ($StimulusWav) {
+    $cand = if ([System.IO.Path]::IsPathRooted($StimulusWav)) { $StimulusWav } else { Join-Path $callerDir $StimulusWav }
+    if (-not (Test-Path -LiteralPath $cand -PathType Leaf)) { throw "-StimulusWav not found: $cand" }
+    $userWav = (Resolve-Path -LiteralPath $cand).Path
+    # SoundPlayer.Load() alone accepts a non-wav file (it only fails at Play), so read the header too:
+    # RIFF/WAVE with a PCM (format tag 1) 'fmt ' chunk, which is all SoundPlayer can play.
+    $fs = [System.IO.File]::OpenRead($userWav)
+    try { $hdr = New-Object byte[] ([Math]::Min(4096, $fs.Length)); [void]$fs.Read($hdr, 0, $hdr.Length) } finally { $fs.Dispose() }
+    $isPcm = $false
+    if ($hdr.Length -ge 20 -and [Text.Encoding]::ASCII.GetString($hdr, 0, 4) -eq "RIFF" -and [Text.Encoding]::ASCII.GetString($hdr, 8, 4) -eq "WAVE") {
+        for ($o = 12; $o + 10 -le $hdr.Length; ) {
+            $id = [Text.Encoding]::ASCII.GetString($hdr, $o, 4); $len = [BitConverter]::ToUInt32($hdr, $o + 4)
+            if ($id -eq "fmt ") { $isPcm = ([BitConverter]::ToUInt16($hdr, $o + 8) -eq 1); break }
+            $o += 8 + $len + ($len % 2)
+        }
+    }
+    if (-not $isPcm) { throw "-StimulusWav is not a PCM .wav that Windows can play (need RIFF/WAVE with a PCM fmt chunk): $userWav" }
+    $probe = New-Object System.Media.SoundPlayer $userWav
+    try { $probe.Load() } catch { throw "-StimulusWav could not be loaded by Windows: $userWav ($($_.Exception.Message))" }
+}
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $root
 $pkg = "com.DefaultCompany.quest"
@@ -45,9 +79,15 @@ x = np.fft.irfft(W / np.sqrt(f), n); x = np.clip(x / x.std() * 0.30, -0.98, 0.98
 with wave.open(sys.argv[1], "wb") as o:
     o.setnchannels(1); o.setsampwidth(2); o.setframerate(44100); o.writeframes((x * 32767).astype("<i2").tobytes())
 '@
-$gen | Set-Content -Encoding ascii "$env:TEMP\gen_pink.py"
-uv run --project hub python "$env:TEMP\gen_pink.py" $noiseWav
+if ($userWav) { $noiseWav = $userWav } else {
+    $gen | Set-Content -Encoding ascii "$env:TEMP\gen_pink.py"
+    uv run --project hub python "$env:TEMP\gen_pink.py" $noiseWav
+}
 $player = New-Object System.Media.SoundPlayer $noiseWav
+$labelArgs = @()
+if (-not [double]::IsNaN($Distance)) { $labelArgs += @("--distance-m", $Distance) }
+if ($Motion) { $labelArgs += @("--motion", $Motion) }
+if ($Stimulus) { $labelArgs += @("--stimulus", $Stimulus) }
 
 # adb can hang when two adb servers fight over port 5037; run it with a timeout and restart the server once.
 function AdbRun([string[]]$a, [int]$timeoutSec = 15) {
@@ -82,7 +122,8 @@ foreach ($truth in $Truths) {
     Start-Sleep -Seconds 5
     Say "Sit still, face front. Recording starts now. Wait for two beeps, then turn only your head slowly left and right. Three beeps means stop."
 
-    $rec = Start-Process uv -ArgumentList "run","--project","hub","python","quest/tools/record_session.py","--out",$out,"--truth",$truth,"--noise-until",$NoiseUntil,"--go-at",$GoAt,"--stop-at",$StopAt -WindowStyle Hidden -PassThru
+    $recArgs = @("run","--project","hub","python","quest/tools/record_session.py","--out",$out,"--truth",$truth,"--noise-until",$NoiseUntil,"--go-at",$GoAt,"--stop-at",$StopAt) + $labelArgs
+    $rec = Start-Process uv -ArgumentList $recArgs -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds 5
     # start the headset app if it is not running (if it is, it reconnects to the recorder by itself;
     # restarting it would reset its clock mid-recording)

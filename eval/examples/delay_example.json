@@ -1,0 +1,8 @@
+{
+ "example": true,
+ "note": "Hand-made numbers in the shape of `delay_test.py --json`. Not measurements.",
+ "mode": "mock", "n_trials": 40, "n_valid": 38, "n_missed": 2,
+ "median_ms": 128.0, "p90_ms": 151.0, "worst_ms": 190.0, "min_ms": 110.0, "jitter_ms": 12.0,
+ "budget_median_ms": 150.0, "budget_worst_ms": 300.0, "pass": true, "fail_reasons": [],
+ "evidence": "MOCKED: example numbers"
+}
