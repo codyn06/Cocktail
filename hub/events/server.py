@@ -37,11 +37,13 @@ def _snapshot(locator):
         detached = copy.copy(locator)
         detached.latest = dict(locator.latest)
         detached.last_active_us = dict(locator.last_active_us)
+        detached.identity = dict(getattr(locator, "identity", {}))
         detached.lock = threading.Lock()
         epoch = locator._pose_epoch
     finally:
         locator.lock.release()
-    return epoch, detached.sources()
+    ident = detached.identities() if hasattr(detached, "identities") else None
+    return epoch, detached.sources(), ident
 
 
 @dataclass
@@ -137,6 +139,7 @@ class EventsState:
         """Publish one tick; explicit monotonic seconds support deterministic replay."""
         now, yaw = self._clock(time.monotonic() if mono is None else mono)
         fresh = []
+        ident = None
         task = self._snapshot_task
         if task is not None and task.done():
             self._snapshot_task = None
@@ -146,6 +149,7 @@ class EventsState:
                 log.exception("locator snapshot failed")
                 snapshot = None
             if snapshot is not None and snapshot[0] == self._epoch:
+                ident = snapshot[2] if len(snapshot) > 2 else None
                 for source in snapshot[1]:
                     stamp = source.last_observed_us
                     if stamp <= self._seen.get(source.source_id, -1):
@@ -157,8 +161,10 @@ class EventsState:
                         fresh.append(source)
         if self._snapshot_task is None and self.locator is not None:
             self._snapshot_task = asyncio.create_task(asyncio.to_thread(_snapshot, self.locator))
+        # Acoustic ids come from the same detached snapshot as the sources; opt-in (locator has identities).
+        extra = {"identity": ident} if ident is not None and hasattr(self.locator, "identities") else {}
         self.latest = p.SourcesUpdated(
-            device_ts_us=now, sources=self.tracker.update(now, fresh, head_yaw_deg=yaw))
+            device_ts_us=now, sources=self.tracker.update(now, fresh, head_yaw_deg=yaw, **extra))
         self.selection.reconcile(self.tracker)
         payload = self.latest.model_dump_json()
         for queue in tuple(self.clients):
