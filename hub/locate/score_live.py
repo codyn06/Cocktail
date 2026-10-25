@@ -87,16 +87,22 @@ def run(s: Session, live: LiveSeparator, method: str = "level", calib=None, pair
     return {k: np.concatenate(v) for k, v in est.items()}, trace, loc
 
 
-def score(s: Session, live: LiveSeparator, tol_deg: float = 20.0, method: str = "level", calib=None,
-          pair_cfg=None) -> dict:
-    est, trace, loc = run(s, live, method, calib, pair_cfg)
+def assign_streams(s: Session, est: dict) -> list[str]:
+    """Stream id matched to each true source, in s.meta["sources"] order. Oracle assignment by
+    separation quality (as in separate.score). est: stream id -> separated audio."""
     srcs = s.meta["sources"]
     refs = {q["name"]: wavfile.read(s.path / q["stem"])[1].astype(np.float32) for q in srcs}
     n = min(len(next(iter(est.values()))), *(len(v) for v in refs.values()))
     names = list(refs)
-    # Oracle assignment of streams to true sources by separation quality (as in separate.score).
-    best = max(itertools.permutations(list(est), len(names)),
-               key=lambda pm: sum(sisdr(est[sid][:n], refs[nm][:n]) for sid, nm in zip(pm, names)))
+    return list(max(itertools.permutations(list(est), len(names)),
+                    key=lambda pm: sum(sisdr(est[sid][:n], refs[nm][:n]) for sid, nm in zip(pm, names))))
+
+
+def score(s: Session, live: LiveSeparator, tol_deg: float = 20.0, method: str = "level", calib=None,
+          pair_cfg=None) -> dict:
+    est, trace, loc = run(s, live, method, calib, pair_cfg)
+    srcs = s.meta["sources"]
+    best = assign_streams(s, est)
     final = loc.estimates()
     out = {}
     for sid, q in zip(best, srcs):
