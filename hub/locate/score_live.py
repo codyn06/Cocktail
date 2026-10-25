@@ -1,10 +1,16 @@
 """Scoring test for live direction finding (task C4) on a simulated session with ground truth.
 
   uv run --group gpu python -m locate.score_live sessions/synth_2talk_music [--no-labels]
+  uv run python -m locate.score_live sessions/two-talkers --oracle --locate-method tdoa \
+      --calib sessions/pairsim-calib.json        # no GPU: pairsim scene, true sources as the separator
 
 Steps the session through LiveSeparator + LiveLocator exactly as live (poses arrive up to each
 window's end), then reports, per true source, the matched stream's final world bearing, error,
-confidence and state, plus how long until the bearing first stayed within 20 degrees.
+confidence and state, plus how long until the bearing first stayed within --tol degrees.
+
+--oracle replaces the separation model with the session's ground-truth stems (simulated sessions
+only): the masks, per-stream mic images and locator are the live code, so it scores locating
+each separated stream with separation taken out of the error (an upper bound for the live hub).
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+from pathlib import Path
 
 import numpy as np
 from scipy.io import wavfile
@@ -24,11 +31,38 @@ from separate.score import sisdr
 
 from .estimator import wrap180
 from .live import LiveLocator
+from .pair import PairCalibration
 
 
-def run(s: Session, live: LiveSeparator):
+class OracleSeparator:
+    """Stands in for the voice separator: returns the true stems for each window, in order.
+    LiveSeparator calls it once per window, stepping by its hop from the start of the session.
+    Like the voice separator it has at least two outputs (a silent one if there is one stem)."""
+
+    def __init__(self, stems: np.ndarray, hop: int, win: int):
+        if len(stems) < 2:
+            stems = np.concatenate([stems, np.zeros((2 - len(stems), stems.shape[1]), stems.dtype)])
+        self.stems, self.hop, self.win, self.k = stems, hop, win, 0
+        self.n_out = len(stems)
+
+    def __call__(self, mono: np.ndarray) -> np.ndarray:
+        a = self.k * self.hop
+        self.k += 1
+        out = np.zeros((self.n_out, self.win), np.float32)
+        seg = self.stems[:, a:a + self.win]
+        out[:, :seg.shape[1]] = seg
+        return out
+
+
+def oracle_separator(s: Session, win_s: float = 2.0, hop_s: float = 1.0) -> OracleSeparator:
+    refs = [wavfile.read(s.path / q["stem"])[1].astype(np.float32) for q in s.meta["sources"]]
+    n = max(len(r) for r in refs)
+    return OracleSeparator(np.stack([np.pad(r, (0, n - len(r))) for r in refs]), int(hop_s * SR), int(win_s * SR))
+
+
+def run(s: Session, live: LiveSeparator, method: str = "level", calib=None):
     st = IngestState()
-    loc = LiveLocator(st)
+    loc = LiveLocator(st, method=method, calib=calib)
     r = Resampler(s.sample_rate, s.audio.shape[1])
     x = r(s.audio)[r.delay :]
     poses = iter(s.poses)
@@ -53,8 +87,8 @@ def run(s: Session, live: LiveSeparator):
     return {k: np.concatenate(v) for k, v in est.items()}, trace, loc
 
 
-def score(s: Session, live: LiveSeparator, tol_deg: float = 20.0) -> dict:
-    est, trace, loc = run(s, live)
+def score(s: Session, live: LiveSeparator, tol_deg: float = 20.0, method: str = "level", calib=None) -> dict:
+    est, trace, loc = run(s, live, method, calib)
     srcs = s.meta["sources"]
     refs = {q["name"]: wavfile.read(s.path / q["stem"])[1].astype(np.float32) for q in srcs}
     n = min(len(next(iter(est.values()))), *(len(v) for v in refs.values()))
@@ -80,16 +114,25 @@ def main():
     ap.add_argument("session")
     ap.add_argument("--no-labels", action="store_true")
     ap.add_argument("--tol", type=float, default=20.0)
+    ap.add_argument("--locate-method", choices=["level", "tdoa"], default="level")
+    ap.add_argument("--calib", type=Path, default=None, help="tdoa calibration JSON (default: quest3s)")
+    ap.add_argument("--oracle", action="store_true", help="ground-truth stems instead of the separation model")
     a = ap.parse_args()
-    from separate.models import SoundLabeler, VoiceSeparator
-
-    res = score(Session.load(a.session), LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler()),
-                a.tol)
+    s = Session.load(a.session)
+    calib = PairCalibration.load(a.calib) if a.calib else None
+    if a.oracle:
+        live = LiveSeparator(oracle_separator(s), None)
+    else:
+        from separate.models import SoundLabeler, VoiceSeparator
+        live = LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler())
+    res = score(s, live, a.tol, a.locate_method, calib)
     for nm, r in res.items():
         ok = "PASS" if r["error_deg"] <= a.tol else "FAIL"
         print(f"{nm:14s} -> {r['stream']}  truth {r['truth_deg']:7.1f}  got {r['world_deg']:7.1f}  "
               f"error {r['error_deg']:5.1f} deg [{ok}]  conf {r['confidence']:.2f}  {r['state']}  "
               f"stable after {r['stable_after_s']} s")
+    ok = all(r["error_deg"] <= a.tol for r in res.values())
+    print(f"all {len(res)} sources within {a.tol:.0f} deg: {'PASS' if ok else 'FAIL'}")
     print(json.dumps(res))
 
 
