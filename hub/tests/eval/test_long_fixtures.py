@@ -270,3 +270,43 @@ def test_oracle_segments_are_self_consistent():
         scene = F.build_scene(name)
         segs = F.oracle_segments(scene)
         assert LM.total(LM.merge((s.start, s.end) for s in segs)) == LM.total(LM.union_of(scene.ground_truth.speaker_active))
+
+
+def run_branch(scene, start, **kw):
+    audio, frames, vc = chunk_inputs(scene, start, start + 64_000)
+    m = F.make_speech_models(scene)
+    return run_speech_branch(audio.astype(np.float32), frames, 25.0, vc.boxes_by_track, separator=m.separator,
+                             scorer=m.scorer, tse=m.tse, **kw)
+
+
+def test_empty_slots_read_as_silent_not_as_phantom_voices():
+    scene = F.pause_return()                                   # nobody speaks in [24, 28); only A in [0, 4)
+    res = run_branch(scene, 24 * 16_000)
+    assert res.info["n_suspected_talkers"] == 0
+    assert all(np.sqrt(np.mean(v ** 2)) < 1e-3 for v in res.streams.values()) and set(res.streams) == {"voice_0", "voice_1"}
+    notes = [c.note for a in res.associations for c in a.components]
+    assert notes.count("voice stream near-silent") == 2
+    assert all(a.visibility == "unknown" and a.status == "unmatched" for a in res.associations)
+    one = run_branch(scene, 0)
+    assert one.info["n_suspected_talkers"] == 1
+    st = {t: e.status for t, (_, e) in one.selection.items()}
+    assert st["trk_pA"] == "ok" and st["trk_pB"] == "unavailable"
+    notes = sorted(c.note for a in one.associations for c in a.components if a.status == "unmatched")
+    assert "voice stream near-silent" in " ".join(notes)       # the empty slot, whichever index the permutation put it at
+    two = run_branch(F.slot_swap_every_chunk(), 3 * 32_000)
+    assert two.info["n_suspected_talkers"] == 2
+
+
+def test_silent_bystander_stays_inactive_with_the_activity_gate():
+    scene = F.silent_bystander()
+    res = run_branch(scene, 32_000, activity_gate=True)        # A speaking [2, 6); B never speaks
+    sel = {t: (s, e.status, e.reason) for t, (s, e) in res.selection.items()}
+    assert sel["trk_pA"][1] == "ok", sel
+    assert sel["trk_pB"][0] is None and sel["trk_pB"][1] == "unavailable", sel
+    assert "trk_pB" not in res.tse and res.info["n_suspected_talkers"] == 1
+
+
+def test_contract_classes_are_the_pipelines_own():
+    assert F.AvMap is C.AvMap and F.SpeechModels is C.SpeechModels and F.VisualChunk is C.VisualChunk
+    assert F.make_speech_models(F.pause_return()).revisions == {"fake_models": "long_fixtures-v1"}
+    assert isinstance(F.pause_return().source().av_map, C.AvMap)

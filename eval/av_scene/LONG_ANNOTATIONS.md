@@ -75,6 +75,7 @@ report = A.score_annotations(tl, ann, track_map={"sam3_image:3": "p2"}, guard_sa
 report["metrics"], report["gate"]["passed"], report["unmapped_tracks"]
 ```
 
-`gate.provisional` is always true: the floors (`long_metrics.GATES`) are the team's proposal, fixed before any model
-run. Report both refusal precision and recall; refusing everything cannot pass because active-speaker recall and
+`gate.provisional` is always true: only the 0.02 silent-bystander ceiling comes from the Phase 4 spec; the 0.80
+floors and the 0.05 wrong-person ceiling in `long_metrics.GATES` are placeholders awaiting the orchestrator's
+confirmation. Report both refusal precision and recall; refusing everything cannot pass because active-speaker recall and
 refusal precision both collapse.

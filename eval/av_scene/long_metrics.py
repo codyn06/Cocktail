@@ -13,12 +13,16 @@ Vocabulary
 A segment is *attributed* when association_status == "matched", it names a track and it carries no refusal_reason.
 Everything else (ambiguous / unmatched / rejected / uncovered time) counts as "no attribution claimed".
 
-Provisional gate floors (see `GATES`) were fixed before any model run; they are the team's proposal, not measurements.
+Gate numbers (see `GATES`): only the 0.02 silent-bystander ceiling comes from the Phase 4 spec. The 0.80 floors
+(active-speaker recall, refusal precision, refusal recall) and the 0.05 wrong-person ceiling are PLACEHOLDERS chosen
+by the eval worker before any model run; they await orchestrator/team confirmation and the result always carries
+`provisional: true`.
 """
 
 from __future__ import annotations
 
 import bisect
+import importlib
 import importlib.util
 import json
 import sys
@@ -32,11 +36,11 @@ HUB = Path(__file__).resolve().parents[2] / "hub"
 SR16 = 16_000
 
 GATES = {
-    "active_speaker_recall_floor": 0.80,
-    "refusal_precision_floor": 0.80,
-    "refusal_recall_floor": 0.80,
-    "silent_bystander_ceiling": 0.02,     # the spec gate: highlighted silent person-time < 2 %
-    "wrong_person_rate_ceiling": 0.05,
+    "active_speaker_recall_floor": 0.80,  # placeholder, unconfirmed
+    "refusal_precision_floor": 0.80,      # placeholder, unconfirmed
+    "refusal_recall_floor": 0.80,         # placeholder, unconfirmed
+    "silent_bystander_ceiling": 0.02,     # the spec gate: highlighted silent person-time < 2 %  (SPEC)
+    "wrong_person_rate_ceiling": 0.05,    # placeholder, unconfirmed
 }
 
 Interval = tuple[int, int]
@@ -44,16 +48,22 @@ Interval = tuple[int, int]
 
 # ------------------------------------------------------------------------------------ hub module loading
 def load_hub_module(name: str):
-    """`av_scene.<name>` without importing the `av_scene` package (its __init__ configures FFmpeg DLLs).
-    Reuses an already-imported copy so class identity matches the pipeline when both are present."""
+    """`av_scene.<name>`, so class identity matches `replay/chunked.py` and the pipeline (frozen-dataclass equality and
+    isinstance would fail against a duplicate copy). Falls back to loading the file standalone when the package
+    cannot be imported; `av_scene/__init__` itself imports only stdlib (it configures FFmpeg DLL paths)."""
     full = f"av_scene.{name}"
     if full in sys.modules:
         return sys.modules[full]
+    if str(HUB) not in sys.path:
+        sys.path.insert(0, str(HUB))
+    try:
+        return importlib.import_module(full)
+    except ImportError:
+        pass
     alias = f"cocktail_hub_standalone_{name}"
     if alias in sys.modules:
         return sys.modules[alias]
-    path = HUB / "av_scene" / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(alias, path)
+    spec = importlib.util.spec_from_file_location(alias, HUB / "av_scene" / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[alias] = mod
     spec.loader.exec_module(mod)

@@ -16,7 +16,9 @@ TIME CODE (why the fakes need no chunk context)
   first 640 samples. REQUIREMENTS on the pipeline: windows start on multiples of 640 samples (default 4 s / 2 s
   chunks do) and models receive the raw window audio (no loudness normalisation that changes tone ratios, no
   crossfade, no lowpass below 8 kHz). A misaligned or filtered window raises `TimecodeError`; it never guesses.
-  `FakeSeparator.override_window_start` is an escape hatch if the pipeline cannot satisfy this.
+  `FakeSeparator.override_window_start` is an escape hatch if the pipeline cannot satisfy this. The tones are always
+  in the mock MIXTURE (about -38 dBFS in 4.5 to 7.9 kHz, also in silence): non-speech/event logic running on the mock
+  mixture sees them (run mock with events off, or ignore that band). Fake model OUTPUTS (stems, TSE) do not carry them.
 
 SCENARIOS (named, deterministic; ground truth in `scene.ground_truth`; sizes: 160x90 frames, 25 fps nominal)
   pause_return           60 s. A speaks [1,7) and [33,41): a 26 s (13-chunk) silence between, then the SAME voice must
@@ -463,11 +465,12 @@ class FakeSeparator(_SceneModel):
     start // hop_samples) so slot index is meaningless across chunks, exactly like a real separator. Speaker i
     (scene order, among those active in the window) lands in base slot i % n_slots; with more active speakers than
     slots, voices SHARE a slot (a genuine mixture: the degraded/capacity case). Every slot gets small deterministic
-    noise. perm: "alternate" (reverse each odd chunk; cyclic shift for >2 slots), "fixed", "random", a sequence of
+    noise at -70 dB by default (RMS 3e-4, under speech._voice_active's 1e-3 floor, so an EMPTY slot reads as silent,
+    not as an unowned active voice). perm: "alternate" (reverse each odd chunk; cyclic shift for >2 slots), "fixed", "random", a sequence of
     permutations cycled by chunk, or callable(chunk, n_slots) -> permutation. `calls` records each invocation."""
 
     def __init__(self, scene: SyntheticScene, n_slots: int = 2, perm="alternate", hop_samples: int = 32_000,
-                 noise_db: float = -45.0, seed: int = 0):
+                 noise_db: float = -70.0, seed: int = 0):
         super().__init__(scene)
         self.n_slots, self.perm, self.hop, self.noise_db, self.seed = n_slots, perm, hop_samples, noise_db, seed
         self.calls: list[dict] = []
@@ -536,7 +539,7 @@ class FakeTSE(_SceneModel):
     boxed person's speaker for this window (silence for a bystander), plus small noise; optional `leak_db` mixes the
     other active speakers in at that level (an imperfect extractor)."""
 
-    def __init__(self, scene: SyntheticScene, noise_db: float = -45.0, leak_db: float | None = None, seed: int = 0):
+    def __init__(self, scene: SyntheticScene, noise_db: float = -70.0, leak_db: float | None = None, seed: int = 0):
         super().__init__(scene)
         self.noise_db, self.leak_db, self.seed = noise_db, leak_db, seed
         self.calls: list[dict] = []
