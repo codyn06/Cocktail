@@ -89,13 +89,16 @@ class PipelineResult:
     speech: SpeechRunResult
 
 
-def identity_activity(metas: list[dict]) -> dict[str, list[tuple[int, int]]]:
+def identity_activity(metas: list[dict], audio_start_us: int = 0) -> dict[str, list[tuple[int, int]]]:
+    """Per-source activity in CLIP time (us from audio sample 0). Timeline segments carry common-clock times, so
+    ``audio_start_us`` is removed here; diarization windows are also clip-time and the two must agree."""
     from separate.diarization import normalize
     acts: dict[str, list] = {}
     for m in metas:
         for s in m["segments"]:
             if s["source_id"].startswith("src_") and s["stem_availability"] in ("ok", "degraded"):
-                acts.setdefault(s["source_id"], []).append((s["start_us"], s["end_us"]))
+                acts.setdefault(s["source_id"], []).append((s["start_us"] - audio_start_us,
+                                                            s["end_us"] - audio_start_us))
     return {k: normalize(v) for k, v in acts.items()}
 
 
@@ -137,20 +140,30 @@ def run_pipeline(source, providers: Providers, cfg: AvConfig, out_dir: str | Pat
         metas = [json.loads((rec.speech_dir / "meta.json").read_text(encoding="utf-8")) for rec in speech.records]
 
         # ---- anchors from identity activity; diarization is OPTIONAL evidence with an explicit status
-        activity = identity_activity(metas)
+        activity = identity_activity(metas, source.av_map.audio_start_us)
         diar = {"status": "skipped", "reason": "switches.diarization=off"}
         if cfg.switches.diarization != "off":
             from separate.diarization import compute_anchors_with_diarization
 
             from . import diar_windows
             av = diar_windows.availability()
-            pipe = providers.diarization() if (providers.diarization and av["status"] == "ok") else None
-            res = timed("diarization", lambda: diar_windows.run_windows(
-                lambda a, b: source.read_audio(runner._master(a), runner._master(b), SPEECH_SR).mean(axis=0),
-                speech.n_samples, activity, pipeline=pipe, mode=cfg.switches.diarization,
-                not_attempted_reason=f"package={av['package']} cache={av['cache']} gated_access={av['gated_access']}"))
-            diar = res.to_dict() if hasattr(res, "to_dict") else {"status": getattr(res, "status", "failed")}
-            anchors = compute_anchors_with_diarization(activity, (), cfg.anchors, res)
+            pipe, load_error = None, None
+            if providers.diarization and av["status"] == "ok":
+                try:
+                    pipe = providers.diarization()
+                except Exception as e:      # access/terms/offline at LOAD time is a runtime failure, not a skip
+                    load_error = f"{type(e).__name__}: {str(e)[:160]}"
+            if load_error:
+                diar = {"status": "failed", "reason": f"pipeline load failed: {load_error}"}
+                anchors = compute_anchors(activity, (), cfg.anchors) if activity else {}
+            else:
+                res = timed("diarization", lambda: diar_windows.run_windows(
+                    lambda a, b: source.read_audio(runner._master(a), runner._master(b), SPEECH_SR).mean(axis=0),
+                    speech.n_samples, activity, pipeline=pipe, mode=cfg.switches.diarization,
+                    not_attempted_reason=f"package={av['package']} cache={av['cache']} "
+                                         f"gated_access={av['gated_access']}"))
+                diar = res.to_dict() if hasattr(res, "to_dict") else {"status": getattr(res, "status", "failed")}
+                anchors = compute_anchors_with_diarization(activity, (), cfg.anchors, res)
         else:
             anchors = compute_anchors(activity, (), cfg.anchors) if activity else {}
         speakers = [SpeakerTrack(speaker_id=k, turns_us=[tuple(i) for i in activity.get(k, [])], anchors=a.to_dict())

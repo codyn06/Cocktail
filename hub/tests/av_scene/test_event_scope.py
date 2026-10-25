@@ -223,3 +223,31 @@ def test_full_evidence_matches_and_rank_score_is_irrelevant():
     for r in out:
         assert r.attribution.status == "matched" and r.attribution.track_id == "dog:t0", r.attribution
     assert out[0].attribution.scores.keys() == out[1].attribution.scores.keys()
+
+
+# ------------------------------------------------------------------ review fixes
+def test_gated_top_ranked_candidate_does_not_hide_a_passing_one():
+    speech = (0.3 * rng.standard_normal(4 * SR)).astype(np.float32)
+    inp = _inputs()
+    inp["mix_48k"] = speech.copy()
+    clean = (0.1 * rng.standard_normal(4 * SR)).astype(np.float32)
+    fk = Fakes(score_fn=lambda i: 5.0 if i % 10 == 0 else 1.0)
+    ad = _adapters(fk, sam_audio=lambda audio, prompt, seeds: [0.8 * speech, clean][: len(seeds)])
+    r = run_event_window((0, 4), config=EventConfig(max_candidates=2, candidate_batch=2, seed_base=500),
+                         adapters=ad, other_sources=[speech], **inp)
+    assert r.candidates[0].gate and r.candidates[0].gate.startswith("leaked_from_other_source")   # top-ranked, leaked
+    assert r.candidates[1].gate is None
+    assert r.gate is None and r.stem is not None and r.chosen_seed == 501    # the passing candidate wins
+
+
+def test_control_from_a_different_location_is_not_borrowed_by_a_colliding_track_id():
+    fk = Fakes()
+    inp, ad = _pulsed(fk)
+
+    def tracker(frames, concept):
+        if frames.max() > 0:                                       # control window: SAME id "t0", other object elsewhere
+            return {"t0": [np.concatenate([np.zeros((6, 8), bool), np.ones((2, 8), bool)]) for _ in range(len(frames))]}
+        return fk.tracker(frames, concept)
+    ad = EventAdapters(sam_audio=ad.sam_audio, judge=ad.judge, clap=ad.clap, tracker=tracker)
+    r = run_event_window((0, 4), adapters=ad, control_frames=CONTROL, **inp, **SPATIAL)
+    assert r.attribution.status != "matched" and r.attribution.reason == "control_missing"

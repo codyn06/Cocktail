@@ -42,12 +42,12 @@ def pick_control_span(windows: list, length_s: float, duration_s: float, guard_s
     return (t, t + length_s) if duration_s - t >= length_s else None
 
 
-def assemble_range(records, sid: str, a16: int, b16: int) -> np.ndarray:
+def assemble_range(records, sid: str, a16: int, b16: int, margin: int = 1600) -> np.ndarray:
     """Final (stitched) audio of one speech source over [a16, b16) at 16 kHz, zeros where it has no segment.
     Reads at most the chunk entries overlapping the span."""
     out = np.zeros(b16 - a16, np.float32)
     for rec in records:
-        r0, r1 = rec.spec.own_start - 800, rec.spec.own_end          # finals may start up to half a crossfade early
+        r0, r1 = rec.spec.own_start - margin, rec.spec.own_end       # finals may start up to half a crossfade early
         if r1 <= a16 or r0 >= b16:
             continue
         got = read_arrays(rec.speech_dir, "final", "final.json").get(sid)
@@ -150,10 +150,11 @@ class EventStage:
                 m0, m1 = int(round(lo * master)), min(int(round(hi * master)), r.src.n_audio_samples)
                 mix = r.src.read_audio(m0, m1, SAM_RATE).mean(axis=0).astype(np.float32)
                 others = []
-                near = [rec for rec in speech.records if rec.spec.own_end + 800 > a16 and rec.spec.own_start - 800 < b16]
+                margin = r.f // 2 + 1
+                near = [rec for rec in speech.records if rec.spec.own_end + margin > a16 and rec.spec.own_start - margin < b16]
                 for sp in sorted({s for rec in near for s in read_arrays(rec.speech_dir, "final", "final.json")
                                   if s.startswith("src_")}):
-                    x = assemble_range(near, sp, a16, b16)
+                    x = assemble_range(near, sp, a16, b16, margin)
                     if np.any(x):
                         others.append(resample_to(x[None], SPEECH_SR, SAM_RATE)[0][: len(mix)])
                 frames, pts = self._frames(lo, hi)

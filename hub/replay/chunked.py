@@ -99,6 +99,9 @@ class TorchcodecSource:
         self.audio_rate_hz = int(md.sample_rate)
         dur = float(md.duration_seconds_from_header or 0.0)
         self.n_audio_samples = int(round(dur * self.audio_rate_hz))
+        if self.n_audio_samples <= 0:
+            raise ValueError(f"{self.path}: the container header gives no audio duration; refusing to run on an "
+                             "empty plan (re-mux the clip or pass a source with a known length)")
         self.av_map = AvMap(self.audio_rate_hz, audio_start_us=0, video_transform="container_pts")
         self._pts: list[int] | None = None
         self._ffmpeg = ffmpeg_info
@@ -240,11 +243,15 @@ class ChunkedSpeechRunner:
         self.specs = plan_chunks(self.n16, cfg.chunking.window_s, cfg.chunking.overlap_s)
         self.f = stitch_mod.crossfade_samples(cfg.chunking.crossfade_ms, SPEECH_SR)
         crossfade_check(self.f, cfg.chunking.window_s, cfg.chunking.overlap_s, SPEECH_SR)
-        (self.run_dir / "identity_spill").mkdir(parents=True, exist_ok=True)
+        self.spill_dir = cache.root / "identity_spill"
+        self.spill_dir.mkdir(parents=True, exist_ok=True)
         import av_scene.associate as _assoc, av_scene.activity_gate as _gate, av_scene.peeling as _peel
         import av_scene.continuity_windows as _cont
+        import av_scene.contracts as _contracts
+        import separate.speaker_embed as _emb
+        import who.matcher as _matcher
         self._fp = code_fingerprint(__import__(__name__, fromlist=["x"]), speech_mod, stitch_mod, _assoc, _gate,
-                                    _peel, _cont)
+                                    _peel, _cont, _contracts, _matcher, _emb)
         self._ingest_key = cache.key("ingest", inputs={"media": media_id},
                                      transform={"rate": source.audio_rate_hz, "av_map": repr(source.av_map)})
 
@@ -279,9 +286,23 @@ class ChunkedSpeechRunner:
         n = spec.win_len
         return mono[:n] if len(mono) >= n else np.pad(mono, (0, n - len(mono)))
 
+    def _vfp(self) -> str:
+        """Visual stage fingerprint: the chunk machinery plus the actual front-end implementation in use."""
+        import av_scene.contracts as _contracts
+        objs = [__import__(__name__, fromlist=["x"]), _contracts]
+        try:
+            objs.append(type(self.visual))
+        except TypeError:
+            pass
+        return code_fingerprint(*objs)
+
     def _speech_cfg(self) -> dict:
         s = self.cfg.switches
+        yp, idf = self.yaw_provider, self._identity_factory
         return {"chunking": self.cfg.chunking.__dict__, "off_axis": self.cfg.off_axis.__dict__,
+                "memory": {"max_active_identities": self.cfg.memory.max_active_identities},
+                "yaw_provider": None if yp is None else getattr(yp, "__qualname__", repr(type(yp))),
+                "identity_factory": None if idf is None else getattr(idf, "__qualname__", repr(type(idf))),
                 "switches": {k: getattr(s, k) for k in ("use_tse", "activity_gate", "offscreen_upgrade", "peel",
                                                        "identity")}}
 
@@ -289,7 +310,7 @@ class ChunkedSpeechRunner:
     def _visual_stage(self, spec: ChunkSpec, vstate: dict):
         key = self.cache.key("visual_chunk", inputs={"media": self.media_id, "chunk": str(spec.to_dict())},
                              config={"chunking": self.cfg.chunking.__dict__},
-                             upstream={"ingest": self._ingest_key}, fingerprint=self._fp,
+                             upstream={"ingest": self._ingest_key}, fingerprint=self._vfp(),
                              models=self.visual_revisions, state_in=hash_config(vstate))
 
         def produce(d: Path, meta: dict) -> None:
@@ -327,9 +348,13 @@ class ChunkedSpeechRunner:
         return None, None
 
     def _speech_stage(self, spec: ChunkSpec, vkey: str, ventry: Path, state_in: PipelineState,
-                      prev_entry: Path | None):
+                      prev_entry: Path | None, prev_key: str | None = None):
         key = self.cache.key("speech_chunk", inputs={"media": self.media_id, "chunk": str(spec.to_dict())},
-                             config=self._speech_cfg(), upstream={"ingest": self._ingest_key, "visual_chunk": vkey},
+                             config=self._speech_cfg(),
+                             upstream={"ingest": self._ingest_key, "visual_chunk": vkey,
+                                       # the predecessor's tails feed this chunk's stitched head, so its identity (not just
+                                       # the identity state) must re-key this chunk when it is recomputed differently
+                                       "prev_speech": prev_key or "none"},
                              fingerprint=self._fp, models=self.models.revisions, state_in=state_in.hash())
 
         def produce(d: Path, meta: dict) -> None:
@@ -376,7 +401,7 @@ class ChunkedSpeechRunner:
         new_ids: list[str] = []
         if sw.identity and voice_ids:
             from av_scene.continuity_windows import IdentityStore, SlotInput
-            spill = self.run_dir / "identity_spill"
+            spill = self.spill_dir
             store = (IdentityStore.from_dict(state.identity, self.models.embed, spill) if state.identity
                      else (self._identity_factory() if self._identity_factory else
                            IdentityStore(self.models.embed, max_active=self.cfg.memory.max_active_identities,
@@ -490,11 +515,12 @@ class ChunkedSpeechRunner:
         records: list[ChunkRecord] = []
         state = PipelineState()
         prev_entry: Path | None = None
+        prev_key: str | None = None
         for spec, (vkey, ventry) in zip(self.specs, visual):
-            skey, sentry = self._speech_stage(spec, vkey, ventry, state, prev_entry)
+            skey, sentry = self._speech_stage(spec, vkey, ventry, state, prev_entry, prev_key)
             state = PipelineState.read(sentry / "state_out.json")
             records.append(ChunkRecord(spec, vkey, skey, ventry, sentry))
-            prev_entry = sentry
+            prev_entry, prev_key = sentry, skey
         return SpeechRunResult(records, state, self.counters, self.n16)
 
     def run(self) -> SpeechRunResult:

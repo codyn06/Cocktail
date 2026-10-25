@@ -167,3 +167,43 @@ def test_sustained_event_is_split_into_bounded_chained_windows(tmp_path):
     # the RAM used by event stems is bounded by one window: every stem file is at most window-length
     stems = list((tmp_path / "c" / "event_window").glob("*/stem.npy"))
     assert stems and all(np.load(p, mmap_mode="r").shape[0] <= int(4.0 * 48000) + 2 for p in stems)
+
+
+def test_residual_proxy_is_stitched_without_gap_or_duplicate(base):
+    d, res, _ = base
+    audio = AudioIndex.model_validate_json((d / "out" / "audio" / "index.json").read_text())
+    spans = sorted((s.start_sample, s.start_sample + s.n_samples) for s in audio.sources["residual"].segments)
+    assert spans[0][0] == 0 and all(a1 == b0 for (_, a1), (b0, _) in zip(spans, spans[1:]))     # contiguous
+    mix = sorted((s.start_sample, s.start_sample + s.n_samples) for s in audio.sources["mixture"].segments)
+    assert spans[-1][1] == mix[-1][1]                                                           # whole clip covered
+
+
+def test_diarization_load_failure_is_failed_not_not_attempted(tmp_path, monkeypatch):
+    from av_scene import diar_windows
+    monkeypatch.setattr(diar_windows, "availability", lambda **k: {"package": True, "cache": True, "token_present": True,
+                                                                  "gated_access": "ok", "status": "ok"})
+    prov, ef = providers()
+
+    def boom():
+        raise RuntimeError("terms not accepted")
+    prov.diarization = boom
+    cfg = load_config()
+    cfg.switches.diarization = "on"
+    r = run_pipeline(fk.make_source(), prov, cfg, tmp_path / "o", media_id="syn-14.5s", run_id="d", cache_dir=tmp_path / "c")
+    assert r.manifest.long_run.diarization["status"] == "failed"
+    assert "terms not accepted" in r.manifest.long_run.diarization["reason"]
+    assert r.manifest.speakers                                              # the core pipeline still produced anchors
+    prov2, _ = providers()                                                  # no pipeline provider at all: intentional skip
+    cfg2 = load_config()
+    cfg2.switches.diarization = "on"
+    monkeypatch.setattr(diar_windows, "availability", lambda **k: {"package": False, "cache": False, "token_present": False,
+                                                                  "gated_access": "not_attempted", "status": "not_attempted"})
+    r2 = run_pipeline(fk.make_source(), prov2, cfg2, tmp_path / "o2", media_id="syn-14.5s", run_id="d2",
+                      cache_dir=tmp_path / "c")
+    assert r2.manifest.long_run.diarization["status"] == "not_attempted"
+
+
+def test_diarization_activity_is_clip_time_even_with_an_audio_offset():
+    from av_scene.run import identity_activity
+    metas = [{"segments": [{"source_id": "src_0", "stem_availability": "ok", "start_us": 5_000_000, "end_us": 7_000_000}]}]
+    assert identity_activity(metas, audio_start_us=1_500_000)["src_0"] == [(3_500_000, 5_500_000)]

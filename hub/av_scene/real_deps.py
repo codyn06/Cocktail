@@ -116,9 +116,6 @@ def real_providers(cfg: AvConfig, *, device: str = "cuda", run_tag: str = "run",
 
     def diar():
         from separate.pyannote_diar import load_pipeline
-        try:
-            return load_pipeline()
-        except RuntimeError:
-            return None
+        return load_pipeline()          # raises on gated/offline/bad token: run_pipeline records that as `failed`
 
     return Providers(visual=visual, speech=speech, events=events, diarization=diar)

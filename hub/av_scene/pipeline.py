@@ -119,19 +119,20 @@ class ResidualStage:
                 spans, proj = rs.find_unexplained_events(x, stems, master_rate, self.cfg.residual, stem_nyquist_hz=nyq)
                 proxy = proj.proxy_waveform
                 proxy = proxy[: m1 - m0] if len(proxy) >= m1 - m0 else np.pad(proxy, (0, m1 - m0 - len(proxy)))
-                np.save(d / "proxy.npy", proxy[o0 - m0:o1 - m0].astype(np.float32))
+                # keep the whole window: the exporter crossfades neighbouring windows (same stitch as the speech stems)
+                np.save(d / "proxy_win.npy", proxy.astype(np.float32))
                 own_s0 = (o0 - m0) / master_rate
                 own_s1 = (o1 - m0) / master_rate
                 keep = [dict(s, start_s=s["start_s"] + m0 / master_rate, end_s=s["end_s"] + m0 / master_rate)
                         for s in spans if s["end_s"] > own_s0 and s["start_s"] < own_s1]
                 meta.update({"stems": ids, "stem_nyquist_hz": nyq, "master_rate": master_rate,
-                             "owned_master": [o0, o1], "unexplained_spans": keep,
+                             "owned_master": [o0, o1], "window_master": [m0, m1], "unexplained_spans": keep,
                              "projection_error_db": proj.projection_error_db})
                 (d / "residual.json").write_text(json.dumps(meta, sort_keys=True), encoding="utf-8")
                 self.r.counters.chunks_computed.append(("residual", spec.index))
 
             entry, computed = self.r.cache.get_or_compute("residual_chunk", key, produce,
-                                                           required=("proxy.npy", "residual.json"))
+                                                           required=("proxy_win.npy", "residual.json"))
             if not computed:
                 self.r.counters.chunks_restored.append(("residual", spec.index))
             self.r.fault("residual:after", spec.index)

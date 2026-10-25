@@ -266,6 +266,38 @@ class EventWindowResult:
 
 
 # ------------------------------------------------------------------------------------- run
+def _union_mask(masks):
+    u = None
+    for m in masks:
+        if m is None:
+            continue
+        m = np.asarray(m, bool)
+        u = m.copy() if u is None else (u | m if u.shape == m.shape else u)
+    return u
+
+
+def match_control_tracks(event_tracks: dict, control_tracks: dict, min_iou: float = 0.3) -> dict:
+    """control track key -> event track key, greedily by union-mask IoU (one-to-one). Tracks with no overlap are
+    unmatched: the caller then has no control for that event track."""
+    ev = {k: _union_mask(v) for k, v in event_tracks.items()}
+    ct = {k: _union_mask(v) for k, v in control_tracks.items()}
+    pairs = []
+    for ck, cm in ct.items():
+        for ek, em in ev.items():
+            if cm is None or em is None or cm.shape != em.shape:
+                continue
+            inter, uni = int((cm & em).sum()), int((cm | em).sum())
+            if uni and inter / uni >= min_iou:
+                pairs.append((inter / uni, ck, ek))
+    out, used_c, used_e = {}, set(), set()
+    for _, ck, ek in sorted(pairs, reverse=True):
+        if ck not in used_c and ek not in used_e:
+            out[ck] = ek
+            used_c.add(ck)
+            used_e.add(ek)
+    return out
+
+
 def _rank_batch(batch: list[np.ndarray], prompt: str, cfg: EventConfig, ad: EventAdapters, mix,
                 dead: set, notes: list[str]) -> tuple[list[float | None], str]:
     """Fallback order judge -> clap -> none, starting at cfg.ranker. A ranker that is missing, raises, or
@@ -326,6 +358,7 @@ def run_event_window(window: tuple, *, mix_48k: np.ndarray, prompt: str, nouns: 
     seeds_all = [cfg.seed_base + i for i in range(n_total)]
     records: list[CandidateRecord] = []
     best: dict[str, tuple[float, int, np.ndarray]] = {}      # tier -> (score, seed, stem); one array per tier
+    best_ok: dict[str, tuple[float, int, np.ndarray]] = {}   # same, restricted to candidates that pass the gate
     dead: set = set()
     notes: list[str] = []
     mix = np.asarray(mix_48k, np.float32)
@@ -345,11 +378,18 @@ def run_event_window(window: tuple, *, mix_48k: np.ndarray, prompt: str, nouns: 
             cur = best.get(ranker)
             if cur is None or key > cur[0]:
                 best[ranker] = (key, seed, cand.copy())
+            if gate is None:                                  # best candidate that actually PASSES the absent-target gate
+                curp = best_ok.get(ranker)
+                if curp is None or key > curp[0]:
+                    best_ok[ranker] = (key, seed, cand.copy())
         del batch                                             # arrays beyond this batch are released
 
-    tier = max(best, key=lambda r: _TIER[r])
-    _, chosen_seed, stem = best[tier]
+    # a gated top-ranked candidate must not hide a passing one: prefer the best passing candidate
+    pool = best_ok if best_ok else best
+    tier = max(pool, key=lambda r: _TIER[r])
+    _, chosen_seed, stem = pool[tier]
     best.clear()
+    best_ok.clear()
     chosen = next(r for r in records if r.seed == chosen_seed)
     degraded_reason = ""
     if tier == "none":
@@ -381,14 +421,17 @@ def run_event_window(window: tuple, *, mix_48k: np.ndarray, prompt: str, nouns: 
     if control_frames is not None and adapters.tracker is not None:
         control_motion = {}
         for noun in nouns:
-            for tid, masks in adapters.tracker(control_frames, noun).items():
-                _, mot, _ = mask_area_motion(list(masks))
-                key = f"{noun}:{tid}"
-                if key in track_masks:
-                    # the control window has its own frames: compare on frame index with the same length
-                    fixed = np.full(len(pts), np.nan)
-                    fixed[:min(len(pts), mot.size)] = mot[:len(pts)]
-                    control_motion[key] = fixed
+            ctrl = {f"{noun}:{tid}": list(masks) for tid, masks in adapters.tracker(control_frames, noun).items()}
+            # Track ids are only meaningful inside one tracker call, so the control run's ids cannot be compared with
+            # the event window's. Pair them by where the object IS (union-mask IoU); an unpaired track keeps NO
+            # control (explicit missing evidence), it is never given another object's motion.
+            for ckey, ekey in match_control_tracks(
+                    {k: v for k, v in track_masks.items() if k.startswith(noun + ":")}, ctrl).items():
+                _, mot, _ = mask_area_motion(ctrl[ckey])
+                # the control window has its own frames: compare on frame index with the same length
+                fixed = np.full(len(pts), np.nan)
+                fixed[:min(len(pts), mot.size)] = mot[:len(pts)]
+                control_motion[ekey] = fixed
     attribution: Attribution | None = None
     if ev.envelope is not None and track_masks:
         env_series = np.where(ev.envelope_valid, ev.envelope, np.nan)

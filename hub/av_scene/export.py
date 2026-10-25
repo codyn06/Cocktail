@@ -110,13 +110,23 @@ def export_bundle(out_dir: str | Path, *, runner: ChunkedSpeechRunner, speech: S
     wr.register_source("mixture", "mixture", "mixture", "original mixture")
     wr.register_source("residual", "residual_proxy", "default", "unexplained residual (projection proxy)")
     res_by_spec = {spec.index: entry for spec, entry in residual}
+    from .contracts import ChunkSpec
+    from .stitch import crossfade_samples, emit_chunk
+    n_master = runner._master(speech.records[-1].spec.own_end)
+    f_master = crossfade_samples(cfg.chunking.crossfade_ms, master)
+    prev_tails: dict = {}
     for rec in speech.records:
         o0, o1 = runner._master(rec.spec.own_start), runner._master(rec.spec.own_end)
         mix = src.read_audio(o0, o1, master).mean(axis=0).astype(np.float32)
         wr.add_audio_segment("mixture", "mixture", "mixture", master, None, o0, mix)
         e = res_by_spec.get(rec.spec.index)
         if e is not None:
-            wr.add_audio_segment("residual", "residual_proxy", "default", master, None, o0, np.load(e / "proxy.npy"))
+            m0, m1 = json.loads((e / "residual.json").read_text(encoding="utf-8"))["window_master"]
+            mspec = ChunkSpec(rec.spec.index, m0, m1, o0, o1, rec.spec.is_first, rec.spec.is_last)
+            finals, prev_tails, _ = emit_chunk(mspec, n_master, f_master, {"residual": np.load(e / "proxy_win.npy")},
+                                               prev_tails)
+            for _sid, (st, arr) in finals.items():
+                wr.add_audio_segment("residual", "residual_proxy", "default", master, None, st, arr)
     wr.set_source_length("mixture", runner._master(n16))
     wr.set_source_length("residual", runner._master(n16))
 
