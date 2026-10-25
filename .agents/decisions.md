@@ -91,6 +91,49 @@ status does not belong here (see `AGENTS.md` > Continuity).
   `frame_transform` (manifest `capabilities` and `frames.json`). The synthetic second pair (demo voice1/voice2) is not a
   real second speaker pair; no recording has clean per-speaker references.
 
+- AV long clips, Phase 4 (branch `feat/av-phase4-long-clips`, PR #58): one chunked offline pipeline,
+  `python -m av_scene run` (visual -> speech -> optional diarization -> events -> residual -> export), NOT real time and
+  no device claim. Contracts (`hub/av_scene/contracts.py`): canonical time is an integer sample index at the stream's own
+  rate, intervals half-open, microseconds derived and never round-tripped; 4 s windows / 2 s overlap, the boundary is the
+  overlap midpoint, each chunk OWNS one nonduplicated region (final partial region included) and activity/enrollment
+  seconds are counted on owned samples only. Three identity layers are never interchangeable: chunk-local separator slot,
+  persistent acoustic `src_<n>` (IdentityStore, content-addressed spill files under the cache root), visual track id.
+  Slot permutation is resolved before any crossfade; an ambiguous slot abstains (`unresolved`, no stem, a reason) and never
+  blends; a speaker with too little audio to enroll abstains with `short_utterance`. Timeline segments carry FOUR
+  independent fields (association_status, visibility, stem_availability, refusal_reason) and are split at the speaking
+  activity inside a chunk (sub-chunk resolution; whole-chunk status inflated the silent-bystander rate to 6-20% on the
+  synthetic scenes). The `long_run` manifest extension and the `timeline/` + `audio/` indexes are versioned separately
+  (`LONG_RUN_SCHEMA_VERSION`), optional, and leave Phase 1-3 bundles readable; `SCHEMA_VERSION` (the cache key) was not
+  bumped. StageCache entries are checksummed and validated on lookup (corrupt ones quarantined), one writer per key
+  (O_EXCL lock, dead-pid locks stolen, Windows-safe liveness probe: `os.kill(pid, 0)` terminates processes on Windows),
+  keys include implementation fingerprint, model revisions, seeds, upstream keys, the incoming-state hash and the
+  predecessor chunk's key. Model passes load lazily from static revisions, so a fully warm cache loads no checkpoint.
+  Missing spatial evidence or a missing silent control can never produce "matched" (`nonspeech_attr`), the control's track
+  ids are paired to the event's by mask overlap (ids are only meaningful inside one tracker call), extraction/judge scores
+  never feed attribution, and the pipeline passes no calibrated array so non-speech attribution is expected to stay
+  unmatched on ordinary single-mic clips. The residual Nyquist guard uses each stem's real origin bandwidth (16 kHz speech
+  = 8 kHz). Diarization is OFF by default (bounded 30 s windows mapped to identities by overlap; not_attempted vs skipped
+  vs failed are distinct; never demonstrated on real audio). Numeric budgets fixed before any model run
+  (`MemoryBudgets`): RSS peak 6144 MiB, GPU peak 9216 MiB, RSS slope <= 2 MiB per audio minute after 5 warm-up chunks,
+  peak growth 30 s -> 300 s <= 256 MiB, browser heap <= 700 MiB. The optional 8 kHz three-speaker checkpoint experiment is
+  permanently skipped. Metrics treat an abstention as neither an identity nor a switch; it still costs recall.
+- AV Phase 5, live refinement (branch `feat/av-phase5-live-refine`, PR #62): `hub/refine/` bridges the live hub to the Phase 4
+  speech stages. Jobs are snapshotted by device time and keyed by (tracker source id, pose epoch, selection version, audio
+  resets); a result is admitted only if the live key, route slots, source presence, age and a window floor (selection/route
+  change time) still match at publish time on the event loop, else `stale`. One job in flight, none queued. Refinement never
+  alters selection, route, `/audio/out` or `sources.updated`; `audio_applied` is always false. Live path has no SAM 3 (the
+  Phase 4 7.69 GiB RSS was the SAM 3 load); measured peak RSS of the whole hub is 3.2-3.7 GiB. States are served on
+  `GET /refinement/status`; `TargetUpdated` on `/events` (via a new per-client aux queue, `EventsState.publish_aux`) carries
+  `person`+assoc_conf only when accepted. Proposed, not applied (protocol frozen, Lalitha owns wire): optional
+  `refinement_state` on `TargetUpdated`. `python -m refine` is the live entry; refinement is OPT-IN (`--refine`, default off) because jobs running beside the live separator raised /audio/out underruns (4-8 vs 2-3 baseline) and gaps (0.30 s vs 0.15 s); the interference is unmitigated.
+- PR #59 identity rules, approved by the integration owner for Phase 5 and implemented as OPT-IN (tracker behaves as before
+  when no identity is passed): `StreamChunk.acoustic_id/identity_conf` from VoiceMemory (`src_<logical slot>`, conf 0.9 vs 0.2),
+  `Tracker.update(..., identity=)` with an `id_map` (mapping after `confirm_hits` at conf >= 0.6, merge veto, split, rejoin,
+  cleared on reset/forget), a bearingless announce for a confident distinct id, and a locator per-stream re-key when the
+  acoustic id changes (fresh estimator key `s1#n`; the old key's state is not freed until reset). The six PR #59 probes stay
+  strict xfails without identity; identity variants pass. SIMULATED/mocked only; not real live accuracy. Rule 9 (Phase 4 id
+  merges/splits) and rule 10 (replay results) are not wired.
+
 ## Open items
 - Each teammate: confirm their tool loads the roles/skills (README "pending runtime
   checks" and smoke checks).
