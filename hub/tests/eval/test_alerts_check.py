@@ -45,6 +45,41 @@ def test_smoke_alarm_fires_when_the_event_lasts_min_duration():
     assert ids(fires([(3, "alarm", 0.9), (4, "alarm", 0.8)])) == [("smoke_alarm", 5.0)]
 
 
+FINE = "Smoke detector, smoke alarm"
+
+
+def test_exact_classes_raise_the_critical_smoke_alarm():
+    f = fires([(3, FINE, 0.9), (4, FINE, 0.8)])
+    assert len(f) == 1 and f[0].critical and f[0].spoken_text == "Smoke alarm"
+
+
+def test_coarse_alarm_alone_is_downgraded_not_critical():
+    """The coarse 'alarm' also holds 'Alarm' and 'Buzzer': without the exact classes it must not read as a smoke alarm."""
+    f = fires([(3, "alarm", 0.9), (4, "alarm", 0.8)])
+    assert len(f) == 1 and not f[0].critical and f[0].spoken_text == "Alarm sound"
+    assert f[0].as_alert()["critical"] is False
+
+
+def test_door_buzzer_with_exact_class_rows_present_raises_nothing():
+    """Input that carries the exact classes (as --wav does): coarse 'alarm' high, but the smoke classes are low."""
+    rows = [(t, lab, sc) for t in range(6) for lab, sc in (("alarm", 0.9), (FINE, 0.05), ("Fire alarm", 0.04))]
+    assert fires(rows) == []
+
+
+def test_siren_is_unaffected_by_the_fallback_logic():
+    f = fires([(0, "siren", 0.8), (1, "siren", 0.8)])
+    assert len(f) == 1 and f[0].critical and f[0].spoken_text == "Siren"
+
+
+def test_coarse_fallback_needs_classes_and_labels(tmp_path):
+    bad = tmp_path / "r.json"
+    rule = {"id": "x", "label": "x", "critical": True, "spoken_text": "X", "detector": "sound_label", "classes": ["A"],
+            "min_conf": 0.5, "min_duration_s": 1, "max_gap_s": 1, "cooldown_s": 1, "coarse_fallback": {"spoken_text": "y"}}
+    bad.write_text(json.dumps({"schema": "cocktail-alert-rules/1", "rules": [rule]}))
+    with pytest.raises(ValueError, match="coarse_fallback"):
+        ac.load_rules(bad)
+
+
 def test_one_hop_of_alarm_is_not_enough():
     assert fires([(3, "alarm", 0.99), (4, "alarm", 0.2)]) == []
 
@@ -76,7 +111,7 @@ def test_exact_audioset_class_name_matches_case_insensitively():
 
 
 def test_best_matching_score_per_hop_is_used():
-    rows = [(0, "alarm", 0.2), (0, "Fire alarm", 0.9), (1, "alarm", 0.9)]
+    rows = [(0, "Smoke detector, smoke alarm", 0.2), (0, "Fire alarm", 0.9), (1, "Smoke detector, smoke alarm", 0.9)]
     assert ids(fires(rows)) == [("smoke_alarm", 2.0)]
 
 
@@ -131,7 +166,8 @@ def test_cli_with_label_and_transcript_files_and_expectation(tmp_path, capsys):
     rc = ac.main(["--labels", str(labels), "--transcript", str(talk), "--name", "sadie",
                   "--expect", "smoke_alarm,wearer_name", "--json", str(out)])
     text = capsys.readouterr().out
-    assert rc == 0 and "PASS" in text and "CRITICAL" in text and "bearing +20" in text
+    # the file has coarse 'alarm' rows only: the smoke alarm fires, but downgraded (not CRITICAL)
+    assert rc == 0 and "PASS" in text and "CRITICAL" not in text and "bearing +20" in text and "Alarm sound" in text
     assert [a["rule"] for a in json.loads(out.read_text())] == ["smoke_alarm", "wearer_name"]
     assert ac.main(["--labels", str(labels), "--expect", "none"]) == 1
 

@@ -12,6 +12,11 @@ Input files (CSV with a header, '#' lines ignored)
   labels:     t_s,label,score[,bearing_deg]   one row per label per hop; t_s = start of the 1 s hop
               the score describes; label = a coarse label (alarm, siren, speech, ...) or an exact
               AudioSet class name; score 0..1 as the labeler gives it (after its smoothing).
+              The smoke_alarm rule needs the exact classes ("Smoke detector, smoke alarm", "Fire
+              alarm") to raise its CRITICAL alert, because the coarse 'alarm' also contains 'Alarm'
+              and 'Buzzer' (a door buzzer). With coarse rows only it still fires, but as a
+              non-critical "Alarm sound". The live StreamChunk carries coarse scores only today;
+              --wav supplies the exact classes.
   transcript: t_s,text[,bearing_deg]
 
 Rules (see the notes in alerts_rules.json): a sound rule is active in a hop when its best matching
@@ -106,6 +111,9 @@ def load_rules(path: Path, extra_names: list[str] | None = None) -> Rules:
                 raise ValueError(f"rule {rid}: needs labels or classes")
             if not 0 < r["min_conf"] <= 1:
                 raise ValueError(f"rule {rid}: min_conf must be in (0, 1]")
+            fb = r.get("coarse_fallback")
+            if fb is not None and (not r.get("classes") or not r.get("labels") or "spoken_text" not in fb):
+                raise ValueError(f"rule {rid}: coarse_fallback needs classes, labels and coarse_fallback.spoken_text")
         if det == "keyword" and extra_names:
             r["keywords"] = list(r["keywords"]) + list(extra_names)
     return Rules(float(d.get("hop_s", HOP_S)), rules)
@@ -149,7 +157,20 @@ def _fire(r: dict, t: float, bearing: float | None) -> Fire:
 
 
 def eval_sound_rule(r: dict, obs: list[Obs], hop_s: float) -> list[Fire]:
-    names = {n.lower() for n in list(r.get("labels", [])) + list(r.get("classes", []))}
+    fb = r.get("coarse_fallback")
+    critical, spoken = bool(r["critical"]), r["spoken_text"]
+    if fb:
+        # Exact AudioSet classes are the evidence. Only when the input carries none of them (a
+        # coarse-only timeline, which is all the live StreamChunk exposes today) does the coarse
+        # label stand in, as a downgraded alert: the coarse 'alarm' also holds 'Alarm' and 'Buzzer'.
+        fine = {c.lower() for c in r.get("classes", [])}
+        if any(o.label.lower() in fine for o in obs):
+            names = fine
+        else:
+            names = {n.lower() for n in r.get("labels", [])}
+            critical, spoken = bool(fb.get("critical", False)), fb["spoken_text"]
+    else:
+        names = {n.lower() for n in list(r.get("labels", [])) + list(r.get("classes", []))}
     best: dict[float, Obs] = {}
     for o in obs:
         if o.label.lower() in names and (o.t_s not in best or o.score > best[o.t_s].score):
@@ -164,7 +185,9 @@ def eval_sound_rule(r: dict, obs: list[Obs], hop_s: float) -> list[Fire]:
             start = t                       # a new event
         prev_end = t + hop_s
         if prev_end - start + 1e-9 >= r["min_duration_s"] and (last_fire is None or prev_end - last_fire + 1e-9 >= r["cooldown_s"]):
-            fires.append(_fire(r, prev_end, o.bearing_deg))
+            f = _fire(r, prev_end, o.bearing_deg)
+            f.critical, f.spoken_text = critical, spoken
+            fires.append(f)
             last_fire = prev_end
     return fires
 
