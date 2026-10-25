@@ -294,6 +294,97 @@ class RemainderResult(_Model):
     proxy_waveform_provenance: str | None = None
 
 
+# ---------------------------------------------------------------- long-run (Phase 4) extension
+# Versioned separately from SCHEMA_VERSION (which keys caches) so existing bundles stay readable: a Phase 1-3
+# manifest has no `long_run` and the viewer falls back to the single-file layout.
+LONG_RUN_SCHEMA_VERSION = 1
+StemAvailability = Literal["ok", "degraded", "unavailable", "not_attempted"]
+StemRole = Literal["mixture", "default", "diagnostic"]
+StemKind = Literal["mixture", "speech", "tse", "event", "outside_view", "residual_proxy"]
+Confidence = Literal["resolved", "ambiguous", "new", "none"]
+
+
+class TimelineSegment(_Model):
+    """One half-open span of one source. The four status fields are INDEPENDENT on purpose: a viewer badge
+    must never collapse them (a source can be matched+visible yet have an unavailable stem, or be
+    unmatched+outside_view with a perfectly good stem)."""
+
+    source_id: str                      # persistent acoustic identity ("src_3"), "tse:<track>", "event_7", ...
+    start_sample: int                   # sample index at `TimelineIndex.sample_rate`, half-open
+    end_sample: int
+    start_us: int
+    end_us: int
+    track_id: str | None = None         # visual track (None = no visual claim)
+    association_status: AssociationStatus = "unmatched"
+    visibility: Visibility = "unknown"
+    stem_availability: StemAvailability = "not_attempted"
+    refusal_reason: str | None = None   # why a stem/association was refused; None when nothing was refused
+    identity_confidence: Confidence = "none"
+    chunk_index: int | None = None
+    slot: int | None = None             # chunk-local separator output slot this span came from (provenance only)
+
+
+class TimelineSource(_Model):
+    source_id: str
+    kind: StemKind
+    role: StemRole
+    label: str = ""
+    first_sample: int | None = None
+    last_sample: int | None = None
+
+
+class TimelinePage(_Model):
+    path: str                           # relative, e.g. "timeline/page_0003.json"
+    start_us: int
+    end_us: int
+
+
+class TimelineIndex(_Model):
+    version: int = LONG_RUN_SCHEMA_VERSION
+    sample_rate: int
+    n_samples: int
+    sources: list[TimelineSource] = Field(default_factory=list)
+    pages: list[TimelinePage] = Field(default_factory=list)
+
+
+class TimelinePageDoc(_Model):
+    segments: list[TimelineSegment] = Field(default_factory=list)
+
+
+class AudioSegmentRef(_Model):
+    start_sample: int
+    n_samples: int
+    path: str
+    sha256: str | None = None
+
+
+class AudioSourceEntry(_Model):
+    source_id: str
+    kind: StemKind
+    role: StemRole
+    rate_hz: int
+    n_samples: int                      # full logical length; spans without a segment are SILENT (zero-fill)
+    nyquist_hz: float | None = None     # real source bandwidth (a 16 kHz speech stem is 8000 even if stored at 48k)
+    segments: list[AudioSegmentRef] = Field(default_factory=list)
+
+
+class AudioIndex(_Model):
+    version: int = LONG_RUN_SCHEMA_VERSION
+    sources: dict[str, AudioSourceEntry] = Field(default_factory=dict)
+
+
+class LongRunInfo(_Model):
+    version: int = LONG_RUN_SCHEMA_VERSION
+    chunking: dict = Field(default_factory=dict)         # window_s, overlap_s, crossfade_ms, n_chunks, n_samples
+    switches: dict = Field(default_factory=dict)         # every Phase 3 / Phase 4 switch as run (never implicit)
+    memory_caps: dict = Field(default_factory=dict)
+    timeline_index: str = "timeline/index.json"
+    audio_index: str = "audio/index.json"
+    events_index: str | None = None
+    diarization: dict = Field(default_factory=dict)      # status: not_attempted | skipped | failed | ok, + reason
+    resume: dict = Field(default_factory=dict)           # chunks computed vs restored, model invocation counts
+
+
 # ---------------------------------------------------------------- manifest
 class StageRecord(_Model):
     name: str
@@ -328,6 +419,7 @@ class RunManifest(_Model):
     associations: list[Association] = Field(default_factory=list)
     stems: list[StemResult] = Field(default_factory=list)
     remainders: list[RemainderResult] = Field(default_factory=list)
+    long_run: LongRunInfo | None = None    # Phase 4; absent in older bundles
 
 
 SceneSource.model_rebuild()
