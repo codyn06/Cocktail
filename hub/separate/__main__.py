@@ -20,6 +20,8 @@ ap = argparse.ArgumentParser(description=__doc__)
 ap.add_argument("--host", default="0.0.0.0")
 ap.add_argument("--port", type=int, default=p.DEFAULT_PORT)
 ap.add_argument("--no-labels", action="store_true")
+ap.add_argument("--locate-method", choices=["level", "tdoa"], default="level",
+                help="direction finding: level (head shadow) or tdoa (inter-mic delay, calibrated; Quest 3S)")
 ap.add_argument("--merge-ild-db", type=float, default=0.0,
                 help="one-talker merge threshold in dB; 0 = off. Calibrate per device (4.5 = simulator)")
 a = ap.parse_args()
@@ -31,7 +33,7 @@ worker = SeparationWorker(state, LiveSeparator(VoiceSeparator(), None if a.no_la
 try:  # direction finding (C4) if hub/locate is present
     from locate.live import LiveLocator
 
-    locator = LiveLocator(state)
+    locator = LiveLocator(state, method=a.locate_method)
     worker.listeners.append(locator.on_chunks)
 except ImportError:
     logging.getLogger("separate").exception("direction finding disabled: hub/locate failed to import")

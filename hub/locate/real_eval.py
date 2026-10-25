@@ -23,6 +23,8 @@ from pathlib import Path
 import numpy as np
 
 from .estimator import BearingEstimator, LocateConfig
+from .pair import PairCalibration, PairLocator, fit_calibration
+from .tdoa import gcc_phat
 
 BANDS = (500.0, 1000.0, 2000.0, 4000.0, 8000.0)
 MIN_SNR_DB = 6.0  # the source must be at least this much louder than the room, or the take is invalid
@@ -57,7 +59,29 @@ def circ_diff(a: float, b: float) -> float:
     return (a - b + 180) % 360 - 180
 
 
-def run(take: Path, truth: float | None, within_db: float, verbose: bool = True) -> dict:
+def frame_delay(x2: np.ndarray, rate: int, max_tau_s: float) -> tuple[float, float]:
+    """Inter-mic delay (s, + = channel 0 later) of one frame and its GCC peak sharpness."""
+    lags, cc = gcc_phat(x2[:, 0], x2[:, 1], rate, max_tau=max_tau_s, interp=32)
+    k = int(np.argmax(cc))
+    return float(lags[k]), float(cc[k] / (np.median(np.abs(cc)) + 1e-12))
+
+
+def delay_observations(take: Path, within_db: float = 12.0, max_tau_s: float = 0.3e-3):
+    """Frames of a take where the source is on and the GCC peak is in the sharper half:
+    returns (frame times s, head yaw deg at those times, delays s, meta). For calibration."""
+    r = run(take, None, within_db, verbose=False, method="level", keep_frames=True)
+    t, w, x, rate, pt, yaw, meta = (r["_frames"][k] for k in ("t", "weight", "x", "rate", "pt", "yaw", "meta"))
+    obs = [(ti,) + frame_delay(x[int(ti * rate - WIN / 2):int(ti * rate + WIN / 2)], rate, max_tau_s)
+           for ti, wi in zip(t, w) if wi > 0]
+    if not obs:
+        return np.array([]), np.array([]), np.array([]), meta
+    ot, tau, sharp = np.array(obs).T
+    keep = sharp >= np.median(sharp)
+    return ot[keep], np.interp(ot[keep], pt, yaw), tau[keep], meta
+
+
+def run(take: Path, truth: float | None, within_db: float, verbose: bool = True, method: str = "level",
+        calib: PairCalibration | None = None, keep_frames: bool = False) -> dict:
     meta, x, rate, pose = load(take)
     cue = meta.get("cue") or {}
     nu, go, stop = cue.get("noise_until", 0.0), cue.get("go"), cue.get("stop")
@@ -97,7 +121,16 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True)
     cut = np.percentile(bb[in_win], 95) - within_db if in_win.any() else np.inf
     weight = (in_win & (bb > cut)).astype(float)
 
-    est = BearingEstimator(LocateConfig(mic_az_deg=(0.0,), band_freqs_hz=BANDS))
+    if method == "tdoa":
+        # Inter-mic delay + head yaw (pair.py): for closely spaced mics such as the Quest 3S.
+        calib = calib or PairCalibration.default()
+        est = PairLocator(calib)
+        d = [frame_delay(x[int(t * rate - WIN / 2):int(t * rate + WIN / 2), :2], rate, calib.max_tau_s)
+             if weight[i] > 0 else (0.0, 0.0) for i, t in enumerate(t_audio)]
+        sharp = np.array([v[1] for v in d])
+        cut_sharp = np.median(sharp[weight > 0]) if (weight > 0).any() else np.inf
+    else:
+        est = BearingEstimator(LocateConfig(mic_az_deg=(0.0,), band_freqs_hz=BANDS))
     j, timeline = 0, []
     for i, t in enumerate(t_audio):
         while j < len(pt) and pt[j] <= t:
@@ -105,7 +138,11 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True)
             j += 1
         if j == 0:  # audio can start before the first pose sample
             continue
-        est.add_levels("src", float(t), lev[i], float(weight[i]))
+        if method == "tdoa":
+            if weight[i] > 0 and sharp[i] >= cut_sharp:  # sharper half of the GCC peaks
+                est.add_delay("src", float(t), d[i][0], 1.0)
+        else:
+            est.add_levels("src", float(t), lev[i], float(weight[i]))
         if i % int(5 / (HOP / rate)) == 0 and i > 0 and weight[i] > 0:
             e = est.estimate("src", float(t))
             timeline.append((t, e.world_deg, e.confidence, e.state))
@@ -119,8 +156,10 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True)
         "seconds": len(mono) / rate, "yaw_min": float(yaw[motion].min()), "yaw_max": float(yaw[motion].max()),
         "yaw_std": float(yaw[motion].std()), "active_frac": float(weight[in_win].mean()) if in_win.any() else 0.0,
         "world_deg": e.world_deg, "confidence": e.confidence, "state": e.state,
-        "alt_head_deg": e.alt_bearing_deg, "truth": truth, "snr_db": snr_db,
+        "alt_head_deg": e.alt_bearing_deg, "truth": truth, "snr_db": snr_db, "method": method,
     }
+    if keep_frames:
+        res["_frames"] = {"t": t_audio, "weight": weight, "x": x, "rate": rate, "pt": pt, "yaw": yaw, "meta": meta}
     if verbose:
         print(f"recording: {res['seconds']:.1f} s, {meta['channels']} ch @ {rate} Hz, {meta['pose_samples']} pose samples"
               + (f"; room noise profile from first {nu:.1f} s subtracted" if nu else ""))
@@ -140,16 +179,19 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True)
             ("bearing error <= 25 deg", err <= 25, f"err {err:.0f} deg"),
             ("state is tracking/locked (not ambiguous)", e.state in ("tracking", "locked"), e.state),
         ]
-        print(f"\ntruth {truth:+.0f} deg")
         if snr_db is not None:
             checks.insert(1, (f"source clearly above the room (>= {MIN_SNR_DB:.0f} dB)", snr_db >= MIN_SNR_DB,
                               f"{snr_db:+.1f} dB"))
-        for name, ok, val in checks:
-            print(f"  {'PASS' if ok else 'FAIL'}  {name}: {val}")
+        if verbose:
+            print(f"\ntruth {truth:+.0f} deg")
+            for name, ok, val in checks:
+                print(f"  {'PASS' if ok else 'FAIL'}  {name}: {val}")
         res["pass"] = all(ok for _, ok, _ in checks)
         # A take with no head motion or a source lost in the room says nothing about the locator.
         res["valid"] = res["yaw_std"] >= 8 and (snr_db is None or snr_db >= MIN_SNR_DB)
-        if not res["valid"]:
+        if not verbose:
+            pass
+        elif not res["valid"]:
             print("RESULT: INVALID TAKE (not a locator result: "
                   + ("source too quiet over the room; move it closer or turn it up" if snr_db is not None
                      and snr_db < MIN_SNR_DB else "not enough head motion") + ")")
@@ -158,18 +200,62 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True)
     return res
 
 
+def calibrate(takes: list[Path], out: Path | None, device: str = "quest3s") -> PairCalibration:
+    """Fit the mic-pair constants from labeled takes and report a leave-one-out check."""
+    obs = []
+    for tk in takes:
+        _, y, tau, meta = delay_observations(tk)
+        if len(tau) < 20:
+            print(f"skip {tk.name}: too few usable frames ({len(tau)})")
+            continue
+        obs.append((tk, y, tau, float(meta["truth_deg"])))
+    cal = fit_calibration([o[1:] for o in obs], device, [o[0].name for o in obs])
+    print(f"calibration from {len(obs)} takes: delay amplitude {cal.delay_amp_s * 1e6:.1f} us "
+          f"(spacing ~{cal.delay_amp_s * 343 * 100:.2f} cm), axis {cal.axis_deg:+.1f} deg, "
+          f"offset {cal.offset_s * 1e6:+.1f} us, residual {cal.noise_s * 1e6:.1f} us")
+    if len(obs) >= 3:
+        print("leave-one-out (calibrate on the others, locate the held-out take):")
+        errs = []
+        for i, (tk, _, _, truth) in enumerate(obs):
+            sub = fit_calibration([o[1:] for k, o in enumerate(obs) if k != i], device)
+            r = run(tk, truth, 12.0, verbose=False, method="tdoa", calib=sub)
+            err = abs(circ_diff(r["world_deg"], truth))
+            errs.append(err)
+            print(f"  {tk.name:22s} truth {truth:+5.0f} -> {r['world_deg']:+5.0f}  error {err:5.1f} deg  "
+                  f"conf {r['confidence']:.2f} {r['state']}")
+        print(f"  median error {np.median(errs):.0f} deg; within 25 deg: {sum(e <= 25 for e in errs)}/{len(errs)}")
+    if out:
+        cal.save(out)
+        print(f"saved {out}")
+    return cal
+
+
 def main() -> None:
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "calibrate":
+        ap = argparse.ArgumentParser(prog="real_eval calibrate",
+                                     description="fit mic-pair (tdoa) constants from labeled takes")
+        ap.add_argument("takes", nargs="+")
+        ap.add_argument("--out", type=Path, default=None, help="e.g. locate/calib/quest3s.json")
+        ap.add_argument("--device", default="quest3s")
+        a = ap.parse_args(sys.argv[2:])
+        calibrate([Path(t) for t in a.takes], a.out, a.device)
+        return
     ap = argparse.ArgumentParser()
     ap.add_argument("take")
     ap.add_argument("--truth", type=float, default=None)
     ap.add_argument("--active-within-db", type=float, default=12.0,
                     help="frames within this many dB of the loudest count as 'source active'")
+    ap.add_argument("--method", choices=["level", "tdoa"], default="level",
+                    help="level: head-shadow level model (estimator.py); tdoa: inter-mic delay (pair.py)")
+    ap.add_argument("--calib", type=Path, default=None, help="tdoa calibration JSON (default: quest3s)")
     a = ap.parse_args()
     take = Path(a.take)
     truth = a.truth
     if truth is None:
         truth = json.loads((take / "meta.json").read_text()).get("truth_deg")
-    r = run(take, truth, a.active_within_db)
+    r = run(take, truth, a.active_within_db, method=a.method,
+            calib=PairCalibration.load(a.calib) if a.calib else None)
     raise SystemExit(0 if r.get("pass", True) else 1)
 
 

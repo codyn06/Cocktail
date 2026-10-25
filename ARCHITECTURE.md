@@ -172,12 +172,33 @@ benchmark harness from PR #20 lives in `eval/` with its own `bench` dependency g
   when wrong. Findings are on PR #11.
 - **Real-world test tooling** (PR #32, Lalitha's from #29): `quest/tools/run_locate_take.ps1`
   records a take on the 3S with a sound source at a known angle and scores it with
-  `locate.real_eval`. The recorder is hardware-tested; no real take has passed yet.
+  `locate.real_eval`. The recorder is hardware-tested.
+- **Real 3S results (2026-10-24, 10 labeled takes with a laptop noise source):**
+  - **The level (head-shadow) method fails on the 3S:** 59–180° off on valid takes, often
+    "locked" at 90%+ confidence. The two raw mics are ~0.5–1 cm apart (2-sample lag,
+    correlation ~0.93), so they share almost the same level, and the loudness-vs-yaw swing is
+    only a few dB.
+  - **Most early takes were invalid, not locator failures:** the test noise never played (a
+    launch issue), or there was no head motion. `real_eval` now marks those INVALID (PR #34).
+- **Experimental 3S mode: inter-mic delay + head yaw** (`locate/pair.py`). The delay between
+  the two mics traces a sinusoid as the head turns; its phase gives the bearing. Device
+  constants (spacing, axis, channel offset) live in `locate/calib/quest3s.json`, fitted with
+  `python -m locate.real_eval calibrate <takes...>`. Use `real_eval --method tdoa` or
+  `python -m separate --locate-method tdoa`. Default stays `level`.
+  - **Leave-one-out on 6 takes:** 7°, 26°, 35° on clean front/side takes with strong head
+    motion; 52–79° on "behind" and weaker takes (median 44°, 1/6 within 25°). A quicker
+    prototype frame selection gave 14° / 17° / 23° on the same three, so expect ±10° from
+    choices like that with this little data. Better than level, not yet reliable.
+  - **Also overconfident:** the 79° miss reported "locked" at 0.80.
+  - **Caveat:** the headset may apply some processing in hardware even on the UNPROCESSED
+    mic source (the processed sources clearly do: mono, heavy noise suppression). Per-channel
+    processing would blur exactly the sub-sample delays this mode relies on.
 - **Open:**
-  - the 3S mics aren't at ear positions, so the mic angles and gain table need calibrating
-    from real takes;
+  - more labeled takes (especially behind, and with a louder source) to firm up the
+    calibration and the confidence;
+  - camera bearings (SAM 3) for people in view are likely the more reliable route on the 3S;
   - audio channel order (left/right) is still unconfirmed on the headset;
-  - the male-voice bias and overconfidence are in the estimator (A8).
+  - the level estimator's male-voice bias and overconfidence (A8).
 
 ### D9. Vision: the SAM 3 image model per frame, not the SAM 3.1 tracker
 **Proposed** (from A3 measurements, hardware-tested; C5 not built).
