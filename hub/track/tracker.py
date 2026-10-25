@@ -55,6 +55,7 @@ class TrackConfig:
     label_decay: float = 0.9
     fov_deg: float = 90.0            # horizontal field of view used for in_view
     silent_db: float = -100.0        # level_db reported while a source is not being heard
+    identity_min_conf: float = 0.6   # acoustic-id confidence needed before an id is trusted (opt-in)
 
 
 @dataclass
@@ -72,6 +73,7 @@ class _Track:
     b_hits: int = 0  # observations that carried a usable bearing
     confirmed: bool = False
     state: p.TrackState = p.TrackState.tracking
+    aid_run: tuple[str, int] | None = None  # (confident acoustic id, consecutive observations)
 
     @property
     def label(self) -> str:
@@ -94,11 +96,51 @@ class Tracker:
         self._last_now: int | None = None
         self._dup_of: dict[str, str] = {}  # stream slot -> track it duplicates
         self._apart: set[frozenset] = set()  # track pairs that were clearly separate sources at some point
+        # Phase 5 identity (opt-in via update(identity=...)): acoustic id <-> tracker id. Cleared with
+        # the tracker (epoch/clock restart) and with each track; tracker ids are never reused.
+        self.id_map: dict[str, str] = {}
+        self._tid_aid: dict[str, str] = {}
+
+    # ------------------------------------------------------------------ identity
+    def _aid_of(self, t: _Track) -> str | None:
+        """The acoustic id a track stands for: its mapping, else the one it is currently collecting."""
+        return self._tid_aid.get(t.tid) or (t.aid_run[0] if t.aid_run else None)
+
+    def _differ(self, t: _Track, oid: str | None) -> bool:
+        a = self._aid_of(t)
+        return oid is not None and a is not None and a != oid
+
+    def _same_voice_ruled_out(self, a: _Track, b: _Track) -> bool:
+        x, y = self._aid_of(a), self._aid_of(b)
+        return x is not None and y is not None and x != y
+
+    def _drop(self, tid: str) -> None:
+        self.tracks.pop(tid, None)
+        aid = self._tid_aid.pop(tid, None)
+        if aid is not None and self.id_map.get(aid) == tid:
+            del self.id_map[aid]
+
+    def _note_identity(self, t: _Track, oid: str | None) -> None:
+        if oid is None:
+            return
+        t.aid_run = (oid, t.aid_run[1] + 1) if t.aid_run and t.aid_run[0] == oid else (oid, 1)
+        if t.aid_run[1] >= self.cfg.confirm_hits and t.tid not in self._tid_aid and oid not in self.id_map:
+            self.id_map[oid] = t.tid
+            self._tid_aid[t.tid] = oid
 
     # ------------------------------------------------------------------ matching
-    def _cost(self, t: _Track, o: p.Source, has_b: bool) -> float | None:
+    def _cost(self, t: _Track, o: p.Source, has_b: bool, oid: str | None = None) -> float | None:
         """Lower is better; None = not allowed to match."""
         c = self.cfg
+        if oid is not None:
+            mapped = self._tid_aid.get(t.tid)
+            if mapped is not None and mapped != oid:
+                return None  # a confidently different voice never updates this track
+            if mapped is None and self.id_map.get(oid, t.tid) != t.tid:
+                return None  # this voice already has its own track
+            if mapped == oid:  # the voice came back: its own track, wherever it went meanwhile
+                near_b = abs(wrap180(t.bearing - o.bearing_deg)) * 0.01 if t.bearing is not None and has_b else 0.0
+                return -100.0 + near_b
         same_stream = t.stream == o.source_id
         if t.state != p.TrackState.tracking and o.label != t.label:
             return None  # a paused source only comes back as the same kind of sound
@@ -110,7 +152,10 @@ class Tracker:
         cost = d + (0.0 if o.label == t.label else c.label_penalty_deg)
         return cost - (c.stream_bonus_deg if same_stream else 0.0)
 
-    def update(self, now_us: int, raw: list[p.Source], head_yaw_deg: float | None = None) -> list[p.Source]:
+    def update(self, now_us: int, raw: list[p.Source], head_yaw_deg: float | None = None,
+               identity: dict[str, tuple[str | None, float]] | None = None) -> list[p.Source]:
+        """identity: stream id -> (acoustic id, confidence), optional. Without it (or without a
+        confident entry) the world-bearing + label + slot rules apply unchanged."""
         c = self.cfg
         if self._last_now is not None and now_us < self._last_now - 2_000_000:
             self.reset()  # device clock restarted (headset app relaunched)
@@ -119,6 +164,14 @@ class Tracker:
         heard = [o for o in raw if math.isfinite(o.level_db) and o.level_db >= c.active_floor_db]
         has_b = {o.source_id: o.bearing_deg is not None and math.isfinite(o.bearing_deg)
                  and o.bearing_conf >= c.min_bearing_conf for o in heard}
+        oids: dict[str, str] = {}
+        for sid, v in (identity or {}).items():
+            try:
+                aid, conf = v
+            except (TypeError, ValueError):
+                continue
+            if aid is not None and conf is not None and math.isfinite(conf) and conf >= c.identity_min_conf:
+                oids[sid] = aid
         live = list(self.tracks.values())
 
         # optimal one-to-one matching of heard streams to existing tracks
@@ -128,7 +181,7 @@ class Tracker:
             M = np.full((len(heard), len(live)), big)
             for i, o in enumerate(heard):
                 for j, t in enumerate(live):
-                    cost = self._cost(t, o, has_b[o.source_id])
+                    cost = self._cost(t, o, has_b[o.source_id], oids.get(o.source_id))
                     if cost is not None:
                         M[i, j] = cost
             for i, j in zip(*linear_sum_assignment(M)):
@@ -141,17 +194,23 @@ class Tracker:
             if t is not None:
                 self._dup_of.pop(o.source_id, None)
                 self._observe(t, o, now_us, has_b[o.source_id])
+                self._note_identity(t, oids.get(o.source_id))
                 continue
+            oid = oids.get(o.source_id)
             if has_b[o.source_id]:  # a second stream carrying the same source as a track just heard?
                 prev = self.tracks.get(self._dup_of.get(o.source_id, ""))
                 cands = [m for m in [*matched.values(), *fresh] if m.bearing is not None and m.label == o.label
-                         and abs(wrap180(m.bearing - o.bearing_deg)) <= c.merge_deg]
-                if not cands and prev is not None and prev.bearing is not None and prev.label == o.label                         and prev.state == p.TrackState.tracking                         and abs(wrap180(prev.bearing - o.bearing_deg)) <= 2 * c.merge_deg:
+                         and abs(wrap180(m.bearing - o.bearing_deg)) <= c.merge_deg and not self._differ(m, oid)]
+                if not cands and prev is not None and prev.bearing is not None and prev.label == o.label                         and not self._differ(prev, oid) and prev.state == p.TrackState.tracking                         and abs(wrap180(prev.bearing - o.bearing_deg)) <= 2 * c.merge_deg:
                     cands = [prev]  # same slot was a duplicate of this track before: stay a duplicate
                 if cands:
                     self._dup_of[o.source_id] = cands[0].tid
                     continue
-            fresh.append(self._spawn(o, now_us, has_b[o.source_id]))
+            if oid is not None:
+                self._dup_of.pop(o.source_id, None)
+            nt = self._spawn(o, now_us, has_b[o.source_id])
+            self._note_identity(nt, oid)
+            fresh.append(nt)
 
         self._merge_converged()
         self._confirm()
@@ -161,10 +220,10 @@ class Tracker:
             age = (now_us - t.last_obs_us) / 1e6
             if not t.confirmed:
                 if age > c.hold_s:
-                    del self.tracks[tid]  # a blip that never became a source
+                    self._drop(tid)  # a blip that never became a source
                 continue
             if age > c.forget_s:
-                del self.tracks[tid]
+                self._drop(tid)
             elif age > c.lost_s:
                 t.state = p.TrackState.lost
             elif age > c.hold_s:
@@ -187,13 +246,20 @@ class Tracker:
                     continue
                 d = abs(wrap180(a.bearing - b.bearing))
                 pair = frozenset((a.tid, b.tid))
+                if self._same_voice_ruled_out(a, b):
+                    self._apart.add(pair)  # two different voices are never one source
+                    continue
                 if d > 2 * c.merge_deg:
                     self._apart.add(pair)
                 elif d <= c.merge_deg / 2 and a.label == b.label and pair not in self._apart:
                     self._dup_of[b.stream] = a.tid
                     a.hits += b.hits
                     a.confirmed = a.confirmed or b.confirmed
-                    del self.tracks[b.tid]
+                    mapped_b = self._tid_aid.get(b.tid)
+                    self._drop(b.tid)
+                    if mapped_b is not None and a.tid not in self._tid_aid:
+                        self.id_map[mapped_b] = a.tid
+                        self._tid_aid[a.tid] = mapped_b
 
     def _confirm(self) -> None:
         """Announce a new source once it has been heard a few times. One with no direction yet is
@@ -208,12 +274,14 @@ class Tracker:
                 near = [o for o in self.tracks.values()
                         if o is not t and o.confirmed and o.label == t.label and o.state == p.TrackState.tracking
                         and o.bearing is not None and abs(wrap180(o.bearing - t.bearing)) <= c.merge_deg
-                        and frozenset((o.tid, t.tid)) not in self._apart]
+                        and frozenset((o.tid, t.tid)) not in self._apart and not self._same_voice_ruled_out(o, t)]
                 if near:  # same sound as an announced source, seen through another stream slot
                     self._dup_of[t.stream] = near[0].tid
-                    del self.tracks[t.tid]
+                    self._drop(t.tid)
                 else:
                     t.confirmed = True
+            elif t.tid in self._tid_aid:
+                t.confirmed = True  # a distinct voice, direction unsure: announce it without a bearing
             elif t.hits >= c.bearingless_hits and not any(
                     o is not t and o.label == t.label and o.state == p.TrackState.tracking for o in self.tracks.values()):
                 t.confirmed = True

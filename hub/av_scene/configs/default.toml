@@ -64,3 +64,37 @@ clock_uncertainty_ms = 5.0
 [off_axis]
 yaw_limit_deg = 60.0
 unknown_pose = "allow"      # explicit learning policy when the face pose was never observed
+
+# ---- Phase 4 long clips. Budgets are fixed BEFORE model runs (see .agents/decisions.md).
+[chunking]
+window_s = 4.0
+overlap_s = 2.0
+crossfade_ms = 50.0
+
+[memory]
+max_decoded_frames = 150
+max_queued_chunks = 1
+max_candidates = 4
+candidate_batch = 2
+max_active_identities = 8
+max_resident_models = 2
+event_max_window_s = 12.0
+
+[budgets]
+rss_peak_mib = 6144.0
+gpu_peak_mib = 9216.0
+rss_warmup_chunks = 5
+rss_slope_mib_per_audio_min = 2.0
+rss_peak_growth_mib_30_to_300s = 256.0
+browser_heap_mib = 700.0
+browser_heap_growth_mib_30_to_300s = 100.0
+
+[switches]
+use_tse = true
+activity_gate = false
+offscreen_upgrade = false
+peel = false
+identity = true
+events = true
+diarization = "off"      # "off" | "auto" | "on"; never on by default (gated access, bounded memory unproven)
+residual = true

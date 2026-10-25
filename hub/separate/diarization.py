@@ -151,3 +151,29 @@ def compute_anchors(activities: dict[str, list], noise=(), cfg: AnchorConfig | N
                        "min_duration_us": cfg.min_duration_us},
         })
     return result
+
+
+def compute_anchors_with_diarization(activities: dict[str, list], noise=(), cfg: AnchorConfig | None = None,
+                                     diarization=None) -> dict[str, AnchorSet]:
+    """`compute_anchors` plus OPTIONAL diarization evidence.
+
+    `diarization` is an `av_scene.diar_windows.DiarResult` (duck-typed: `.activities`, `.to_dict()`).
+    With None, or no activities, the result is identical to `compute_anchors`. Otherwise diarization
+    intervals are unioned per id and recorded in `provenance["diarization"]`; ids whose positive
+    anchors exist only thanks to diarization get `diarization_only=True`.
+    """
+    base = compute_anchors(activities, noise, cfg)
+    if diarization is None or not getattr(diarization, "activities", None):
+        return base
+    merged = {k: list(v) for k, v in activities.items()}
+    for k, v in diarization.activities.items():
+        merged.setdefault(k, []).extend(v)
+    res = compute_anchors(merged, noise, cfg)
+    info = diarization.to_dict()
+    for sid, a in res.items():
+        b = base.get(sid)
+        a.provenance["diarization"] = {
+            "status": info["status"], "windows": info["windows"],
+            "mapped_s": info["mapped_s"], "unmapped_s": info["unmapped_s"],
+            "diarization_only": bool(a.positive) and (b is None or not b.positive)}
+    return res
