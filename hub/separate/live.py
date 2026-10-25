@@ -111,7 +111,10 @@ class LiveSeparator:
 
     def _separate_window(self, x: np.ndarray) -> np.ndarray:
         """x: (W, mics) -> (streams, 1 + mics, W): mono estimate then per-mic images."""
-        mono = x.mean(axis=1)
+        # Average only the channels that carry sound: the Quest's 4-channel mode delivers two exactly-zero channels,
+        # and averaging them in halves the signal (-6 dB, measured live: mean -64.0 dBFS vs -57.6 / -58.1 per mic).
+        live_ch = np.sqrt(np.mean(x ** 2, axis=0)) > 1e-6
+        mono = x[:, live_ch].mean(axis=1) if live_ch.any() else x.mean(axis=1)
         v = self.sep(mono)  # (voices, W)
         if self._prev_mono is not None:  # keep voice order consistent with the previous window
             a, b = v[:, : self.H], self._prev_mono

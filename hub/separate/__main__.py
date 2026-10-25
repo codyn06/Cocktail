@@ -97,6 +97,20 @@ def sources():
     return [s.model_dump(mode="json") for s in locator.sources()]
 
 
+@app.get("/ingest/levels")
+def ingest_levels():
+    """Per-channel level of the last 2 s of raw headset audio (dBFS), and of the plain mean the separator uses."""
+    ring = state.audio
+    if ring is None or ring.written < 32000:
+        return {"error": "not enough audio yet"}
+    got = ring.read(ring.written - 32000, 32000)
+    if got is None:
+        return {"error": "audio not readable"}
+    x = np.asarray(got[0], dtype=np.float64)
+    db = lambda v: round(float(20 * np.log10(np.sqrt(np.mean(v ** 2)) + 1e-9)), 1)
+    return {"channels": [db(x[:, i]) for i in range(x.shape[1])], "mean_of_all": db(x.mean(axis=1))}
+
+
 @app.get("/separate/status")
 def status():
     last = worker.chunks[-1] if worker.chunks else []
