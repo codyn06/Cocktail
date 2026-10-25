@@ -8,8 +8,8 @@ Separation and attribution are different steps:
      silent is ``outside_view``.
   4. Optionally AV_MossFormer2_TSE extracts a stream per face track, conditioned on the lips.
 
-A SAM 3 "person" mask is not a face box. ``head_box`` takes the top of the person mask as a
-heuristic face crop; it is wrong for back views, lying people and heavy occlusion.
+Face boxes come from ``vision.face_detect`` (S3FD faces assigned to SAM 3 person masks); a frame
+without a detected face carries no speaking evidence.
 
 Models are injected so the logic can be tested without weights.
 """
@@ -25,19 +25,6 @@ from .associate import FPS, associate_streams, select_for_track, track_activity
 from .schemas import Association, Extraction
 
 SR16 = 16000
-
-
-def head_box(mask: np.ndarray, top_frac: float = 0.35) -> tuple[float, float, float, float] | None:
-    """Square-ish head box from the top of a person mask, in pixels; None if the mask is empty."""
-    rows = np.flatnonzero(mask.any(1))
-    if rows.size == 0:
-        return None
-    y0, y1 = rows[0], rows[-1] + 1
-    band = mask[y0:y0 + max(1, int((y1 - y0) * top_frac))]
-    cols = np.flatnonzero(band.any(0))
-    x0, x1 = cols[0], cols[-1] + 1
-    w = x1 - x0
-    return float(x0), float(y0), float(x1), float(min(y1, y0 + 1.1 * w))
 
 
 def frame_envelope(x: np.ndarray, n_frames: int, sr: int = SR16, fps: int = FPS) -> np.ndarray:

@@ -170,8 +170,20 @@ def test_mossformer2_backend_attributes_and_refuses(clip, fakes, tmp_path, monke
             s = np.where(np.sin(2 * np.pi * 0.7 * t) > 0, 4.0, -4.0) if left else np.full(n, -4.0)
             return s, t, {}
 
+    class Faces:
+        def __init__(self, *a, **k):
+            pass
+
+        def detect(self, rgb):
+            h, w = rgb.shape[:2]
+            return np.array([[w / 8 + 2, h / 4 + 2, w / 3 - 2, h / 2, 0.9],
+                             [2 * w / 3 + 2, h / 4 + 2, 7 * w / 8 - 2, h / 2, 0.9]])
+
+    import vision.face_detect as fd
+
     monkeypatch.setattr(sm, "VoiceSeparator", Sep)
     monkeypatch.setattr(tk, "TalkNetScorer", Scorer)
+    monkeypatch.setattr(fd, "FaceDetector", Faces)
     out = tmp_path / "av"
     assert phase2.run(clip, out, run_id="t", device="cpu") is None
     m = phase2.run(clip, out, run_id="t", speaker_xy=(0.2, 0.5), reuse_tracks=True, device="cpu",

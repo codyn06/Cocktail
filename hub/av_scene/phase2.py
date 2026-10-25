@@ -46,7 +46,7 @@ from .phase1 import _git_rev, frame_sample_times
 from .runtime import StageReport, run_stage
 from .schemas import (AcousticEvent, Association, ComponentScore, LabelScore, MaskletTrack, RemainderResult,
                       RunManifest, SceneSource, SpeakerTrack, StageRecord, StemResult)
-from .speech import SpeechResult, head_box, run_speech_branch
+from .speech import SpeechResult, run_speech_branch
 
 SPEAKER_ID = "spk0"
 
@@ -416,37 +416,40 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
 
 
 # --------------------------------------------------------------------------- speech branch (mossformer2)
-def _boxes_by_track(records: dict[str, list[MaskRecord]], n_frames: int) -> dict[str, list]:
+def _masks_by_track(records: dict[str, list[MaskRecord]], n_frames: int) -> dict[str, list]:
     out = {}
     for tid, recs in records.items():
         by = {r.frame_idx: r.rle for r in recs}
-        out[tid] = [head_box(by[i].decode()) if by.get(i) is not None else None for i in range(n_frames)]
+        out[tid] = [by[i].decode() if by.get(i) is not None else None for i in range(n_frames)]
     return out
 
 
 def _speech_stage(clip, records, work, reports, *, device, vram_fraction, use_tse) -> SpeechResult:
     from separate.models import VoiceSeparator
+    from vision.face_detect import FaceDetector, face_boxes_by_track
     from vision.talknet import TalkNetScorer
 
     a16 = sa.resample_audio(clip.audio, clip.audio_rate, 16000)[0].numpy().astype(np.float32)
     rgb = clip.frames.permute(0, 2, 3, 1).contiguous().numpy()
-    boxes = _boxes_by_track(records, len(rgb))
+    masks = _masks_by_track(records, len(rgb))
 
     def load():
         tse = None
         if use_tse:
             from separate.av_tse import AVTargetSpeakerExtractor
             tse = AVTargetSpeakerExtractor(device=device)
-        return VoiceSeparator(device), TalkNetScorer(device=device), tse
+        return VoiceSeparator(device), TalkNetScorer(device=device), FaceDetector(device), tse
 
     def go(mgr, models):
-        sep, scorer, tse = models
+        sep, scorer, det, tse = models
+        with mgr.phase("faces"):
+            boxes = face_boxes_by_track(det, rgb, masks)
         with mgr.phase("inference"):
             _log(work, f"speech: separating + scoring {len(boxes)} track(s)")
             return run_speech_branch(a16, rgb, clip.fps, boxes, separator=sep, scorer=scorer, tse=tse)
 
     res = run_stage("speech_mossformer2_talknet", load, go, reports=reports, device=device,
-                    vram_fraction=vram_fraction, workload={"tracks": len(boxes), "tse": use_tse})
+                    vram_fraction=vram_fraction, workload={"tracks": len(masks), "tse": use_tse})
     sd = work / "speech"
     sd.mkdir(exist_ok=True)
     for k, x in res.streams.items():
@@ -483,7 +486,7 @@ def _speech_metrics(sp: SpeechResult) -> dict:
                          for a in sp.associations],
         "selection": {t: {"stream": s, "status": e.status, "reason": e.reason} for t, (s, e) in sp.selection.items()},
         "track_activity_us": sp.activity_us, "tracks": sp.info.get("tracks", {}), "tse_tracks": sorted(sp.tse),
-        "note": "speaking scores are TalkNet on heuristic head crops from SAM 3 person masks",
+        "note": "speaking scores are TalkNet on S3FD faces assigned to SAM 3 person masks",
     }
 
 

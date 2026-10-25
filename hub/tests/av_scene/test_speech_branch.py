@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from av_scene.speech import SR16, frame_envelope, head_box, run_speech_branch
+from av_scene.speech import SR16, frame_envelope, run_speech_branch
 
 DUR = 8
 N25 = DUR * 25
@@ -86,11 +86,6 @@ def test_missing_face_is_no_evidence_not_silence():
     assert r.selection["tA"][0] is None
 
 
-def test_head_box_and_envelope():
-    m = np.zeros((100, 60), bool)
-    m[10:90, 20:40] = True
-    x0, y0, x1, y1 = head_box(m)
-    assert (x0, y0, x1) == (20, 10, 40) and y1 == 10 + 1.1 * 20
-    assert head_box(np.zeros((5, 5), bool)) is None
+def test_envelope():
     env = frame_envelope(np.ones(SR16, np.float32), 25)
     assert env.shape == (25,) and np.allclose(env, 1.0)
