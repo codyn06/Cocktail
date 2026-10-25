@@ -79,6 +79,8 @@ namespace Cocktail.Ui
         float? _alertBearing;
         string _hoverId; float _hoverTime;
         string _pendingId; float _pendingLeft;
+        // the real hub does not send state.changed yet, so the wearer's own choice is kept here until it does (then the hub wins)
+        string _localChosen; bool _hubStateSeen, _wasFake = true;
         long _latestTs;
         OVRHand[] _hands = new OVRHand[0]; bool[] _pinchWas = new bool[0]; float _nextHandScan;
 
@@ -205,6 +207,7 @@ namespace Cocktail.Ui
             {
                 fake.OnSources += OnFakeSources; fake.OnState += OnFakeState; fake.OnTarget += OnFakeTarget; fake.OnAlert += OnFakeAlert; fake.OnReplayReady += OnFakeReplay;
             }
+            if (input != null) input.OnSent += OnInputSent;
         }
 
         void Unsubscribe()
@@ -219,6 +222,7 @@ namespace Cocktail.Ui
             {
                 fake.OnSources -= OnFakeSources; fake.OnState -= OnFakeState; fake.OnTarget -= OnFakeTarget; fake.OnAlert -= OnFakeAlert; fake.OnReplayReady -= OnFakeReplay;
             }
+            if (input != null) input.OnSent -= OnInputSent;
         }
 
         void OnDestroy()
@@ -230,7 +234,7 @@ namespace Cocktail.Ui
         }
 
         void OnRealSources(SourcesUpdated e) { _realAt = _time; ApplySources(e, false); }
-        void OnRealState(StateChanged e) { _realAt = _time; ApplyState(e, false); }
+        void OnRealState(StateChanged e) { _realAt = _time; _hubStateSeen = true; ApplyState(e, false); }
         void OnRealTarget(TargetUpdated e) { ApplyTarget(e, false); }
         void OnRealAlert(AlertFired e) { ShowAlert(e); }
         void OnRealReplay(ReplayReady e) { _replaySeconds = e.DurationS; }
@@ -287,6 +291,13 @@ namespace Cocktail.Ui
 
         string ResolveSelectedSourceId()
         {
+            string fromHub = ResolveHubChoice();
+            if (fromHub != null || UsingFake || _hubStateSeen) return fromHub;
+            return _localChosen != null && _entries.ContainsKey(_localChosen) ? _localChosen : null;
+        }
+
+        string ResolveHubChoice()
+        {
             if (string.IsNullOrEmpty(_stateTargetId) || _state == HubState.Listening) return null;
             if (_targetToSource.TryGetValue(_stateTargetId, out var sid)) return sid;
             if (_entries.ContainsKey(_stateTargetId)) return _stateTargetId;
@@ -306,6 +317,9 @@ namespace Cocktail.Ui
         {
             EnsureInit();
             _time += dt;
+            bool fakeNow = UsingFake;
+            if (fakeNow != _wasFake) { _wasFake = fakeNow; ResetForNewSource(); }
+            if (input != null) input.autoSelect = hudMode != HudMode.Full;   // in the full HUD this class sends every select, by source id
             if (rig == null && _time >= _nextRigScan) { _nextRigScan = _time + 1f; rig = FindFirstObjectByType<OVRCameraRig>(); }
             ReparentRoots();
             Vector3 headPosL = _worldRoot.InverseTransformPoint(Head.position);
@@ -814,6 +828,7 @@ namespace Cocktail.Ui
             if (en.speaker != null) UiObjects.Kill(en.speaker.gameObject);
             _entries.Remove(id);
             if (_hoverId == id) _hoverId = null;
+            if (_localChosen == id) _localChosen = null;   // the hub forgets a vanished source too, and never reuses its id
         }
 
         string TargetText(string selId)
@@ -830,6 +845,53 @@ namespace Cocktail.Ui
             if (selId != null && _entries.TryGetValue(selId, out var en) && en.src.BearingDeg.HasValue) rel = UiMath.NormalizeDeg(en.src.BearingDeg.Value - headYaw);
             var st = theme.GetState(_state);
             _glasses.Tick(UiMath.Fmt(theme.glassesTitle, "{target}", targetText, "{state}", st.title), UiMath.Fmt(theme.glassesDetail, "{state}", st.title, "{target}", targetText), rel, accent);
+        }
+
+        // ------------------------------------------------------------------ choice kept on the headset (real hub)
+        void ResetForNewSource()
+        {
+            // fake and real sources never mix: start clean (numbers and colours too) when the data source changes
+            _remove.Clear(); _remove.AddRange(_entries.Keys);
+            foreach (var id in _remove) DestroyEntry(id);
+            _speakerNum.Clear(); _targetToSource.Clear();
+            _localChosen = null; _pendingId = null; _pendingLeft = 0f; _hoverId = null;
+            _state = HubState.Listening; _stateTargetId = null;
+        }
+
+        // stop / next / prev can also come from InputSender's buttons: keep the local choice in step with what the hub does
+        void OnInputSent(ProtoAction a, string sourceId)
+        {
+            if (UsingFake || _hubStateSeen) return;
+            if (a == ProtoAction.Stop) _localChosen = null;
+            else if (a == ProtoAction.Next || a == ProtoAction.Prev) _localChosen = StepLocal(a == ProtoAction.Next ? 1 : -1);
+        }
+
+        // the same order and wrap-around as the hub's next/prev (hub/events/selection.py): left to right by bearing, no bearing last, lost skipped
+        string StepLocal(int dir)
+        {
+            var pool = new List<Source>();
+            foreach (var en in _entries.Values) if (en.src.State != TrackState.Lost || en.src.SourceId == _localChosen) pool.Add(en.src);
+            if (pool.Count == 0) return _localChosen;
+            pool.Sort(HubCycleOrder);
+            int i = pool.FindIndex(s => s.SourceId == _localChosen);
+            return pool[i >= 0 ? (i + dir + pool.Count) % pool.Count : (dir > 0 ? 0 : pool.Count - 1)].SourceId;
+        }
+
+        static int HubCycleOrder(Source a, Source b)
+        {
+            bool ha = a.BearingDeg.HasValue, hb = b.BearingDeg.HasValue;
+            if (ha != hb) return ha ? -1 : 1;
+            int c = ha ? UiMath.NormalizeDeg(a.BearingDeg.Value).CompareTo(UiMath.NormalizeDeg(b.BearingDeg.Value)) : 0;
+            if (c != 0) return c;
+            c = TrailingNumber(a.SourceId).CompareTo(TrailingNumber(b.SourceId));
+            return c != 0 ? c : string.CompareOrdinal(a.SourceId, b.SourceId);
+        }
+
+        static int TrailingNumber(string id)
+        {
+            int end = id.Length, start = end;
+            while (start > 0 && char.IsDigit(id[start - 1])) start--;
+            return start < end && int.TryParse(id.Substring(start), out int n) ? n : int.MaxValue;
         }
 
         // ------------------------------------------------------------------ gaze selection
@@ -897,7 +959,7 @@ namespace Cocktail.Ui
             {
                 if (UsingFake) { if (fake != null) fake.Stop(); }
                 else if (input != null) input.Send(ProtoAction.Stop, null, modality);
-                _pendingId = null; _pendingLeft = 0f;
+                _localChosen = null; _pendingId = null; _pendingLeft = 0f;
                 return true;
             }
             if (UsingFake) { if (fake != null) fake.Select(id); }
@@ -907,6 +969,7 @@ namespace Cocktail.Ui
                 Vector3 o = _worldRoot.InverseTransformPoint(head.position);
                 Vector3 d = _worldRoot.InverseTransformDirection(head.forward);
                 input.Send(ProtoAction.Select, id, modality, o, d);
+                _localChosen = id;
             }
             _pendingId = id; _pendingLeft = theme.pendingSelectSeconds;
             return true;

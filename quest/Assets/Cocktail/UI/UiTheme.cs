@@ -164,7 +164,7 @@ namespace Cocktail.Ui
         [Tooltip("Thin dark line around the outline, dot and arrow so they read on light walls.")] public Color speakerOutlineColor = Hex(0x0A0A14);
         [Tooltip("Outline box around a speaker when the camera gives no box for them: full angle in degrees (width, height).")] public Vector2 speakerBoxDeg = new Vector2(22f, 46f);
         [Tooltip("Corner bracket line width, arm length (fraction of the shorter side) and the dark outer line, in metres at the marker distance.")] public float speakerBracketThickness = 0.006f, speakerBracketArm = 0.22f, speakerOutlineExtra = 0.003f;
-        [Tooltip("A source counts as speaking when labelled speech, tracking, and at least this loud (dB).")] public float speakingMinDb = -50f;
+        [Tooltip("A source counts as speaking when labelled speech, tracking, and at least this loud (dB). -55 matches the hub's own silence floor (hub/track/tracker.py active_floor_db).")] public float speakingMinDb = -55f;
         [Tooltip("Keep the outline this long after the hub stops reporting speech, so it does not flicker.")] public float speakerHoldSeconds = 0.6f;
         [Tooltip("The speaker is in view when within this many degrees of straight ahead; beyond that a dot is shown at the screen edge.")] public float speakerViewHalfDeg = 45f, speakerViewHalfVertDeg = 28f;
         [Tooltip("Speaker picker: head-locked offset, row width and height, number size (metres / em).")] public Vector3 speakerListOffset = new Vector3(0.42f, -0.2f, 1.1f);
