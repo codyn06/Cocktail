@@ -81,6 +81,10 @@ from vision.person_box import PersonBox  # noqa: E402
 person_box = PersonBox(state, events_state.selection, camera_flipped=a.camera_flipped,
                        enabled=not a.no_person_box,
                        recorder_fn=lambda: getattr(app.state, "speakers", None))
+from events.no_audio_bearing import strip_audio_bearing  # noqa: E402
+
+# Demo: no audio-derived direction is ever shown (it lands tens of degrees off on the Quest 3S); a box only from the camera.
+events_state.source_overlays.insert(0, strip_audio_bearing)
 events_state.source_overlays.append(person_box.overlay)
 person_box.start()
 
