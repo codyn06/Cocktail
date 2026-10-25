@@ -1,6 +1,6 @@
 # Cocktail
 
-An audio-first assistive experience built at a hackathon by a team of four. A Meta Quest 3S
+An audio-first assistive experience built by our team of four. A Meta Quest 3S
 headset streams its microphones, camera and head pose to a laptop "hub", which splits the
 room's sound into separate labeled sources, works out where each one is, and sends the
 chosen sound back to the headset in 3D. Plan: [`docs/QUEST_PRD.txt`](docs/QUEST_PRD.txt). Architecture and decisions:
