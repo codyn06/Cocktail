@@ -8,6 +8,10 @@ Every hop (default 1 s) the separator sees the last `win` seconds (default 2 s) 
 
 The voice separator always outputs two voices. With one talker it splits that person across
 both, so two gates run on every window:
+  (The merge gate is OFF by default (merge_ild_db=0): its threshold depends on the mic geometry.
+  4.5 dB fits ear-level mics as in the simulator; on the Quest 3S the two mics are ~1-2 cm apart
+  and every pair of voices measured 0.5-3.5 dB, so it merged real talkers. Enable it only with a
+  threshold calibrated for the device.)
   merge:  if the two voice streams arrive from the same direction (their left/right level
           difference, per band 1-8 kHz, differs by less than merge_ild_db) they are one source: summed
           into the louder slot, the other slot goes silent. Needs >= 2 mics.
@@ -62,7 +66,7 @@ def band_levels(x: np.ndarray) -> np.ndarray:
 class LiveSeparator:
     def __init__(self, separator, labeler=None, win_s: float = 2.0, hop_s: float = 1.0,
                  label_every: int = 1, label_smooth: float = 0.6, swap_margin: float = 0.1,
-                 floor_db: float = -60.0, merge_ild_db: float = 4.5, speech_min: float = 0.2):
+                 floor_db: float = -60.0, merge_ild_db: float = 0.0, speech_min: float = 0.2):
         self.sep, self.labeler = separator, labeler
         self.W, self.H = int(win_s * SR), int(hop_s * SR)
         assert self.W == 2 * self.H, "overlap-add assumes 50 % overlap"
@@ -90,10 +94,20 @@ class LiveSeparator:
         if self._prev_mono is not None:  # keep voice order consistent with the previous window
             a, b = v[:, : self.H], self._prev_mono
 
-            def cos(u, w):
-                return abs(np.dot(u, w)) / (np.linalg.norm(u) * np.linalg.norm(w) + 1e-9)
-            same = cos(a[0], b[0]) + cos(a[1], b[1])
-            swap = cos(a[0], b[1]) + cos(a[1], b[0])
+            # A stream more than 30 dB below the other is silent: its faint leftover copy of a
+            # voice must not "match" that voice just because cosine similarity ignores level
+            # (seen live: the wearer jumped streams when a second talker started).
+            def live(z):
+                e = np.sum(z**2, axis=1)
+                return e > 1e-3 * (e.max() + 1e-12)
+            on_a, on_b = live(a), live(b)
+
+            def cos(i, j):
+                if not (on_a[i] and on_b[j]):
+                    return 0.0
+                return abs(np.dot(a[i], b[j])) / (np.linalg.norm(a[i]) * np.linalg.norm(b[j]) + 1e-9)
+            same = cos(0, 0) + cos(1, 1)
+            swap = cos(0, 1) + cos(1, 0)
             if swap > same + self.swap_margin:  # weak evidence keeps the previous order
                 v = v[::-1]
         # Fit the separator's arbitrary per-output scale (ridge keeps it sane when a voice is absent).
