@@ -37,9 +37,10 @@ def test_status_is_judged_against_the_targets():
     assert lock[2] == "met" and "within 3 s: 8/11" in lock[1] and "never: 1" in lock[1]
     assert rows["Confidence honesty"][2] == "no target" and "ECE 0.12" in rows["Confidence honesty"][1]
     assert rows["Two speakers within 25 deg"][2] == "no data"
-    rt_row = rows["Round trip median / p90 MOCK"]
-    assert rt_row[1] == "128 / 151 ms (n=38/40)" and rt_row[2] == "met"
-    assert rows["Round trip worst case MOCK"][1] == "190 ms"
+    rt_row = rows["Round trip median / p90"]
+    assert rt_row[1] == "128 / 151 ms (n=38/40)"
+    assert rt_row[2] == "met (mock, example, not a result)"   # the status itself says it is not a measurement
+    assert rows["Round trip worst case"][1] == "190 ms"
 
 
 def test_method_choice():
@@ -57,19 +58,40 @@ def test_never_locking_takes_count_against_the_median():
 
 def test_missing_inputs_say_no_data_instead_of_crashing():
     only_delay = table_rows(rt.build_table(None, DELAY))
-    assert only_delay["Round trip median / p90 MOCK"][2] == "met"
+    assert only_delay["Round trip median / p90"][2].startswith("met")
     only_bench = table_rows(rt.build_table(BENCH, None))
     assert only_bench["Round trip median / p90"][2] == "no data"
     nothing = rt.build_table({"summaries": {}}, {})
     assert "no bench data" in nothing and nothing.count("no data") >= 8
 
 
-def test_failed_delay_run_is_not_met():
-    d = dict(DELAY, **{"pass": False, "fail_reasons": ["median 180 ms > 150 ms"], "median_ms": 180.0})
+def real_delay(**kv) -> dict:
+    d = {**DELAY, "mode": "headset", **kv}
     d.pop("example")
+    return d
+
+
+def test_median_and_worst_rows_are_judged_separately():
+    slow = table_rows(rt.build_table(None, real_delay(median_ms=180.0, **{"pass": False})))
+    assert slow["Round trip median / p90"][2] == "NOT MET"
+    assert slow["Round trip worst case"][2] == "met"            # worst 190 <= 300
+    spike = table_rows(rt.build_table(None, real_delay(worst_ms=450.0, **{"pass": False})))
+    assert spike["Round trip median / p90"][2] == "met"          # median 128 <= 150
+    assert spike["Round trip worst case"][2] == "NOT MET"
+    t = rt.build_table(None, real_delay())
+    assert not t.startswith("**EXAMPLE") and "not a result" not in t
+
+
+def test_too_few_trials_says_so_instead_of_two_unexplained_not_met_rows():
+    rows = table_rows(rt.build_table(None, real_delay(n_valid=12, **{"pass": False})))
+    assert rows["Round trip median / p90"][2] == "too few trials (12 of 30)"
+    assert rows["Round trip worst case"][2] == "too few trials (12 of 30)"
+
+
+def test_mock_run_is_marked_in_the_status_even_without_the_example_flag():
+    d = real_delay(mode="mock")
     rows = table_rows(rt.build_table(None, d))
-    assert rows["Round trip median / p90 MOCK"][2] == "NOT MET"
-    assert not rt.build_table(None, d).startswith("**EXAMPLE")
+    assert rows["Round trip median / p90"][2] == "met (mock, not a result)"
 
 
 def test_cli_prints_and_writes(tmp_path, capsys):

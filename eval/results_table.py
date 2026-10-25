@@ -93,13 +93,20 @@ def rows_from_delay(d: dict | None) -> list[tuple[str, str, str, str]]:
     names = ("Round trip median / p90", "Round trip worst case")
     if not d or "median_ms" not in d:
         return [(n, "-", "-", NO_DATA) for n in names]
-    mode = d.get("mode", "?")
-    tag = {"mock": " MOCK", "headset": ""}.get(mode, f" {mode}")
-    ok = MET if d.get("pass") else NOT_MET
+    n_valid, need = d.get("n_valid", 0), d.get("min_trials", 30)
+    # Each row is judged on its own number; a run with too few heard trials is judged on neither.
+    if n_valid < need:
+        med_ok = worst_ok = f"too few trials ({n_valid} of {need})"
+    else:
+        med_ok = MET if d["median_ms"] <= d["budget_median_ms"] else NOT_MET
+        worst_ok = MET if d["worst_ms"] <= d["budget_worst_ms"] else NOT_MET
+    # A simulated or example run must not read as a result: say so in the status itself.
+    flags = [x for x, on in (("mock", d.get("mode") == "mock"), ("example", d.get("example"))) if on]
+    tag = f" ({', '.join(flags)}, not a result)" if flags else ""
     return [
-        (names[0] + tag, f"<= {d['budget_median_ms']:g} ms (assumed)",
-         f"{d['median_ms']:.0f} / {d['p90_ms']:.0f} ms (n={d['n_valid']}/{d['n_trials']})", ok),
-        (names[1] + tag, f"<= {d['budget_worst_ms']:g} ms (assumed)", f"{d['worst_ms']:.0f} ms", ok),
+        (names[0], f"<= {d['budget_median_ms']:g} ms (assumed)",
+         f"{d['median_ms']:.0f} / {d['p90_ms']:.0f} ms (n={n_valid}/{d['n_trials']})", med_ok + tag),
+        (names[1], f"<= {d['budget_worst_ms']:g} ms (assumed)", f"{d['worst_ms']:.0f} ms", worst_ok + tag),
     ]
 
 
