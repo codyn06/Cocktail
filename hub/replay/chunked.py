@@ -221,15 +221,15 @@ class ChunkedSpeechRunner:
     """Drives the per-chunk visual+speech stages over a ``ChunkSource``. Models and the visual front end are
     injected, so the same code runs on CPU fakes (mocked gates) and on the real adapters."""
 
-    def __init__(self, source, models: SpeechModels, visual: VisualFrontEnd, cache: StageCache, cfg: AvConfig,
-                 run_dir: str | Path, *, media_id: str, identity_factory=None, yaw_provider=None,
+    def __init__(self, source, models: SpeechModels | None, visual: VisualFrontEnd | None, cache: StageCache,
+                 cfg: AvConfig, run_dir: str | Path, *, media_id: str, identity_factory=None, yaw_provider=None,
                  counters: Counters | None = None, fault: FaultHook | None = None,
                  visual_revisions: dict | None = None):
         self.src, self.cache, self.cfg = source, cache, cfg
         self.run_dir = Path(run_dir)
         self.media_id = media_id
         self.counters = counters or Counters()
-        self.models = count_models(models, self.counters)
+        self.models = None if models is None else count_models(models, self.counters)
         self.visual = visual
         self.fault = fault or (lambda name, k: None)
         self.visual_revisions = visual_revisions or {}
@@ -247,6 +247,15 @@ class ChunkedSpeechRunner:
                                     _peel, _cont)
         self._ingest_key = cache.key("ingest", inputs={"media": media_id},
                                      transform={"rate": source.audio_rate_hz, "av_map": repr(source.av_map)})
+
+    # ---- per-pass model hand-over (pipeline loads each pass's models under a lifecycle lease)
+    def set_models(self, models: SpeechModels) -> None:
+        self.models = count_models(models, self.counters)
+
+    def set_visual(self, visual: VisualFrontEnd, revisions: dict | None = None) -> None:
+        self.visual = visual
+        if revisions is not None:
+            self.visual_revisions = revisions
 
     # ---- helpers
     def _master(self, s16: int) -> int:
