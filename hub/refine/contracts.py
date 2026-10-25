@@ -20,6 +20,11 @@ from typing import Callable
 import numpy as np
 
 
+class CutUnavailable(Exception):
+    """A job cannot be cut right now (not audible, not speech, window too short, no video ...).
+    ``str(e)`` is the reason published with state ``unavailable``."""
+
+
 class RefineState(StrEnum):
     pending = "pending"          # a job exists for the live key and has not finished (or has not started yet)
     accepted = "accepted"        # the chosen voice matched a visible face: evidence only
