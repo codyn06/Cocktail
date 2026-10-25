@@ -2,6 +2,7 @@
 name: device-engineer
 description: "Engineer for bounded phone, Ray-Ban Meta glasses, and Quest integration tasks. Verifies device capabilities before relying on them."
 model: sonnet
+effort: low
 skills:
   - graphify
   - hz-quest-verify-first

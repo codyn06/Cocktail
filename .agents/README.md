@@ -61,6 +61,10 @@ from the orchestrator). Record tool/version, result, and limitations in your bra
 
 - **Claude Code**: nothing to install. Ask e.g. "Use the docs-scout subagent to verify
   the SAM3 video API." Run parallel editing subagents with worktree isolation.
+  Models: the main session uses `.claude/settings.json` (Sonnet, high effort, Opus
+  advisor); generated subagents get `model: sonnet` and `effort: low` from
+  `scripts/sync.mjs`. Override per role by adding `model:` or `effort:` to the role's
+  frontmatter, then sync.
 - **Codex**: trust the project so `.codex/agents/` loads (untested here). Ask e.g.
   "Spawn the reviewer agent to review the current diff." No `.codex/config.toml` is created.
 - **Pi**: install Pi yourself (not installed here). The extension is copied to

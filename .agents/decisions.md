@@ -11,7 +11,11 @@ status does not belong here (see `AGENTS.md` > Continuity).
 - No app stack chosen; no package.json; no dependencies.
 - LLM: Gemma, run directly (not through the Gemini API). Use the vendored `gemma-dev` skill (google-gemma/gemma-skills); the
   `gemini-api-dev` skill was removed. Variant and runtime are undecided.
-- Roles have no model names (inherit). Read-only roles may use bounded shell inspection;
+- Deadline workflow (2026-10-25): Claude Code orchestrator runs Sonnet at high effort with Opus
+  as advisor; sync generates Claude subagents as Sonnet at low effort (roles may override with
+  `model:`/`effort:` frontmatter). No delegation concurrency cap; editing agents use separate
+  worktrees with disjoint file ownership; long commands run in the background. Other tools'
+  roles have no model names (inherit). Read-only roles may use bounded shell inspection;
   shell restrictions are instruction-enforced, including in Claude and Pi. Direct
   edit tools remain unavailable to those roles in Claude/Pi.
 - Generated adapters are copies, not symlinks; the manifest + hash guard prevents

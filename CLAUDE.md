@@ -6,7 +6,11 @@
   `.agents/` by `node .agents/scripts/sync.mjs`. Edit the canonical source, then re-run sync.
 - Delegate with the Agent tool using the project subagents (`docs-scout`,
   `perception-engineer`, `device-engineer`, `integration-engineer`, `reviewer`).
-- Parallel editing subagents must use worktree isolation; otherwise run them one at a time.
+- Models: the main session (orchestrator) runs Sonnet at high effort with Opus as advisor
+  (`.claude/settings.json`); generated subagents run Sonnet at low effort. Override per role
+  with `model:`/`effort:` in `.agents/roles/<role>.md`, then re-run sync.
+- Parallel editing subagents always use `isolation: "worktree"`; spawn independent tasks
+  in one message. Long shell commands (>1 min) use `run_in_background` + `Monitor`.
 
 ## graphify
 
