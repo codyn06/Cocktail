@@ -21,6 +21,8 @@ ap = argparse.ArgumentParser(description=__doc__)
 ap.add_argument("--host", default="0.0.0.0")
 ap.add_argument("--port", type=int, default=p.DEFAULT_PORT)
 ap.add_argument("--no-labels", action="store_true")
+ap.add_argument("--voice-memory", action="store_true",
+                help="use optional WavLM speaker embeddings to retain voice slots across pauses")
 ap.add_argument("--locate-method", choices=["level", "tdoa"], default="level",
                 help="direction finding: level (head shadow) or tdoa (inter-mic delay, calibrated; Quest 3S)")
 ap.add_argument("--merge-ild-db", type=float, default=0.0,
@@ -30,7 +32,8 @@ logging.basicConfig(level=logging.INFO)
 
 state = IngestState()
 worker = SeparationWorker(state, LiveSeparator(VoiceSeparator(), None if a.no_labels else SoundLabeler(),
-                                               merge_ild_db=a.merge_ild_db))
+                                               merge_ild_db=a.merge_ild_db,
+                                               voice_memory=a.voice_memory))
 try:  # direction finding (C4) if hub/locate is present
     from locate.live import LiveLocator
 

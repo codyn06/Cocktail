@@ -129,13 +129,16 @@ benchmark harness from PR #20 lives in `eval/` with its own `bench` dependency g
     frequency, and the separator gives the two halves of one talker different frequency
     regions, so a single broadband comparison made them look like two directions.
   - **Speech gate:** a voice stream that doesn't sound like speech moves into the residual.
-- **Why direction:** level correlation and voice fingerprints (WavLM speaker embeddings) were
-  measured first and couldn't tell one split talker from two real ones, including a
-  same-gender pair.
-- **The separator does not decide identity across pauses.** It keeps a voice in its stream
-  while it continues; whether the next voice after a pause is the same person is tracking's
-  job (D1), using world bearing (D8). Head-relative directions drift as the head turns, so a
-  direction memory inside the separator made single talkers hop between streams.
+- **Why direction for one-talker merging:** level correlation and short-window voice fingerprints
+  (WavLM speaker embeddings) could not distinguish one split talker from two real ones, including
+  a same-gender pair. Speaker embeddings are not used to make that merge decision.
+- **Optional voice-slot memory:** the live separator can maintain WavLM speaker profiles from
+  accumulated active speech and consult them when an output returns after a pause. It remaps only
+  above similarity and margin thresholds; otherwise it preserves the overlap ordering. This is a
+  slot-continuity aid, not a claim that the separator has fully solved speaker tracking. The
+  checkpoint's license scope is unclear (see the model card), so it is not redistributed.
+- **Direction memory remains outside the separator.** Head-relative directions drift as the head
+  turns, so a direction memory inside the separator made single talkers hop between streams.
 - **Scenario suite** (`python -m separate.suite`, 11 simulated scenes):
   - two talkers, including two men and music louder than the speech: +17 to +22 dB;
   - one talker: +9 to +16 dB in a single stream;
