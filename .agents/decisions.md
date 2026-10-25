@@ -43,6 +43,12 @@ status does not belong here (see `AGENTS.md` > Continuity).
 - `assign` statuses are per source (matched/ambiguous/unmatched); `rejected` is a per-candidate label. MP4 output is optional
   and needs an ffmpeg found via config, `COCKTAIL_FFMPEG`/`FFMPEG_BINARY`, PATH or `imageio_ffmpeg`. Deferred to later phases:
   off-axis DRR widening, cache-hit stage skipping, viewer FrameTransform/output-latency handling, real models.
+- Chosen-voice measurement (`separate.measure_chosen`, PR #43): SIR-style on the separator's streams, not the `/audio/out` route.
+  Each 250 ms window of the chosen stream is least-squares projected on the session's ground-truth stems; margin = target vs
+  the sum of the other stems, and sound matching no stem is reported as `unexplained_db`. The chosen stream is picked by oracle
+  (best SI-SDR vs the target after t0); `carried_by` shows when the voice sits in another stream. Sessions without stems are
+  refused. Replayed result: the 10 dB / 1 s target is met on the 2-voice scene and not met on the 3-voice scene (two voice
+  outputs plus a residual); a decision on how a third talker is held is needed before that target can pass.
 
 - `/audio/out` takes an optional `?layout=layers|stereo` query parameter (default `layers`, the Quest). `layers` frames are unity gain because the Quest applies inner/outer dB itself; the hub applies `SetVolumes` only for `stereo` clients (or with `--out-gains-in-layers`). Approved by Cody (PR #42); no change to `hub/protocol`.
 - Chosen voice routing (hub `events/selection.py`, `out/`, PR #42): select/stop/next/prev arrive as `InputEvent` on `/ingest/pose`
