@@ -423,7 +423,7 @@ Worktree note: gitignored checkpoints and FFmpeg DLLs live in the main checkout;
 
 ## AV Phase 5: live selected-voice refinement bridge (branch `feat/av-phase5-live-refine`, PR #62; base `feat/av-phase4-long-clips`)
 
-`python -m refine` is the live hub (same composition as `separate/__main__.py`) plus `hub/refine/`: when a source is chosen, a
+`python -m refine [--refine]` is the live hub (refinement default OFF) (same composition as `separate/__main__.py`) plus `hub/refine/`: when a source is chosen, a
 bounded job (S3FD faces -> TalkNet -> AV-TSE, matched against the HUB slot audio; no SAM 3, no second MossFormer2) decides whether
 the chosen voice belongs to a visible face. It publishes a verdict only: it never changes selection, route, `/audio/out` audio
 or `sources.updated` (`audio_applied` is always false: measured job latency is 4.7-6.2 s, longer than the playback queue).
@@ -444,7 +444,7 @@ client; **live** = real hub process with real models (RTX 5070 Ti Laptop); no he
 | Correct-match: stkM_x3 (18 s, 3x repeat of the 6 s clip), selected voice | `accepted`: matches visible face `f0`, TSE vs slot SI-SDR 17.5 dB, assoc_conf 0.87, latency 5.45 s, `TargetUpdated kind=person` | replayed + live models, looped content |
 | stkM unmatched voice stays refused | NOT shown: the select-all run only ever selected one source (stale), so the second voice was not exercised through the live path | untested live |
 | Memory (whole hub process tree, live separator + voice memory + refinement models + CUDA) | peak host RSS 3.2-3.7 GiB (budget 6.0: pass); GPU total peak 1.4-2.0 GiB over a 0.5 GiB desktop baseline | live |
-| Audio continuity with jobs running | seq breaks 0, ts regressions 0, hops_dropped 0, separator lag <= 0.1 s; BUT output underruns 4-8 with a job running vs 2-3 baseline (longest gap 0.30 s vs 0.14-0.18 s) | live; mitigation in progress (see handoff) |
+| Audio continuity with jobs running | seq breaks 0, ts regressions 0, hops_dropped 0, separator lag <= 0.1 s; BUT output underruns 4-8 with a job running vs 2-3 baseline (longest gap 0.30 s vs 0.14-0.18 s) | live; NOT mitigated. Refinement is therefore opt-in: `python -m refine --refine` (default off). A mitigation attempt (frame subsampling, yielding, pacing) was started and stopped unfinished |
 
 Not done / unverified: real long-clip, silent-bystander, listening review, non-speech and diarization gates (as scoped);
 fixtures are single-mic mono duplicated to 2 channels, so bearings are meaningless and sources are announced only through the

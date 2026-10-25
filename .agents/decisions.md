@@ -125,7 +125,7 @@ status does not belong here (see `AGENTS.md` > Continuity).
   Phase 4 7.69 GiB RSS was the SAM 3 load); measured peak RSS of the whole hub is 3.2-3.7 GiB. States are served on
   `GET /refinement/status`; `TargetUpdated` on `/events` (via a new per-client aux queue, `EventsState.publish_aux`) carries
   `person`+assoc_conf only when accepted. Proposed, not applied (protocol frozen, Lalitha owns wire): optional
-  `refinement_state` on `TargetUpdated`. `python -m refine` is the live entry; `--no-refine` composes the baseline.
+  `refinement_state` on `TargetUpdated`. `python -m refine` is the live entry; refinement is OPT-IN (`--refine`, default off) because jobs running beside the live separator raised /audio/out underruns (4-8 vs 2-3 baseline) and gaps (0.30 s vs 0.15 s); the interference is unmitigated.
 - PR #59 identity rules, approved by the integration owner for Phase 5 and implemented as OPT-IN (tracker behaves as before
   when no identity is passed): `StreamChunk.acoustic_id/identity_conf` from VoiceMemory (`src_<logical slot>`, conf 0.9 vs 0.2),
   `Tracker.update(..., identity=)` with an `id_map` (mapping after `confirm_hits` at conf >= 0.6, merge veto, split, rejoin,

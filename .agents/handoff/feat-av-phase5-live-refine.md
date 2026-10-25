@@ -1,5 +1,5 @@
 # feat/av-phase5-live-refine
-Status: in progress (2026-10-25)
+Status: ready for review pending items below (2026-10-25)
 Owner: Cody / Claude Code orchestrator   PR: draft, base `feat/av-phase4-long-clips` (Phase 4 PR #58 is unmerged)
 
 ## Ownership (new package `hub/refine/`; nothing in protocol/ingest/out/separate changes)
@@ -27,3 +27,13 @@ Owner: Cody / Claude Code orchestrator   PR: draft, base `feat/av-phase4-long-cl
 
 ## Next steps
 - Wave 1 (T2, T3, T4, T6a in parallel worktrees), then wave 2, review, live smoke (ask user: GPU free?).
+
+## Verification (final state)
+- hub suite on the merged branch before the identity/fix merges: 789 passed, 2 skipped, 6 expected xfails (mocked); after: tests/refine 65 passed (mocked). Full suite re-run: see PR.
+- Live/replayed: see docs/STATUS.md Phase 5 table (accepted match on looped stkM, stale rejections observed, RSS 3.2-3.7 GiB).
+
+## Open / next steps
+- Interference: jobs beside the live separator raise underruns; refinement is opt-in. Branch `feat/av-phase5-perf` (unmerged, abandoned partial work) holds the stopped attempt.
+- NOT shown: stkM's unmatched voice staying refused through the live path (select-all selected one source only).
+- Reviewer pass did not cover the T7 identity diff (hub/track, separate/live, locate/live).
+- Delete this handoff in the PR before merge; decisions are already in .agents/decisions.md.

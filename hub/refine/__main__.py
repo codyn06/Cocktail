@@ -3,7 +3,8 @@
 Same composition as `python -m separate` (flags included) plus refinement: GET /refinement/status and
 target.updated on /events. Refinement never changes selection, route or /audio/out audio.
 
-  --no-refine                 compose without refinement (baseline for A/B)
+  --refine                    enable selected-voice refinement (default OFF: measured to add output underruns, see docs/STATUS.md)
+  --no-refine                 explicit baseline (the default)
   --refine-device cuda        device for the refinement models (loaded in a background thread)
   --refine-window-s 4.0       audio/video window per job
   --refine-refresh-s 4.0      re-run for the same selection after this long
@@ -42,7 +43,8 @@ ap.add_argument("--out-gains-in-layers", action="store_true",
                 help="hub applies inner/outer dB in the Quest 'layers' layout (default: the Quest applies them)")
 ap.add_argument("--merge-ild-db", type=float, default=0.0,
                 help="one-talker merge threshold in dB; 0 = off. Calibrate per device (4.5 = simulator)")
-ap.add_argument("--no-refine", action="store_true", help="compose without refinement (A/B baseline)")
+ap.add_argument("--refine", action="store_true", help="enable refinement (default off)")
+ap.add_argument("--no-refine", action="store_true", help="baseline; this is the default")
 ap.add_argument("--refine-device", default="cuda")
 ap.add_argument("--refine-window-s", type=float, default=4.0)
 ap.add_argument("--refine-refresh-s", type=float, default=4.0)
@@ -70,7 +72,7 @@ audio_out = install_audio_out(app, events_state, AudioOutConfig(
     settle_s=a.out_settle_s, apply_gains_in_layers=a.out_gains_in_layers))
 worker.listeners.append(audio_out.on_chunks)
 
-if not a.no_refine:
+if a.refine and not a.no_refine:
     cfg = RefineConfig(window_s=a.refine_window_s, refresh_s=a.refine_refresh_s)
 
     def fake_runner(job):

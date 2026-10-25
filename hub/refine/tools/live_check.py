@@ -369,6 +369,8 @@ def main(argv=None) -> int:
     cmd = [sys.executable, "-m", "refine", "--port", str(a.port), *a.hub_arg]
     if not a.refine:
         cmd.append("--no-refine")
+    else:
+        cmd.append("--refine")
     if a.fake != "none":
         cmd += ["--refine-fake", a.fake]
     base, ws_base = f"http://127.0.0.1:{a.port}", f"ws://127.0.0.1:{a.port}"
