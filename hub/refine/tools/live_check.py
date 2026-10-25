@@ -361,11 +361,12 @@ def main(argv=None) -> int:
     ap.add_argument("--speed", type=float, default=1.0)
     ap.add_argument("--baseline", type=Path)
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--hub-arg", action="append", default=[], help="extra flag for the hub, repeatable (e.g. --voice-memory)")
     a = ap.parse_args(argv)
 
     from mockclient.session import Session
     sess = Session.load(a.session)
-    cmd = [sys.executable, "-m", "refine", "--port", str(a.port)]
+    cmd = [sys.executable, "-m", "refine", "--port", str(a.port), *a.hub_arg]
     if not a.refine:
         cmd.append("--no-refine")
     if a.fake != "none":
