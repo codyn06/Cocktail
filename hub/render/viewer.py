@@ -94,8 +94,17 @@ def build_bundle(b: BundleInput):
         render_sequence([out / "frames" / n for n in names], b.overlays, out / "annotated")
         annotated_ok = True
     first = b.manifest.media.video[0]
+    mask_w, mask_h = first.width, first.height
+    for recs in b.tracks.values():
+        sized = next((r.rle for r in recs if r.rle is not None), None)
+        if sized is not None:
+            mask_w, mask_h = int(sized.width), int(sized.height)
+            break
+    transform = {"version": 1, "frame_w": first.width, "frame_h": first.height, "mask_w": mask_w, "mask_h": mask_h}
+    b.manifest.capabilities["frame_transform"] = transform
     (out / "frames.json").write_text(json.dumps({
         "pts_us": b.pts_us, "files": [f"frames/{n}" for n in names], "width": first.width, "height": first.height,
+        "transform": transform,
         "annotated": [f"annotated/{n}" for n in names] if annotated_ok else None}))
 
     mp4 = {}
