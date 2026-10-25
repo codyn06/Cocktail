@@ -1054,7 +1054,7 @@ namespace Cocktail.Ui
             bool chord = OVRInput.Get(OVRInput.Button.Two, OVRInput.Controller.RTouch) && OVRInput.Get(OVRInput.Button.Four, OVRInput.Controller.LTouch);
             if (chord && !_devChordWas) DevMode.Toggle();
             _devChordWas = chord;
-            if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch)) ToggleHudMode();
+            if (DevMode.On && OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch)) ToggleHudMode();   // the older HUD modes are a developer aid: an accidental A press must not change the demo layout
             if (UsingFake && fake != null)
             {
                 if (OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch) && !OVRInput.Get(OVRInput.Button.Four, OVRInput.Controller.LTouch)) fake.Stop();
