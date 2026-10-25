@@ -19,6 +19,7 @@ import protocol as p
 from track import Tracker
 
 from .selection import Selection
+from .state_publish import install_state_publisher
 
 log = logging.getLogger("events")
 _command = TypeAdapter(p.Command)
@@ -228,6 +229,7 @@ def install_events(app: FastAPI, locator=None, tracker: Tracker | None = None) -
     """Attach to the ingest app before startup; preserve its existing lifespan."""
     state = EventsState(app.state.ingest, locator, tracker or Tracker())
     app.state.events = state
+    install_state_publisher(state)
     previous_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
@@ -252,6 +254,15 @@ def install_events(app: FastAPI, locator=None, tracker: Tracker | None = None) -
     @app.get("/tracks")
     async def tracks():
         return [source.model_dump(mode="json") for source in state.latest.sources]
+
+    @app.get("/selection")
+    async def selection():
+        sel = state.selection
+        route = sel.route(state.tracker)
+        return {"chosen": sel.chosen, "version": sel.version,
+                "state": route.state.value if route is not None else None,
+                "slots": list(route.slots) if route is not None else [],
+                "bearing_deg": route.bearing_deg if route is not None else None}
 
     @app.websocket(p.WS_EVENTS)
     async def events(ws: WebSocket):
