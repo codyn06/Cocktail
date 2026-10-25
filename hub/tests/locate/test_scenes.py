@@ -19,7 +19,9 @@ def test_scene_scoreboard_rows_and_summary(tmp_path, capsys):
     warnings.simplefilter("ignore")
     d = scenes.ensure_scene(tmp_path / "scenes", 0, (-30, 40), seed=100, secs=15.0)
     assert scenes.ensure_scene(tmp_path / "scenes", 0, (-30, 40), seed=100, secs=15.0) == d  # reused
-    rows = scenes.score_scene(d, cal)
+    raw = []
+    rows = scenes.score_scene(d, cal, None, raw)
+    assert raw and raw[-1]["sources"] and {r["stream"] for r in rows} <= {x["source_id"] for x in raw[-1]["sources"]}
     assert [r["truth"] for r in rows] == [-30.0, 40.0]
     assert all(r["timeline"] and r["conf_points"] for r in rows)
     assert all(0.0 <= c <= 1.0 for r in rows for c, _ in r["conf_points"])

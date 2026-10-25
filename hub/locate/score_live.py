@@ -60,7 +60,8 @@ def oracle_separator(s: Session, win_s: float = 2.0, hop_s: float = 1.0) -> Orac
     return OracleSeparator(np.stack([np.pad(r, (0, n - len(r))) for r in refs]), int(hop_s * SR), int(win_s * SR))
 
 
-def run(s: Session, live: LiveSeparator, method: str = "level", calib=None, pair_cfg=None):
+def run(s: Session, live: LiveSeparator, method: str = "level", calib=None, pair_cfg=None, on_step=None):
+    """on_step(loc): called after every hop with the LiveLocator (e.g. to record loc.sources())."""
     st = IngestState()
     loc = LiveLocator(st, method=method, calib=calib, pair_cfg=pair_cfg)
     r = Resampler(s.sample_rate, s.audio.shape[1])
@@ -80,6 +81,8 @@ def run(s: Session, live: LiveSeparator, method: str = "level", calib=None, pair
             nxt = next(poses, None)
         chunks = live.step(x[start : start + live.W], t0)
         loc.on_chunks(chunks)
+        if on_step is not None:
+            on_step(loc)
         for c in chunks:
             est[c.stream_id].append(c.audio)
         for sid, e in loc.estimates().items():

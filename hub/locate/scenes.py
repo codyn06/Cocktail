@@ -62,11 +62,16 @@ def ensure_scene(root: Path, k: int, pair, seed: int, secs: float = SCENE_SECOND
     return d
 
 
-def score_scene(d: Path, calib: PairCalibration, pair_cfg: PairConfig | None = None) -> list[dict]:
-    """One row per talker: truth, final estimate, and the whole timeline of (t, world, conf, state)."""
+def score_scene(d: Path, calib: PairCalibration, pair_cfg: PairConfig | None = None,
+                raw: list | None = None) -> list[dict]:
+    """One row per talker: truth, final estimate, and the whole timeline of (t, world, conf, state).
+    raw: if a list, appended after every hop with the device time and loc.sources() as JSON dicts,
+    the locator output the hub's tracker would see (see track.jitter)."""
     s = Session.load(d)
     live = LiveSeparator(score_live.oracle_separator(s), None)
-    est, trace, loc = score_live.run(s, live, "tdoa", calib, pair_cfg)
+    step = None if raw is None else (lambda loc: raw.append(
+        {"t_us": loc.now_us, "sources": [x.model_dump(mode="json") for x in loc.sources()]}))
+    est, trace, loc = score_live.run(s, live, "tdoa", calib, pair_cfg, on_step=step)
     streams = score_live.assign_streams(s, est)
     final = loc.estimates()
     go = float(s.meta.get("head_go_s", HEAD_GO_S))
@@ -75,7 +80,7 @@ def score_scene(d: Path, calib: PairCalibration, pair_cfg: PairConfig | None = N
         truth, e = float(q["bearing_deg"]), final[sid]
         tl = [(t, w, c, st) for t, w, st, c, _alt in trace[sid]]
         rows.append({
-            "scene": d.name, "talker": q["name"], "truth": truth, "region": bench.region(truth),
+            "scene": d.name, "talker": q["name"], "stream": sid, "truth": truth, "region": bench.region(truth),
             "est": e.world_deg, "err": abs(float(wrap180(e.world_deg - truth))), "conf": e.confidence,
             "state": e.state, "fb_right": bench.front_back_right(e.world_deg, truth),
             "lock_s": bench.seconds_to_lock(tl, truth, go),
@@ -114,10 +119,15 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def run_suite(root: Path, calib: PairCalibration, pair_cfg: PairConfig | None = None, seed0: int = 100,
-              n: int | None = None, secs: float = SCENE_SECONDS, verbose: bool = True) -> tuple[list[dict], dict]:
+              n: int | None = None, secs: float = SCENE_SECONDS, verbose: bool = True,
+              raw_out: dict | None = None) -> tuple[list[dict], dict]:
+    """raw_out: if a dict, filled with scene name -> {"raw": [...], "streams": {stream: truth deg}}."""
     rows = []
     for k, pair in enumerate(PAIRS[:n]):
-        r = score_scene(ensure_scene(root, k, pair, seed0 + k, secs), calib, pair_cfg)
+        raw = None if raw_out is None else []
+        r = score_scene(ensure_scene(root, k, pair, seed0 + k, secs), calib, pair_cfg, raw)
+        if raw_out is not None:
+            raw_out[r[0]["scene"]] = {"raw": raw, "streams": {x["stream"]: x["truth"] for x in r}}
         rows += r
         if verbose:
             print(f"scene {k:2d} {str(pair):12s} " + "  ".join(
@@ -161,14 +171,20 @@ def main(argv=None) -> None:
     ap.add_argument("--n", type=int, default=None, help="only the first n scenes")
     ap.add_argument("--seconds", type=float, default=SCENE_SECONDS)
     ap.add_argument("--json", type=Path, default=None, help="also write rows and summary here")
+    ap.add_argument("--raw-json", type=Path, default=None,
+                    help="also write the locator's per-hop sources (input for python -m track.jitter)")
     a = ap.parse_args(argv)
     warnings.filterwarnings("ignore")
     calib = PairCalibration.load(a.calib) if a.calib else PairCalibration.default()
-    rows, summ = run_suite(a.root, calib, PairConfig(adapt=a.adapt), a.seed0, a.n, a.seconds)
+    raw_out = {} if a.raw_json else None
+    rows, summ = run_suite(a.root, calib, PairConfig(adapt=a.adapt), a.seed0, a.n, a.seconds, raw_out=raw_out)
     print_summary(summ, "adapt: " if a.adapt else "fixed: ")
     if a.json:
         a.json.write_text(json.dumps({"rows": rows, "summary": summ}, indent=1))
         print(f"\nwrote {a.json}")
+    if a.raw_json:
+        a.raw_json.write_text(json.dumps(raw_out))
+        print(f"wrote {a.raw_json}")
 
 
 if __name__ == "__main__":

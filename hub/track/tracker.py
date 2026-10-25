@@ -43,7 +43,15 @@ class TrackConfig:
     hold_s: float = 1.5              # unheard this long: tracking -> last_seen
     lost_s: float = 8.0              # unheard this long: last_seen -> lost
     forget_s: float = 60.0           # unheard this long: dropped (the id is never reused)
-    bearing_alpha: float = 0.3       # bearing smoothing (scaled up by confidence)
+    # Bearing smoothing is a time constant, so it does not depend on how often update() is called.
+    # A reading close to the tracked bearing (within follow_from_deg) is noise: it moves the arrow
+    # with time constant smooth_tau_s. One far from it (beyond follow_to_deg) is a real move: it is
+    # followed with follow_tau_s. In between the two blend (geometric). A confident reading
+    # (bearing_conf 1) acts as if the time constant were 1/1.5 as long, an unsure one (0) twice as long.
+    smooth_tau_s: float = 0.6
+    follow_tau_s: float = 0.3
+    follow_from_deg: float = 10.0
+    follow_to_deg: float = 30.0
     label_decay: float = 0.9
     fov_deg: float = 90.0            # horizontal field of view used for in_view
     silent_db: float = -100.0        # level_db reported while a source is not being heard
@@ -212,6 +220,7 @@ class Tracker:
 
     def _observe(self, t: _Track, o: p.Source, now_us: int, has_b: bool) -> None:
         c = self.cfg
+        dt = min(max((now_us - t.last_obs_us) / 1e6, 0.0), 1.0)  # silent gaps count at most 1 s
         t.stream, t.last_obs_us, t.level_db = o.source_id, now_us, o.level_db
         t.hits += 1
         t.state = p.TrackState.tracking
@@ -223,8 +232,12 @@ class Tracker:
             if t.bearing is None:
                 t.bearing, t.bearing_conf = o.bearing_deg, o.bearing_conf
             else:
-                a = min(0.6, c.bearing_alpha * (0.5 + o.bearing_conf))
-                t.bearing = wrap180(t.bearing + a * wrap180(o.bearing_deg - t.bearing))
+                innov = wrap180(o.bearing_deg - t.bearing)
+                span = max(c.follow_to_deg - c.follow_from_deg, 1e-6)
+                f = min(max((abs(innov) - c.follow_from_deg) / span, 0.0), 1.0)
+                tau = c.smooth_tau_s ** (1 - f) * c.follow_tau_s ** f
+                tau /= min(max(0.5 + o.bearing_conf, 0.5), 1.5)
+                t.bearing = wrap180(t.bearing + (1 - math.exp(-dt / tau)) * innov)
                 t.bearing_conf += 0.3 * (o.bearing_conf - t.bearing_conf)
             t.bearing_source = o.bearing_source or p.BearingSource.head_motion
 
