@@ -84,10 +84,28 @@ def test_bench_end_to_end_on_synthetic_takes(tmp_path, capsys):
     CAL.save(cal_path)
     bench.main([str(rec), "--calib", str(cal_path), "--json", str(out)])
     text = capsys.readouterr().out
-    assert "== level" in text and "== tdoa" in text and "== tdoa-loo" in text and "*in-calib" in text
+    assert all(f"== {m}" in text for m in bench.METHODS) and "*in-calib" in text
     res = json.loads(out.read_text())
-    assert len(res["rows"]) == 12
+    assert len(res["rows"]) == 4 * len(bench.METHODS)
     s = res["summaries"]["tdoa"]
     assert s["n"] == 4 and s["median_err"] <= 10 and s["fb_right_rate"] == 1.0
     assert s["ece"] is not None and 0.0 <= s["ece"] <= 1.0
     assert res["summaries"]["tdoa-loo"]["n"] == 4
+    assert res["summaries"]["phase-loo"]["n"] == 4 and res["summaries"]["phase-loo"]["median_err"] <= 10
+
+
+def test_an_ambiguous_estimate_is_not_a_lock():
+    tl = [(4, 2, 0.5, "ambiguous"), (5, 1, 0.6, "ambiguous"), (6, 0, 0.8, "tracking"), (7, 1, 0.9, "locked")]
+    assert bench.seconds_to_lock(tl, 0.0, 4.0) == 2.0
+
+
+def test_leave_one_out_never_fits_on_the_scored_take(tmp_path):
+    from locate import pairsim
+    takes = []
+    for i, ang in enumerate((0.0, 90.0, 180.0)):
+        pairsim.write_take(tmp_path / f"t{i}", ang, seed=i)
+        takes.append(tmp_path / f"t{i}")
+    loo = bench.loo_calibrations(takes, "quest3s")
+    assert set(loo) == set(takes)
+    for tk, cal in loo.items():
+        assert tk.name not in cal.takes and len(cal.takes) == 2

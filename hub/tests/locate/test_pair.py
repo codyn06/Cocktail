@@ -125,3 +125,45 @@ def test_real_eval_runs_with_tdoa_method(tmp_path):
     _make_take_for_tdoa(tmp_path)
     r = real_eval.run(tmp_path, 0.0, 12.0, verbose=False, method="tdoa", calib=CAL)
     assert r["method"] == "tdoa" and "world_deg" in r and "pass" in r
+
+
+def test_phase_slope_delay_and_its_sigma_are_honest():
+    from locate.pair import frame_delay_phase
+    rng = np.random.default_rng(5)
+    rate, n, tau = 48000, 4096, 10e-6
+    err, z = [], []
+    for _ in range(100):
+        a = rng.standard_normal(n)
+        x = np.stack([frac_delay(a, tau * rate), a], 1) + rng.standard_normal((n, 2)) * 0.3
+        d, sig = frame_delay_phase(x, rate)
+        err.append(d - tau)
+        z.append((d - tau) / sig)
+    assert abs(np.mean(err)) < 0.3e-6 and np.std(err) < 1e-6
+    assert 0.7 < np.std(z) < 1.4  # the reported sigma matches the actual spread
+
+
+def test_weighted_calibration_recovers_constants_and_model_error():
+    rng = np.random.default_rng(6)
+    takes = []
+    for truth in (0, 90, -90, 180):
+        y = sweep()
+        sig = rng.uniform(1e-6, 4e-6, len(y))
+        tau = CAL.predict(truth, y) + rng.normal(0, 1, len(y)) * np.hypot(sig, 2e-6)
+        takes.append((y, tau, truth, sig))
+    cal = fit_calibration(takes)
+    assert cal.delay_method == "phase"
+    assert abs(cal.delay_amp_s - CAL.delay_amp_s) < 1e-6
+    assert abs((cal.axis_deg - CAL.axis_deg + 180) % 360 - 180) < 3
+    assert 1.4e-6 < cal.model_s < 2.6e-6
+    assert cal.frame_sigma(3e-6) > cal.frame_sigma(1e-6) > cal.model_s
+
+
+def test_old_calibration_files_still_load_as_gcc():
+    cal = PairCalibration.default()
+    assert cal.delay_method == "gcc" and cal.model_s is None and cal.frame_sigma(1e-6) == cal.noise_s
+
+
+def test_live_locator_rejects_a_phase_calibration():
+    from dataclasses import replace
+    with pytest.raises(ValueError):
+        LiveLocator(IngestState(), method="tdoa", calib=replace(CAL, delay_method="phase", model_s=2e-6))
