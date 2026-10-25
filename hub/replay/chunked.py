@@ -432,8 +432,13 @@ class ChunkedSpeechRunner:
         for k, vid in enumerate(voice_ids):
             a = assoc_by_voice.get(vid)
             st = slots_status[k]
-            if st == "none":
+            if st == "none" and not reasons.get(k, "").startswith("insufficient_eligible"):
                 continue                                           # silent slot: no claim, no segment
+            if st == "none":                                       # audible but ineligible to enroll: say so, abstain
+                seg("unresolved", track_id=None, association_status=a.status if a else "unmatched",
+                    visibility=a.visibility if a else "unknown", stem_availability="unavailable",
+                    refusal_reason=f"enrollment_blocked: {reasons.get(k, '')}", identity_confidence="none", slot=k)
+                continue
             if slot_src[k] is None:                                # ambiguous identity: abstain, never blend
                 seg("unresolved", track_id=None, association_status="ambiguous", visibility=a.visibility if a else "unknown",
                     stem_availability="unavailable", refusal_reason=f"identity_ambiguous: {reasons.get(k, '')}".strip(": "),

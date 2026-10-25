@@ -148,3 +148,17 @@ def test_reads_are_bounded_to_windows_not_the_whole_clip(baseline):
     longest = max(e - s for kind, s, e in r.src.reads if kind == "audio")
     assert longest <= 4 * MR + 3 and longest < n_master
     assert r.counters.max_frames_resident <= load_config().memory.max_decoded_frames
+
+
+def test_blocked_enrollment_policy_abstains_with_a_visible_reason(tmp_path):
+    """Unknown pose + policy 'block': audible voices may not seed an identity, and that is reported, not hidden."""
+    cfg = load_config()
+    cfg.off_axis.unknown_pose = "block"
+    r = make_runner(tmp_path, cfg=cfg, name="blocked")
+    res = r.run()
+    segs = [s for rec in res.records for s in json.loads((rec.speech_dir / "meta.json").read_text())["segments"]]
+    assert not [s for s in segs if s["source_id"].startswith("src_")]               # nothing was enrolled
+    un = [s for s in segs if s["source_id"] == "unresolved"]
+    assert un and all(s["stem_availability"] == "unavailable" and s["refusal_reason"].startswith("enrollment_blocked")
+                      for s in un)
+    assert not res.state.enrolled_s

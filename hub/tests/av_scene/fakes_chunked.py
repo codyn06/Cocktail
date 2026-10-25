@@ -22,11 +22,12 @@ def _gate(t, v):
 
 
 def make_audio(a, b, chirp=True):
+    span = chirp if isinstance(chirp, tuple) else CHIRP
     t = np.arange(a, b) / MR
     x = sum(_gate(t, v) * sum(np.sin(2 * np.pi * f * t) / (i + 1) for i, f in enumerate(HARM[v])) for v in (0, 1))
     x = 0.2 * x
     if chirp:
-        x = x + 0.2 * ((t >= CHIRP[0]) & (t < CHIRP[1])) * np.sin(2 * np.pi * CHIRP_HZ * t)
+        x = x + 0.2 * ((t >= span[0]) & (t < span[1])) * np.sin(2 * np.pi * CHIRP_HZ * t)
     return x.astype(np.float32)[None].repeat(2, 0)
 
 

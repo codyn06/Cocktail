@@ -149,3 +149,21 @@ def test_inspect_cli_summarises_a_long_bundle(base, capsys):
     out = capsys.readouterr().out
     assert "long run: 7 chunks" in out and "timeline (association / visibility / stem availability kept separate)" in out
     assert "tse:p0" in out and "refused x" in out
+
+
+def test_sustained_event_is_split_into_bounded_chained_windows(tmp_path):
+    cfg = load_config()
+    cfg.memory.event_max_window_s = 4.0
+    prov, ef = providers()
+    src = fk.make_source(chirp=(0.0, 14.5))                    # the sound never stops: a full-clip event
+    res = run_pipeline(src, prov, cfg, tmp_path / "o", media_id="sustained", run_id="s", cache_dir=tmp_path / "c")
+    metas = [json.loads(p.read_text()) for p in sorted((tmp_path / "c" / "event_window").glob("*/event.json"))]
+    wins = sorted(m["window"] for m in metas)
+    assert len(wins) >= 4 and all(hi - lo <= 4.0 + 1e-6 for lo, hi in wins)
+    assert all(abs(a[1] - b[0]) < 1e-6 for a, b in zip(wins, wins[1:]))        # contiguous: no gap, no duplicate
+    assert all(m["continues_prev"] for m in sorted(metas, key=lambda m: m["window"][0])[1:])
+    assert max(len(c) for c in ef.sam_calls) <= cfg.memory.candidate_batch
+    assert res.counters.max_frames_resident <= cfg.memory.max_decoded_frames
+    # the RAM used by event stems is bounded by one window: every stem file is at most window-length
+    stems = list((tmp_path / "c" / "event_window").glob("*/stem.npy"))
+    assert stems and all(np.load(p, mmap_mode="r").shape[0] <= int(4.0 * 48000) + 2 for p in stems)
