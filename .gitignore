@@ -21,3 +21,6 @@ hub/checkpoints/
 
 # headset recordings for real-world locator tests (quest/tools/record_session.py)
 hub/recordings/
+
+# project-local FFmpeg shared DLLs for torchcodec (see hub/av_scene/preflight.py)
+hub/.local/
