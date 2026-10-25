@@ -1,0 +1,22 @@
+# Example calibrated array for the synthetic Phase 1 fixture. NOT a measured device.
+# Frames: +x right, +y up, +z forward; units metres.
+
+[calibration]
+calibration_id = "synthetic-pair-14cm"
+prediction_model = "geometric"      # "geometric" or "fitted_pair"
+model_version = "1"
+baffle_scale = 1.0                  # >= 1.0, geometric branch only
+channel_order = ["mic_left", "mic_right"]
+mic_positions_m = [[-0.07, 0.0, 0.0], [0.07, 0.0, 0.0]]
+channel_offsets_s = [0.0, 0.0]
+channel_noise_s = 2.0e-6
+
+[camera]
+fx = 300.0
+fy = 300.0
+cx = 160.0
+cy = 120.0
+width = 320
+height = 240
+r_cam_to_array = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+t_cam_to_array_m = [0.0, 0.0, 0.0]
