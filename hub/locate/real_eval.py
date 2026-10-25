@@ -25,6 +25,7 @@ import numpy as np
 from .estimator import BearingEstimator, LocateConfig
 
 BANDS = (500.0, 1000.0, 2000.0, 4000.0, 8000.0)
+MIN_SNR_DB = 6.0  # the source must be at least this much louder than the room, or the take is invalid
 WIN, HOP = 4096, 2400  # 85 ms window, 50 ms hop at 48 kHz
 
 
@@ -73,6 +74,14 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True)
     starts = np.arange(0, len(mono) - WIN, HOP)
     pwr = np.array([band_power(mono[s:s + WIN], rate) for s in starts])
     t_audio = (starts + WIN / 2) / rate
+    # How far the source stands above the room: room-only frames (before noise_until) vs source-on
+    # frames while the head is still (before the turn cue), measured before noise subtraction.
+    # A source barely above the room makes the level-vs-yaw cue track the room's own noise instead.
+    snr_db = None
+    if nu and go:
+        room = pwr[t_audio < nu - 0.2].sum(axis=1).mean()
+        on = pwr[(t_audio > nu + 0.5) & (t_audio < go - 0.5)].sum(axis=1).mean()
+        snr_db = float(10 * np.log10(max(on - room, 1e-12) / (room + 1e-12)))
     if nu:
         noise = pwr[t_audio < nu - 0.2].mean(axis=0)
         pwr = np.maximum(pwr - noise, 0.1 * pwr)  # spectral subtraction of the room
@@ -110,13 +119,14 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True)
         "seconds": len(mono) / rate, "yaw_min": float(yaw[motion].min()), "yaw_max": float(yaw[motion].max()),
         "yaw_std": float(yaw[motion].std()), "active_frac": float(weight[in_win].mean()) if in_win.any() else 0.0,
         "world_deg": e.world_deg, "confidence": e.confidence, "state": e.state,
-        "alt_head_deg": e.alt_bearing_deg, "truth": truth,
+        "alt_head_deg": e.alt_bearing_deg, "truth": truth, "snr_db": snr_db,
     }
     if verbose:
         print(f"recording: {res['seconds']:.1f} s, {meta['channels']} ch @ {rate} Hz, {meta['pose_samples']} pose samples"
               + (f"; room noise profile from first {nu:.1f} s subtracted" if nu else ""))
         print(f"head yaw during the turn phase: {res['yaw_min']:+.0f} .. {res['yaw_max']:+.0f} deg (std {res['yaw_std']:.1f}); "
-              f"source active {100 * res['active_frac']:.0f}% of scored frames")
+              f"source active {100 * res['active_frac']:.0f}% of scored frames"
+              + (f"; source {snr_db:+.1f} dB above the room" if snr_db is not None else ""))
         for t, w_, c, s in timeline:
             print(f"  t={t:5.1f}s  world bearing {w_:+7.1f} deg  conf {c:.2f}  {s}")
         print(f"FINAL: world bearing {e.world_deg:+.1f} deg, confidence {e.confidence:.2f}, state {e.state}, "
@@ -131,10 +141,20 @@ def run(take: Path, truth: float | None, within_db: float, verbose: bool = True)
             ("state is tracking/locked (not ambiguous)", e.state in ("tracking", "locked"), e.state),
         ]
         print(f"\ntruth {truth:+.0f} deg")
+        if snr_db is not None:
+            checks.insert(1, (f"source clearly above the room (>= {MIN_SNR_DB:.0f} dB)", snr_db >= MIN_SNR_DB,
+                              f"{snr_db:+.1f} dB"))
         for name, ok, val in checks:
             print(f"  {'PASS' if ok else 'FAIL'}  {name}: {val}")
         res["pass"] = all(ok for _, ok, _ in checks)
-        print("RESULT:", "PASS" if res["pass"] else "FAIL")
+        # A take with no head motion or a source lost in the room says nothing about the locator.
+        res["valid"] = res["yaw_std"] >= 8 and (snr_db is None or snr_db >= MIN_SNR_DB)
+        if not res["valid"]:
+            print("RESULT: INVALID TAKE (not a locator result: "
+                  + ("source too quiet over the room; move it closer or turn it up" if snr_db is not None
+                     and snr_db < MIN_SNR_DB else "not enough head motion") + ")")
+        else:
+            print("RESULT:", "PASS" if res["pass"] else "FAIL")
     return res
 
 
