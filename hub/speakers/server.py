@@ -1,7 +1,9 @@
 """HTTP routes for per-speaker data on the hub app (not part of the wire protocol).
 
-Reset: the recorder clears itself when the pose epoch (events.ingest.pose_epoch) or the audio ring
-reset count changes, matching EventsState._sync_epoch -> tracker.reset (tracker ids restart history).
+Reset: the recorder clears itself only when the pose epoch (events.ingest.pose_epoch) changes, matching
+EventsState._sync_epoch -> tracker.reset (tracker ids restart history). An audio-ring reset (a gap in the
+headset's audio, seen live as a 6.9 s "audio discontinuity") does NOT clear it: the tracker keeps its ids
+through the same gap, so the speakers and their audio/intervals must survive it too (live take, 2026-10-25).
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ BEARING_MIN_CONF = 0.25
 
 def install_speakers(app: FastAPI, events, worker) -> SpeakerRecorder:
     def epoch():
-        return (events.ingest.pose_epoch, getattr(worker, "_resets", None))
+        return events.ingest.pose_epoch
 
     rec = SpeakerRecorder(lambda: events.tracker, epoch)
     app.state.speakers = rec
