@@ -369,3 +369,53 @@ alert messages, Meta glasses version, search and rescue.
   - The gate recovers the second talker that TalkNet misses; this is the first evidence on a real clip.
   - Caveat: one clip, one run each; the silent-bystander side of the gate is only tested on the synthetic silent
     case (0.8 s of rescued activity there, under the 1 s line).
+
+## AV Phase 4: long clips, chunked pipeline, inspection output (branch `feat/av-phase4-long-clips`, PR #58)
+
+`python -m av_scene run <media> --out DIR [--cache DIR]` runs one chunked offline pipeline (visual, speech, optional
+diarization, events, residual, export). It is NOT real time and makes no device claim. Details and decisions:
+`.agents/decisions.md` ("AV long clips, Phase 4").
+
+Evidence labels: **mocked** = CPU fakes through the real pipeline code; **replayed / hardware-tested** = real models on the
+RTX 5070 Ti Laptop; **untested** = not run.
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Chunk coverage, no missing or duplicated sample (incl. final partial region) | pass, 11 durations | mocked |
+| Identity survives pauses, crossings, re-entry, slot permutation every chunk | 0 switches, 0 fragmentation, 0 wrong-person on 7 deterministic scenes (60 s pause_return, crossing, reentry, silent_overlap, slot_swap_every_chunk, final_partial, silent_bystander) | mocked |
+| Silent-bystander highlight rate (< 2%) | 0.0 to 0.2% on the synthetic scenes. Whole-chunk status first gave 6 to 20%; segments are now split at the speaking activity | mocked |
+| Active-speaker recall and refusal precision/recall reported together | recall >= 0.97; reentry refusal P 0.91 / R 1.0; a refuse-everything prediction fails the gate | mocked |
+| Forced termination at 6 boundaries resumes bit-identically; corrupt entry recomputes only itself; model-revision change reruns speech only | pass | mocked |
+| Warm cache invokes no model and loads no checkpoint | pass (`model_passes_opened` all 0) | mocked |
+| Continuous events bounded (windows <= `event_max_window_s`, candidates <= 4, batch 2, frames <= 150) | pass | mocked |
+| Missing control / missing spatial evidence never "matched"; two-cat ambiguity kept; loud leaked audio for an absent target rejected | pass | mocked |
+| Memory, 30/120/300 s, pipeline plumbing only | peak RSS 645 / 654 / 659 MiB, growth 13.7 MiB (budget 256), slope -63 MiB/audio-min (budget 2) | mocked (fake models; says nothing about model memory) |
+| Viewer in a real browser (Chrome) | listen groups, four separate badges + refusal text, focus kept on toggle, aria-live, diagnostic-vs-default muting, play/pause/seek, windowed fetches (about 4 s back / 10 s ahead), no `_` paths served. One defect found and fixed (sources with no audio were not listed) | synthetic bundle, real browser; audio quality not judged |
+
+### Real-model smoke run (hardware-tested, one short clip)
+`stkM` (6 s, 2 people stacked, both speak), defaults, no Phase 3 switches, RTX 5070 Ti Laptop:
+- All passes ran on real S3FD, SAM 3, TalkNet, MossFormer2, AV-TSE and WavLM-SV. Events pass loaded no model (no event).
+- Peak GPU 3.97 GiB (budget 9.0 GiB: pass). Visual 80 s for 150 frames (SAM 3 per frame), speech 13 s.
+- **Peak RSS 7.69 GiB: exceeds the pre-set 6.0 GiB budget (FAIL).** It is a transient at about 9 s (SAM 3 checkpoint load);
+  steady state is about 2.4 GiB, and it does not depend on clip length. A first attempt peaked at 14.9 GiB because
+  event detection loaded SAM 3 and SAM Audio; fixed (AST detection is now separate, heavy event models load only when a
+  window computes).
+- Quality is not good enough to claim anything: SAM 3 produced 6 person tracks for 2 people, `src_1` was matched to a
+  track in 3 of 6 spans, `src_0` stayed unmatched (as in the Phase 3 baseline; the activity gate was off). No listening review.
+
+### Not done (untested)
+- Real-model 30 / 120 / 300 s workloads: the looped-clip run (`--loop-seconds`, duration-matched only, content repeats)
+  was started and stopped by the user's time limit before the 30 s case finished. No real long-run memory, identity
+  switches/minute or cold / warm / resume timing exist.
+- Additional real clip with visible silent people, annotated (silent-bystander gate on real data, `<2%`): no such clip exists
+  locally (longest recordings are 6 to 8 s; none has a visibly silent person). Annotation format and scorer are ready
+  (`eval/av_scene/LONG_ANNOTATIONS.md`, `long_annotations.py`).
+- `stkM` missed-speaker regression through the Phase 4 path with `--activity-gate`; listening review of stitched boundaries
+  and accepted / refused stems.
+- Non-speech on a real clip (SAM 3 nouns, SAM Audio, judge / CLAP ranking): adapters written, never exercised on a real
+  event. The pipeline passes no calibrated array, so non-speech attribution is expected to stay unmatched.
+- Diarization on real audio (pyannote not installed; stays OFF). `TorchcodecSource` works on `stkM`; other containers untested.
+- Gate floors in `long_metrics` (0.80 recall / refusal, 0.05 wrong-person) are provisional placeholders; only `<2%` is from the spec.
+
+Worktree note: gitignored checkpoints and FFmpeg DLLs live in the main checkout; a worktree needs
+`COCKTAIL_FFMPEG_BIN=<main>/hub/.local/ffmpeg/bin` and a directory junction for `hub/checkpoints`.
