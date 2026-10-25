@@ -14,88 +14,14 @@ from av_scene.config import load_config
 from av_scene.contracts import SpeechModels
 from replay.chunked import ArraySource, ChunkedSpeechRunner, InjectedCrash, read_arrays
 
-SR16, MR = 16000, 48000
-DUR = 14.5
-HARM = {0: (220, 440, 660), 1: (340, 680, 1020)}
-ACTIVE = {0: [(0.0, 5.0), (9.0, 14.5)], 1: [(3.0, 8.0), (11.0, 14.5)]}
-
-
-def _gate(t, v):
-    g = np.zeros_like(t)
-    for a, b in ACTIVE[v]:
-        g[(t >= a) & (t < b)] = 1.0
-    return g
-
-
-def make_audio(a, b):
-    t = np.arange(a, b) / MR
-    x = sum(_gate(t, v) * sum(np.sin(2 * np.pi * f * t) / (i + 1) for i, f in enumerate(HARM[v])) for v in (0, 1))
-    return (0.2 * x).astype(np.float32)[None].repeat(2, 0)
-
-
-def voice_stem(audio, v, sr=SR16):
-    X = np.fft.rfft(audio)
-    fr = np.fft.rfftfreq(len(audio), 1 / sr)
-    m = np.zeros_like(fr, bool)
-    for f in HARM[v]:
-        m |= np.abs(fr - f) < 12
-    return np.fft.irfft(X * m, len(audio)).astype(np.float32)
-
-
-class FakeSep:
-    def __call__(self, x):
-        s = [voice_stem(x, 0), voice_stem(x, 1)]
-        if hashlib.md5(x.tobytes()).digest()[0] % 2:            # content-dependent slot permutation
-            s = s[::-1]
-        return np.stack(s)
-
-
-class FakeScorer:
-    def score_track(self, audio, boxes, frames, fps):
-        v = 0 if next(b for b in boxes if b is not None)[0] < 30 else 1
-        st = voice_stem(audio, v)
-        n25 = int(len(audio) / SR16 * 25)
-        e = np.sqrt((st[: n25 * 640].reshape(n25, 640) ** 2).mean(1))
-        return np.where(e > 0.01, 3.0, -3.0), None, {}
-
-
-class FakeTSE:
-    def extract_target(self, audio, boxes, frames, fps):
-        v = 0 if next(b for b in boxes if b is not None)[0] < 30 else 1
-        return voice_stem(audio, v), {}
-
-
-def fake_embed(x):
-    X = np.abs(np.fft.rfft(np.asarray(x, np.float64)))
-    fr = np.fft.rfftfreq(len(x), 1 / SR16)
-    edges = np.linspace(100, 1500, 29)
-    v = np.array([X[(fr >= a) & (fr < b)].sum() for a, b in zip(edges[:-1], edges[1:])]) + 1e-9
-    v = np.log(v)
-    v -= v.mean()
-    return v / (np.linalg.norm(v) + 1e-12)
-
-
-class FakeVisual:
-    def empty_state(self):
-        return {"frames": 0}
-
-    def step(self, frames, pts_us, state):
-        from av_scene.contracts import VisualChunk
-        n = len(frames)
-        return VisualChunk({"p0": [(10.0, 10.0, 30.0, 30.0)] * n, "p1": [(50.0, 10.0, 70.0, 30.0)] * n},
-                           {"p0": [None] * n, "p1": [None] * n}, {"frames": state.get("frames", 0) + n})
-
-
-def make_source():
-    n_master = int(DUR * MR)
-    pts = [int(i * 40_000) for i in range(int(DUR * 25))]
-    return ArraySource(make_audio, MR, pts, lambda i0, i1: np.zeros((i1 - i0, 8, 8, 3), np.uint8), n_audio_samples=n_master)
+import fakes_chunked as fk
+from fakes_chunked import DUR, HARM, MR, SR16
 
 
 def make_runner(tmp_path, cache=None, fault=None, rev="r1", cfg=None, name="run"):
-    models = SpeechModels(FakeSep(), FakeScorer(), FakeTSE(), fake_embed, {"mf2": rev})
+    models = fk.speech_models(rev)
     cache = cache or StageCache(tmp_path / "cache")
-    return ChunkedSpeechRunner(make_source(), models, FakeVisual(), cache, cfg or load_config(), tmp_path / name,
+    return ChunkedSpeechRunner(fk.make_source(chirp=False), models, fk.FakeVisual(), cache, cfg or load_config(), tmp_path / name,
                                media_id="synthetic-14.5s", fault=fault)
 
 
