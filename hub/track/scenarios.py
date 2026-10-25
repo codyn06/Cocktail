@@ -41,13 +41,15 @@ class Run:
         return {s.source_id for o in self.out for s in o}
 
 
-def simulate(frame, seconds: float, head_yaw=lambda t: 0.0, tracker: Tracker | None = None) -> Run:
-    """frame(t, rng) -> list of raw Sources heard at second t."""
+def simulate(frame, seconds: float, head_yaw=lambda t: 0.0, tracker: Tracker | None = None, identity=None) -> Run:
+    """frame(t, rng) -> list of raw Sources heard at second t. identity(t) -> {stream: (acoustic id,
+    confidence)} is optional; without it the tracker runs as before."""
     tr, rng, run = tracker or Tracker(), np.random.default_rng(0), Run()
     for k in range(int(seconds * 1e6 / DT_US) + 1):
         t = k * DT_US / 1e6
         run.t.append(t)
-        run.out.append(tr.update(k * DT_US, frame(t, rng), head_yaw(t)))
+        run.out.append(tr.update(k * DT_US, frame(t, rng), head_yaw(t)) if identity is None
+                       else tr.update(k * DT_US, frame(t, rng), head_yaw(t), identity=identity(t)))
     return run
 
 
@@ -304,6 +306,59 @@ def alternating_near_talkers() -> list[Check]:
 PROBES = [near_talkers(8), near_talkers(15), near_talkers(20), pause_beyond_forget, two_bearingless_births,
           pause_while_crossing, return_near_other, low_conf_second_talker, unreliable_bearings,
           alternating_near_talkers]
+
+
+# ----------------------------------------------------------------------------- identity probes
+# The failing probes above with an oracle acoustic id attached to each stream (SIMULATED: the id is
+# scripted, not produced by any voice model). tests/track/test_identity.py requires all of them to pass.
+def near_talkers_with_identity(gap: float):
+    def scene() -> list[Check]:
+        def frame(t, rng):
+            return [raw("s1", "speech", jit(rng, 30, 3)), raw("s2", "speech", jit(rng, 30 + gap, 3))]
+        r = simulate(frame, 10, identity=lambda t: {"s1": ("src_0", 0.9), "s2": ("src_1", 0.9)})
+        return [(f"two talkers {gap:.0f} deg apart with different voice ids are two sources", len(r.at(9.5)) == 2, f"{len(r.at(9.5))}"),
+                ("never more than two ids", len(r.ids_ever()) <= 2, f"{sorted(r.ids_ever())}")]
+    scene.__name__ = f"near_talkers_{gap:.0f}deg_with_identity"
+    return scene
+
+
+def alternating_near_talkers_with_identity() -> list[Check]:
+    def frame(t, rng):
+        b = 30 if 5 <= t < 10 else 20
+        return [raw("s1", "speech", jit(rng, b, 3))]
+    r = simulate(frame, 15, identity=lambda t: {"s1": ("src_1" if 5 <= t < 10 else "src_0", 0.9)})
+    a, b = by_bearing(r.at(4.5), 20, 8), by_bearing(r.at(14.5), 20, 8)
+    return [("two ids, one per voice", len(r.ids_ever()) == 2, f"{sorted(r.ids_ever())}"),
+            ("the first voice gets its id back when it returns", a is not None and b is not None and a.source_id == b.source_id,
+             f"{getattr(a, 'source_id', None)} -> {getattr(b, 'source_id', None)}")]
+
+
+def low_conf_second_talker_with_identity() -> list[Check]:
+    def frame(t, rng):
+        return [raw("s1", "speech", jit(rng, -30), conf=0.8), raw("s2", "speech", jit(rng, 40), conf=0.15)]
+    r = simulate(frame, 20, identity=lambda t: {"s1": ("src_0", 0.9), "s2": ("src_1", 0.9)})
+    end = r.at(19.5)
+    return [("the unsure-direction talker is announced", len(end) == 2, f"{[(s.source_id, s.bearing_deg) for s in end]}"),
+            ("with bearing unknown", sum(s.bearing_deg is None for s in end) == 1, f"{[s.bearing_deg for s in end]}")]
+
+
+def pause_while_crossing_with_identity() -> list[Check]:
+    def frame(t, rng):
+        out = [raw("s1", "speech", jit(rng, 0, 3))]
+        if not 4 <= t < 8:
+            out.append(raw("s2" if t < 4 else "s3", "speech", jit(rng, -60 + 10 * t, 3)))
+        return out
+    r = simulate(frame, 12, identity=lambda t: {"s1": ("src_0", 0.9), "s2": ("src_1", 0.9), "s3": ("src_1", 0.9)})
+    b0, b1 = by_bearing(r.at(3.5), -25), by_bearing(r.at(11.5), 55)
+    a0, a1 = by_bearing(r.at(3.5), 0), by_bearing(r.at(11.5), 0)
+    return [("the one standing still keeps its id", a0 is not None and a1 is not None and a0.source_id == a1.source_id,
+             f"{getattr(a0, 'source_id', None)} -> {getattr(a1, 'source_id', None)}"),
+            ("the walker keeps its id across the pause", b0 is not None and b1 is not None and b0.source_id == b1.source_id,
+             f"{getattr(b0, 'source_id', None)} -> {getattr(b1, 'source_id', None)}")]
+
+
+IDENTITY_PROBES = [near_talkers_with_identity(8), near_talkers_with_identity(15), alternating_near_talkers_with_identity,
+                   low_conf_second_talker_with_identity, pause_while_crossing_with_identity]
 
 
 def main() -> int:
