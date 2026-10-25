@@ -236,6 +236,10 @@ A voice tells you when to turn your head; it prints PASS/FAIL per take. The piec
 separately: `quest/tools/record_session.py` records (audio + head pose, to `hub/recordings/`,
 gitignored), and `uv run python -m locate.real_eval recordings/<take>` (from `hub/`) scores.
 
+To compare every direction method on all labeled takes at once (median / 90th-percentile
+error, front/back, seconds to lock, whether the confidence is honest), from `hub/`:
+`uv run python -m locate.bench recordings` (`--json out.json` saves the numbers).
+
 ### Quest app
 
 Unity, headset and developer-account setup are in [`quest/README.md`](quest/README.md).
