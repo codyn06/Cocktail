@@ -19,15 +19,24 @@ Prints
        a. source at least MIN_SNR_DB (6 dB) above the room   (hub/locate/real_eval.py's measure)
        b. enough head turning: yaw std >= 8 deg in the turn phase (same measure)
        c. angle labeled: truth_deg present and a finite number
-       d. no clock glitches: audio length vs pose span, pose gaps / non-monotonic pose time,
-          chunk timestamps vs samples/rate (when audio_chunks.csv exists), first pose not
-          long before audio start, no recorder clock restart
+       d. no clock glitches: pose gaps > 0.5 s / non-monotonic pose time, pose present in the
+          head-still window, the turn phase and until the turn phase ends (a pose that starts
+          EARLY costs nothing and is only noted), chunk timestamps vs samples/rate (their
+          median offset is removed, so a noisy first chunk or a constant offset does not matter;
+          jitter, drift or a dropped-chunk step beyond --chunk-tol-ms fails and the observed
+          numbers are printed), no recorder clock restart
   3. a final line "X of Y takes PASS (Z%); grid N of 36 cells filled".
+
+Takes without audio_chunks.csv (recorded before it existed) cannot be checked for dropped chunks
+or audio clock drift. They are checked for everything else, a WARNING is printed under each one and
+in the summary, and the last line ends with "; N without chunk timestamps". They do NOT block READY
+(old recordings cannot be re-recorded; the READY line names how many were not fully checked).
 
 Exit code 0 only if the grid is full and at least 90% of the takes PASS.
 
-Evidence: this is analysis code. It has been run on synthetic takes (tests) and on simulated
-sessions, not on real headset recordings.
+Evidence: analysis code. Its tests (hub/tests/eval/test_dataset_check.py) use synthetic numpy
+takes written by the test itself; the only other run was a smoke run on Sadie's simulated pairsim
+sessions. It has never been run on a recording from a headset.
 """
 
 from __future__ import annotations
@@ -58,7 +67,7 @@ PASS_RATE_MIN = 0.90
 MIN_SNR_DB = real_eval.MIN_SNR_DB           # source over the room
 YAW_STD_MIN_DEG = 8.0                       # real_eval hard-codes the same number
 POSE_GAP_MAX_S = 0.5
-POSE_EDGE_TOL_S = 1.0                       # pose may start/end this far from the audio's start/end
+POSE_EARLY_NOTE_S = 3.0                     # a pose starting earlier than this before the audio is noted
 TURN_POSE_MIN = 5                           # pose samples needed inside the turn phase
 CHUNK_TOL_MS = 15.0                         # chunk timestamp vs samples/rate; below one 20 ms chunk
 
@@ -80,6 +89,7 @@ class TakeResult:
     motion: str | None = None
     stimulus: str | None = None
     snr_db: float | None = None
+    has_chunks: bool = False   # audio_chunks.csv present: the dropped-chunk / timestamp-drift check ran
     yaw_std: float | None = None
 
     @property
@@ -199,22 +209,29 @@ def clock_problems(meta: dict, wav_frames: int, rate: int, pose_t_us: np.ndarray
             at = (pose_t_us[k] - (start_us if start_us is not None else pose_t_us[0])) / 1e6
             bad.append(f"{len(gaps)} pose gap(s) > {POSE_GAP_MAX_S} s (longest {d.max():.2f} s at t={at:.1f} s)")
         if start_us is not None:
-            first = (pose_t_us[0] - start_us) / 1e6
-            last = (pose_t_us[-1] - start_us) / 1e6
-            if first < -POSE_EDGE_TOL_S:
-                bad.append(f"first pose is {-first:.2f} s before audio start (pose and audio clocks disagree)")
-            elif first > POSE_EDGE_TOL_S:
-                bad.append(f"first pose is {first:.2f} s after audio start (no head pose at the start)")
-            if abs(last - dur) > POSE_EDGE_TOL_S:
-                bad.append(f"pose ends at {last:.2f} s but audio is {dur:.2f} s long "
-                           f"(pose span vs audio length differ by {last - dur:+.2f} s)")
+            # The scorer drops poses before the audio starts, and each channel reconnects with its
+            # own backoff (up to ~3 s), so an EARLY or slightly late pose costs nothing. It only
+            # matters if pose is missing where the scorer needs it: the head-still window before
+            # the turn cue, the turn phase, or the end of the turn phase.
+            t = (pose_t_us - start_us) / 1e6
+            first, last = float(t[0]), float(t[-1])
+            if first < -POSE_EARLY_NOTE_S:
+                notes.append(f"first pose is {-first:.1f} s before audio start (ignored by the scorer)")
             cue = meta.get("cue") or {}
-            go, stop = cue.get("go"), cue.get("stop")
+            nu, go, stop = cue.get("noise_until") or 0.0, cue.get("go"), cue.get("stop")
             if go and stop:
-                t = (pose_t_us - start_us) / 1e6
+                lo, hi = nu, go - 0.5  # real_eval's head-still window (yaw zero point)
+                nb = int(((t >= lo) & (t < hi)).sum())
+                if nb < TURN_POSE_MIN:
+                    bad.append(f"{nb} pose sample(s) in the head-still window before the turn cue "
+                               f"({lo:g}-{hi:g} s); pose starts at {first:.1f} s")
                 n = int(((t >= go) & (t <= stop)).sum())
                 if n < TURN_POSE_MIN:
                     bad.append(f"{n} pose sample(s) inside the turn phase ({go:g}-{stop:g} s)")
+                if last < stop - POSE_GAP_MAX_S:
+                    bad.append(f"pose ends at {last:.2f} s, before the turn phase ends ({stop:g} s)")
+            elif last < 0 or first > dur:
+                bad.append(f"pose [{first:.1f}, {last:.1f}] s does not overlap the audio [0, {dur:.1f}] s")
 
     if chunks is None:
         notes.append("no audio_chunks.csv (recorded before chunk timestamps existed): dropped-chunk check skipped")
@@ -234,12 +251,24 @@ def clock_problems(meta: dict, wav_frames: int, rate: int, pose_t_us: np.ndarray
             bad.append("chunk epoch changed mid-take (the headset reconnected)")
         if (np.diff(ts) < 0).any():
             bad.append("chunk device timestamps go backwards")
-        expected = ts[0] + np.concatenate([[0], np.cumsum(frames)[:-1]]) / rate * 1e6
-        dev_ms = (ts - expected) / 1e3
-        worst = int(np.argmax(np.abs(dev_ms)))
-        if abs(dev_ms[worst]) > chunk_tol_ms:
-            bad.append(f"chunk timestamps drift from samples/rate by up to {dev_ms[worst]:+.1f} ms "
-                       f"(chunk {worst}; > {chunk_tol_ms:g} ms: a chunk was dropped or the clock jumped)")
+        # Offset of each chunk's timestamp from where samples/rate puts it. The native Quest mic
+        # path stamps each chunk from an extrapolated AudioRecord timestamp and jitters by a few
+        # ms, so the constant part (the median offset, which also absorbs a noisy first chunk) is
+        # removed; what is left is jitter, a slow clock drift, or a step from a dropped chunk.
+        pos_ms = np.concatenate([[0], np.cumsum(frames)[:-1]]) / rate * 1e3
+        off_ms = ts / 1e3 - pos_ms
+        med = float(np.median(off_ms))
+        res = off_ms - med
+        worst = int(np.argmax(np.abs(res)))
+        p95 = float(np.percentile(np.abs(res), 95))
+        slope_ms = float(np.polyfit(pos_ms / 1e3, off_ms, 1)[0]) if len(off_ms) > 2 else 0.0  # ms per s = ppm / 1000
+        summary = (f"offset from samples/rate: median {med:+.1f} ms, jitter p95 {p95:.1f} ms, "
+                   f"worst {res[worst]:+.1f} ms at chunk {worst}, drift {slope_ms * 1e3:+.0f} ppm")
+        if abs(res[worst]) > chunk_tol_ms:
+            bad.append(f"chunk timestamps {summary} (> {chunk_tol_ms:g} ms from the median: "
+                       "a chunk was dropped, the clock jumped, or the timestamps drift)")
+        else:
+            notes.append("chunk timestamps ok: " + summary)
         if start_us is not None and abs(ts[0] - start_us) > 1:
             bad.append(f"first chunk timestamp {int(ts[0])} != meta first_audio_ts_us {int(start_us)}")
     return bad, notes
@@ -298,8 +327,9 @@ def check_take(take: Path, measure_fn=None, chunk_tol_ms: float = CHUNK_TOL_MS) 
     try:
         with wave.open(str(take / "audio.wav")) as w:
             wav_frames, rate = w.getnframes(), w.getframerate()
-        bad, notes = clock_problems(meta, wav_frames, rate, _read_pose_t_us(take / "pose.csv"),
-                                    _read_chunks(take / "audio_chunks.csv"), chunk_tol_ms)
+        chunks = _read_chunks(take / "audio_chunks.csv")
+        r.has_chunks = chunks is not None
+        bad, notes = clock_problems(meta, wav_frames, rate, _read_pose_t_us(take / "pose.csv"), chunks, chunk_tol_ms)
         r.notes += notes
         r.checks.append(Check("no clock glitches", not bad, "; ".join(bad) if bad else "timestamps consistent"))
     except Exception as e:  # noqa: BLE001
@@ -376,6 +406,8 @@ def print_takes(results: list[TakeResult], verbose: bool) -> None:
         for c in r.checks:
             if verbose or not c.ok:
                 print(f"      {'ok  ' if c.ok else 'FAIL'} {c.name}: {c.detail}")
+        if not r.has_chunks:
+            print("      WARNING: no audio_chunks.csv, so the dropped-chunk / timestamp-drift check did NOT run")
         if verbose:
             for n in r.notes:
                 print(f"      note: {n}")
@@ -402,6 +434,7 @@ def main(argv=None) -> int:
     filled = print_grid(results)
     print_takes(results, a.verbose)
     n_pass = sum(r.passed for r in results)
+    n_nochunks = sum(not r.has_chunks for r in results)
     rate = n_pass / len(results)
     ready = len(filled) == GRID_CELLS and rate >= PASS_RATE_MIN
     print()
@@ -413,14 +446,20 @@ def main(argv=None) -> int:
             why.append(f"pass rate {100 * rate:.0f}% < {100 * PASS_RATE_MIN:.0f}%")
         print("NOT READY: " + "; ".join(why))
     else:
-        print("READY: grid full and pass rate >= 90%")
+        print("READY: grid full and pass rate >= 90%"
+              + (f" (but {n_nochunks} take(s) were not checked for dropped chunks)" if n_nochunks else ""))
+    if n_nochunks:
+        print(f"WARNING: {n_nochunks} of {len(results)} takes have no chunk timestamps (recorded before "
+              "audio_chunks.csv existed); their PASS does not cover dropped chunks or audio clock drift")
     if a.json:
         a.json.write_text(json.dumps([{
             "take": str(r.take), "pass": r.passed, "truth_deg": r.truth_deg, "distance_m": r.distance_m,
             "motion": r.motion, "stimulus": r.stimulus, "snr_db": r.snr_db, "yaw_std": r.yaw_std,
+            "chunk_timestamps": r.has_chunks,
             "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in r.checks],
         } for r in results], indent=1))
-    print(f"{n_pass} of {len(results)} takes PASS ({100 * rate:.0f}%); grid {len(filled)} of {GRID_CELLS} cells filled")
+    print(f"{n_pass} of {len(results)} takes PASS ({100 * rate:.0f}%); grid {len(filled)} of {GRID_CELLS} cells filled"
+          + (f"; {n_nochunks} without chunk timestamps" if n_nochunks else ""))
     return 0 if ready else 1
 
 

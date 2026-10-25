@@ -166,7 +166,8 @@ def clock_detail(r: dc.TakeResult) -> str:
 
 def test_good_clock_passes_and_chunk_data_is_used(take):
     r = check(take)
-    assert r.passed and r.notes == []
+    assert r.passed and r.has_chunks
+    assert any(n.startswith("chunk timestamps ok") for n in r.notes)
 
 
 def test_pose_gap_over_half_a_second(take):
@@ -183,19 +184,27 @@ def test_pose_time_goes_backwards(take):
     assert "backwards" in clock_detail(check(take))
 
 
-def test_pose_ends_before_the_audio(take):
+def test_pose_ends_before_the_turn_phase_ends(take):
     rewrite_pose(take, lambda a: a[a[:, 0] < BASE_US + 18e6])
     d = clock_detail(check(take))
-    assert "pose ends" in d and "audio is" in d
+    assert "pose ends at" in d and "before the turn phase ends (24 s)" in d
 
 
-def test_first_pose_long_before_audio_start(take):
-    def shift_first(a):
-        a = a.copy()
-        a[0, 0] = BASE_US - 5_000_000
-        return a
-    rewrite_pose(take, shift_first)
-    assert "before audio start" in clock_detail(check(take))
+def test_pose_ending_after_the_turn_phase_but_before_the_audio_end_is_fine(take):
+    rewrite_pose(take, lambda a: a[a[:, 0] < BASE_US + 24.8e6])
+    assert check(take).passed
+
+
+def test_pose_that_starts_early_costs_nothing_and_is_only_noted(take):
+    """The scorer drops poses before the audio; a reconnect backoff can start one channel seconds early."""
+    def early(a):
+        extra = np.repeat(a[:1], 300, axis=0)
+        extra[:, 0] = BASE_US - 6_000_000 + np.arange(300) * 20000  # 50 Hz from 6 s before the audio, no gap
+        return np.vstack([extra, a])
+    rewrite_pose(take, early)
+    r = check(take)
+    assert r.passed, failed(r)
+    assert any("before audio start (ignored by the scorer)" in n for n in r.notes)
 
 
 def test_first_pose_slightly_before_audio_start_is_tolerated(take):
@@ -207,9 +216,15 @@ def test_first_pose_slightly_before_audio_start_is_tolerated(take):
     assert check(take).passed
 
 
-def test_pose_starts_late(take):
+def test_pose_that_starts_a_few_seconds_late_but_before_the_head_still_window_is_fine(take):
     rewrite_pose(take, lambda a: a[a[:, 0] > BASE_US + 3e6])
-    assert "after audio start" in clock_detail(check(take))
+    assert check(take).passed
+
+
+def test_pose_missing_in_the_head_still_window_fails(take):
+    rewrite_pose(take, lambda a: a[a[:, 0] > BASE_US + 7.9e6])  # starts 0.1 s before the turn cue
+    d = clock_detail(check(take))
+    assert "head-still window" in d and "pose starts at 7.9 s" in d
 
 
 def test_no_pose_inside_the_turn_phase(take):
@@ -241,7 +256,7 @@ def test_dropped_audio_chunk_shows_as_timestamp_drift(take):
         return a
     edit_chunks(take, drop)
     d = clock_detail(check(take))
-    assert "drift" in d and "chunk 600" in d
+    assert "dropped" in d and "20.0 ms" in d  # the 20 ms step shows against the median offset
 
 
 def test_lost_chunks_show_as_seq_jump_and_sample_shortfall(take):
@@ -279,7 +294,38 @@ def test_epoch_change_means_a_reconnect(take):
 
 def test_first_chunk_timestamp_must_match_meta(take):
     edit_meta(take, first_audio_ts_us=BASE_US + 40_000)
-    assert "first_audio_ts_us" in clock_detail(check(take)) or "first chunk" in clock_detail(check(take))
+    assert f"first chunk timestamp {BASE_US} != meta first_audio_ts_us {BASE_US + 40_000}" in clock_detail(check(take))
+
+
+def test_jittery_chunk_timestamps_and_a_noisy_first_chunk_are_not_a_glitch(take):
+    """Native Quest mic path: per-chunk extrapolated timestamps jitter by several ms."""
+    rng = np.random.default_rng(5)
+
+    def jitter(a):
+        a = a.copy()
+        a[:, 1] += np.round(rng.uniform(-3000, 3000, len(a)))
+        a[0, 1] += 12000  # first chunk 12 ms off: must not become an offset on every chunk
+        return a
+    edit_chunks(take, jitter)
+    first_ts = int(np.loadtxt(take / "audio_chunks.csv", delimiter=",", skiprows=1)[0, 1])
+    edit_meta(take, first_audio_ts_us=first_ts)
+    r = check(take)
+    assert r.passed, failed(r)
+    assert any("jitter p95" in n and "median" in n for n in r.notes)
+
+
+def test_slow_clock_drift_is_fine_but_a_big_one_fails_with_the_numbers(take):
+    def drift(ppm):
+        def f(a):
+            a = a.copy()
+            a[:, 1] += np.round((a[:, 1] - a[0, 1]) * ppm * 1e-6)
+            return a
+        return f
+    edit_chunks(take, drift(100))      # 100 ppm = 2.6 ms over the 26 s take
+    assert check(take).passed
+    edit_chunks(take, drift(3000))     # on top: ~80 ms
+    d = clock_detail(check(take))
+    assert "drift +" in d and "ppm" in d and "jitter p95" in d
 
 
 def test_chunk_tolerance_is_adjustable(take):
@@ -300,6 +346,7 @@ def test_old_take_without_labels_or_chunks_does_not_crash(tmp_path):
     r = check(t)
     assert r.passed, failed(r)
     assert any("audio_chunks.csv" in n for n in r.notes)
+    assert not r.has_chunks
     assert (r.distance_m, r.motion, r.stimulus) == (None, None, None)
     cells = dc.build_grid([r])
     assert cells == {(90, None): [1, 1]}
@@ -443,3 +490,17 @@ def test_failure_reasons_are_printed_and_json_written(tmp_path, stub_measure, ca
     assert "FAIL  x" in out and "FAIL no clock glitches: recorder saw 1 clock restarts" in out
     rows = json.loads(out_json.read_text())
     assert rows[0]["pass"] is False and rows[0]["distance_m"] == 1.0
+
+
+def test_takes_without_chunk_timestamps_are_flagged_everywhere_but_do_not_block_ready(tmp_path, stub_measure, capsys):
+    full_grid(tmp_path)
+    for a in dc.ANGLES[:2]:  # two takes of the grid recorded before audio_chunks.csv existed
+        make_take(tmp_path / f"old{a}", truth=float(a), secs=2.0, cue=None, chunks=False,
+                  meta_extra={"distance_m": 1.0, "motion": "normal", "stimulus": "pink"})
+    rc = dc.main([str(tmp_path)])  # no -v: the warning must show anyway
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert out.count("WARNING: no audio_chunks.csv") == 2
+    assert "WARNING: 2 of 38 takes have no chunk timestamps" in out
+    assert "READY: grid full and pass rate >= 90% (but 2 take(s) were not checked for dropped chunks)" in out
+    assert out.strip().splitlines()[-1] == "38 of 38 takes PASS (100%); grid 36 of 36 cells filled; 2 without chunk timestamps"
