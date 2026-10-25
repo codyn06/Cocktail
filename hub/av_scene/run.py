@@ -126,10 +126,14 @@ def run_pipeline(source, providers: Providers, cfg: AvConfig, out_dir: str | Pat
             runner.set_visual(vis, vrev)
             revisions.update({f"visual:{k}": v for k, v in vrev.items()})
             vrecs = timed("visual", runner.run_visual)
+            runner.visual = None
+            del vis
         with providers.speech() as models:
             runner.set_models(models)
             revisions.update(models.revisions)
             speech = timed("speech", lambda: runner.run_speech(vrecs))
+            runner.models = None
+            del models
         metas = [json.loads((rec.speech_dir / "meta.json").read_text(encoding="utf-8")) for rec in speech.records]
 
         # ---- anchors from identity activity; diarization is OPTIONAL evidence with an explicit status
@@ -158,6 +162,7 @@ def run_pipeline(source, providers: Providers, cfg: AvConfig, out_dir: str | Pat
                 revisions.update({f"events:{k}": v for k, v in erev.items()})
                 stage = event_stage.EventStage(runner, cfg, adapters, classifier=classifier, revisions=erev)
                 events = timed("events", lambda: stage.run(speech))
+                del stage, adapters, classifier
         residual = []
         if cfg.switches.residual:
             residual = timed("residual", lambda: ResidualStage(runner, cfg).run(speech, events.refs if events else []))

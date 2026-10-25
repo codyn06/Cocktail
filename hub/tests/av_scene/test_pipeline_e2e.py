@@ -140,3 +140,12 @@ def test_event_stage_change_leaves_speech_cache_valid(base, tmp_path):
     res, _ = go(tmp_path, name="c", cache=cache, cfg=cfg)
     kinds = {c[0] for c in res.counters.chunks_computed}
     assert "speech" not in kinds and "visual" not in kinds and "event_window" in kinds
+
+
+def test_inspect_cli_summarises_a_long_bundle(base, capsys):
+    from av_scene.__main__ import main
+    d, _, _ = base
+    assert main(["inspect", str(d / "out" / "manifest.json")]) == 0
+    out = capsys.readouterr().out
+    assert "long run: 7 chunks" in out and "timeline (association / visibility / stem availability kept separate)" in out
+    assert "tse:p0" in out and "refused x" in out
