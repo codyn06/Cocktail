@@ -16,27 +16,51 @@ replayed, untested.
   Only `hub/protocol` stays gated (integration owner approves changes).
 - Demo work (pitch, filming, README) starts only after the product works on the headset.
 
-## Machines
-| Machine | Person | Hardware / notes |
+## People and machines
+People and computers can swap, except Cody and his computer (the GPU machine).
+
+| Person | Machine / Claude | Role (default) |
 |---|---|---|
-| Cody's | Cody (codyn06) | RTX 5070 Ti Laptop, 12 GB (Blackwell: use PyTorch cu128). Live-run GPU machine (hub + models) |
-| Lalitha's | Lalitha | RTX 4060 8 GB, Unity installed, Claude $100 plan |
-| Third | unassigned | |
+| Cody (codyn06) | RTX 5070 Ti, 12 GB (Blackwell: PyTorch cu128); Unity | Compute owner: live hub, separation, chosen-voice audio; runs GPU jobs (SAM 3) for everyone. Gets priority on compute tasks |
+| Lalitha (Lalithaaaa) | RTX 4060 8 GB laptop, Unity; $20 Claude | Headset experience and integration owner (`quest/`, protocol changes) |
+| Sadie | $100 Claude; no Unity or GitHub yet | Location accuracy: the Claude-heavy work |
+| Shayaan | weak GPU; no Unity or GitHub yet | Real-world data and testing lead |
 
-## Milestones
-Target: working product by 10 AM tomorrow (Sunday). This is the best-case target, not a
-hard stop: the demo video is separate, and the deadline can be extended as the time
-approaches. Don't cut corners or rush to hit it; ask the team first. Each milestone is done when its
-"proof" works; move on as soon as it does. Everything after M3 only improves and proves it.
+Headsets: **Quest 3S** (Cody's, shared by everyone; the only one with camera access) and **Quest 2** (Lalitha's; mic, head pose, UI and audio, but Meta's camera API is Quest 3/3S only).
 
-| # | Milestone | Proof it's done | Tasks |
+### First steps for every person's AI
+1. Ask the person their name and role, and remember it.
+2. GPU check: `nvidia-smi --query-gpu=name,memory.total --format=csv`. If it has 12 GB or more, or is RTX 4070 Ti / 4080 / 4090 / 5070 Ti / 5080 / 5090 class, tell the team: that machine can share Cody's compute tasks.
+3. Read `AGENTS.md` and this file; work only on that person's milestone, one PR per subtask, each with "Expected / You check" steps the person can run.
+
+### Setup without Unity (Sadie, Shayaan)
+GitHub account, then Cody invites them to `codyn06/Cocktail`; install Git, GitHub CLI (`gh auth login`), `uv`, Claude Code; clone; `cd hub && uv sync && uv run pytest -q` (expected: all pass). Headset work needs only `adb` (an `.apk` built by Lalitha or Cody, installed with `adb install`).
+
+## Milestones (updated Oct 25)
+Product target 10 AM Sunday is best-case, not a hard stop; ask the team before cutting corners.
+M1 to M4 run in parallel; M5 pulls them together.
+
+| # | Milestone | Owner | Done when (testable) |
 |---|---|---|---|
-| M0 | Everyone can build and run | Every machine pulled, models fit on the GPU, headset connects over the private network | A1, A3, A4, A10 |
-| M1 | Data flows end to end | Headset audio, video and head pose reach the hub; sound returns to the headset; delay measured; a recorded test scene exists | B1, B2, B3, B4, B6, C1, C2 |
-| M2 | Sounds separated and located (main goal) | On the test recording, each sound is its own labeled source with a direction | A6, A8, C3, C4, C5 |
-| M3 | **Checkpoint 1: working product** | On the 3S, sounds are tracked live on screen; pick one and hear it alone in 3D | D1, B5, C6, E1, E3 |
-| M4 | Complete feature set | Alerts, clean replay, who-is-talking, three modes; acceptance test passes | A7, D2, D3, E2, F1, F2 |
-| M5 | Proven and submitted | Metrics (30 trials each), tuning, README, video, submitted before 10 AM | G1-G4, A9, H1, H2 |
+| M1 | **Live loop on the headset** | Lalitha | Two people talk; within 1 s the outline is on the talker in view, and the dot and arrow point to the one out of view; ids stay stable for 60 s |
+| M2 | **Hear the chosen voice** | Cody | Select a voice: it is at least 10 dB over the rest within 1 s; switching to the other voice works |
+| M3 | **Location you can trust** | Sadie | Real 4-angle test: error 25 deg or less on 3 of 4 takes. Then the targets below |
+| M3d | **Real data for M3** | Shayaan | Labeled recordings cover every angle (coverage grid full), 90% or more pass the data check; shared test scene recorded; round-trip delay measured |
+| M4 | **Outline on the actual person** (after M2) | Cody | Camera detection puts the outline box on the real talker in 80% or more of frames (Quest 3S only) |
+| M5 | **Demo-ready** | everyone | Acceptance test F2 passes; metrics (G1) measured; video recorded |
+
+Subtasks:
+- **M1 (Lalitha):** speaker HUD (#38) on the headset with fake data, then with Cody's live hub (#37); tune outline size, view angle, dot and arrow; design pass; "point the controller at the sound and pull the trigger" truth labels for Shayaan's recordings.
+- **M2 (Cody):** merge #37 and #39; stream the selected source to `/audio/out` with inner and outer volumes; keep the voice locked through pauses; print gain in dB and delay in ms.
+- **M3 (Sadie):** `python -m locate.bench recordings/` scoreboard (median and p90 error, front/back rate, time to lock, confidence calibration); tune the inter-mic delay method (#36) with per-device calibration; locate each separated stream; combine delay, loudness and head-motion history in one posterior with honest confidence; tracker smoothing on real data; camera snap once M4 exists.
+- **M3d (Shayaan):** tape angle marks every 30 deg at 0.5, 1 and 2 m; record pink noise and speech at small, normal and large head motion on both headsets with `quest/tools/run_locate_take.ps1`; build `python -m locate.dataset_check recordings/` (coverage grid, PASS/FAIL per take); record the shared test scene (C2); round-trip delay test (C1); later run the scoreboard for G1.
+- **M4 (Cody):** save camera frames in the recorder; person detection on the hub; boxes into sources; match the box to the speaker by direction (E2).
+
+### Location targets (M3, change them as we learn)
+In front: median 15 deg or less. Behind: median 25 deg or less. Front/back correct 95% or more. Lock within 3 s of head movement. Two speakers: both within 25 deg. Confidence honest: when it says 90% sure, it is right about 90% of the time.
+
+### Also to do
+Unity scene commit and TMP essentials decision (Lalitha); A1 one-command scripts; F1 modes; G2 echo and delay tuning; G3 glasses mode; A10 network check; alerts A7/D2 and clean replay D3 for whoever frees up first; G4 README, A9 pitch, H1/H2 video and submission at the end.
 
 ## Tasks
 
@@ -55,7 +79,7 @@ the earlier tasks that must be usable first; mocks and recordings let you start 
 | A5 | Headset screen design with fake data | Labels and outlines on each sound in view, edge arrows and clock positions (like "4 o'clock") for sounds out of view, state banners, a small glasses-style view. Runs on the Quest 2 with made-up sources. | `quest/ui` | Lalitha | feat/a5-headset-ui | done (mocked) | PR #28 merged. Fake-data screen compiles and passes its self-test; NOT yet viewed on the headset. Teal "lost" colour fails the 3:1 contrast check |
 | A6 | ★ Choose the audio AI models and build the scoring test | Pick the model that splits mixed audio into voices, the sound labeler, the voice-ID model and the speech enhancer. Build a test that mixes known clean recordings and scores the result. | `hub/separate`, `eval/` | Cody | feat/c3-live-separation | done (simulated) | PR #19 merged. MossFormer2 (voices) + residual + AST labels; scoring test `python -m separate.score` |
 | A7 | Alerts engine | Rules file that matches sounds (smoke alarm, siren) and the wearer's name, with a name-detection model. Tested with the laptop mic. | `hub/alerts` | | | todo | |
-| A8 | ★ Work out where a sound is from head movement | Math that turns "this sound got louder and brighter as the head turned" into a direction, all 360 degrees, in view or not. Tested on simulated audio and head turns. | `hub/locate` | Lalitha | feat/a8-locate | done (simulated) | PR #11 merged. Median error ~3 deg at +-30 deg head motion, ambiguous with no motion. Real-world check: PR #29 recorder and scorer, not yet passed (needs head turns and a louder source) |
+| A8 | ★ Work out where a sound is from head movement | Math that turns "this sound got louder and brighter as the head turned" into a direction, all 360 degrees, in view or not. Tested on simulated audio and head turns. | `hub/locate` | Sadie | feat/a8-locate | done (simulated) | PR #11 merged. Median error ~3 deg at +-30 deg head motion, ambiguous with no motion. Real-world check: PR #29 recorder and scorer, not yet passed (needs head turns and a louder source) |
 | A9 | Pitch and demo outline | Outline of the video and slides. Start after the product works. | `docs/` | | | todo | later |
 | A10 | Network | Laptop and headset on the same network. University Wi-Fi is good enough for now; a private hotspot is later and only if delay or jitter becomes a problem. | none | | | todo | low priority, later |
 
@@ -74,12 +98,12 @@ the earlier tasks that must be usable first; mocks and recordings let you start 
 
 | ID | Task | What it means / done when | Needs | Folder | Owner | Branch | Status | Notes |
 |---|---|---|---|---|---|---|---|---|
-| C1 | Round-trip delay test | Send mic sound to the hub and straight back, unprocessed. Measure delay and jitter. | B1, B3 | `eval/` | | | todo | quick test |
-| C2 | Record the test scene | On the 3S: two people talking at once plus music, with natural head movement. Everyone tests on it. | B1, B2 | `mock/` | | | todo | needs the headset |
+| C1 | Round-trip delay test | Send mic sound to the hub and straight back, unprocessed. Measure delay and jitter. | B1, B3 | `eval/` | Shayaan | | todo | quick test |
+| C2 | Record the test scene | On the 3S: two people talking at once plus music, with natural head movement. Everyone tests on it. | B1, B2 | `mock/` | Shayaan | | todo | needs the headset |
 | C3 | ★ Live sound separation and labels | Hub splits the live mix into separate voices and sounds and names each (speech, music, alarm). Tested on the fake headset, then on the recording. | A6, B3 | `hub/separate` | Cody | feat/c3-live-separation | done (simulated) | PR #19 merged. +18.3/+17.1/+17.9 dB on simulated 2 talkers + music, labels correct, ~460 ms per 1 s hop, ~1.1 GB VRAM. Not yet on the 3S recording |
-| C4 | ★ Live direction finding | Hub gives every separated sound a direction using the head-movement math. | A8, B3 | `hub/locate` | Cody | feat/c4-live-locate | doing | PR #21, waits on #11. Simulated errors 40/9/16 deg; estimator overconfident (see #11 comment) |
-| C5 | Camera confirmation | SAM 3 outlines objects in the camera view and depth gives distance, to confirm which object makes a sound. | A3, B2 | `hub/vision` | | | todo | |
-| C6 | Live headset screen | The designed screen driven by real hub events. | A5, B1, B3 | `quest/ui` | | | todo | |
+| C4 | ★ Live direction finding | Hub gives every separated sound a direction using the head-movement math. | A8, B3 | `hub/locate` | Sadie | feat/c4-live-locate | doing | PR #21, waits on #11. Simulated errors 40/9/16 deg; estimator overconfident (see #11 comment) |
+| C5 | Camera confirmation | SAM 3 outlines objects in the camera view and depth gives distance, to confirm which object makes a sound. | A3, B2 | `hub/vision` | Cody | | todo | |
+| C6 | Live headset screen | The designed screen driven by real hub events. | A5, B1, B3 | `quest/ui` | Lalitha | | todo | |
 
 ### Tracking, selecting, hearing
 
@@ -88,9 +112,9 @@ the earlier tasks that must be usable first; mocks and recordings let you start 
 | D1 | ★ Track every sound | Each sound keeps one identity, direction and state (tracking, last seen, lost), in view or out of view. | C3, C4 | `hub/track` | Lalitha | feat/d1-track | doing | PR #30 draft. Simulated scenes only; not wired to the live hub until #21 and #27 merge |
 | D2 | Alerts that interrupt playback | A smoke alarm, siren or the wearer's name lowers the playback and speaks with direction. | A7, C3, B6 | `hub/alerts` | | | todo | |
 | D3 | Clean replay of the last 5 seconds | SAM Audio re-processes the last 5 s of the chosen sound and plays it back clean. | A3, B3, B6, C3 | `hub/replay` | | | todo | |
-| E1 | Choose a sound and hear it | The chosen person or sound is amplified and enhanced over a quieter room. A voice fingerprint keeps hold of them. | D1, B5, B6, A6 | `hub/separate`, `quest/audio` | | | todo | |
-| E2 | Who is talking | Direction decides which voice belongs to which person; lip and body motion confirm. | D1, C5 | `hub/who` | | | todo | needs the headset |
-| E3 | Show every tracked sound | Labels and arrows for every tracked sound on the headset. | D1, C6 | `quest/ui` | | | todo | |
+| E1 | Choose a sound and hear it | The chosen person or sound is amplified and enhanced over a quieter room. A voice fingerprint keeps hold of them. | D1, B5, B6, A6 | `hub/separate`, `quest/audio` | Cody | | todo | |
+| E2 | Who is talking | Direction decides which voice belongs to which person; lip and body motion confirm. | D1, C5 | `hub/who` | Cody | | todo | needs the headset |
+| E3 | Show every tracked sound | Labels and arrows for every tracked sound on the headset. | D1, C6 | `quest/ui` | Lalitha | | todo | |
 
 **Checkpoint 1 (target tonight): E1 + E3 working live on the Quest 3S with D1 tracking.**
 
@@ -100,7 +124,7 @@ the earlier tasks that must be usable first; mocks and recordings let you start 
 |---|---|---|---|---|---|---|---|---|
 | F1 | Three modes | Fast (no lookahead), Balanced (~100 ms lookahead), Accurate (phrase-level, played in pauses). Switchable live. | E1 | `hub/modes` | | | todo | |
 | F2 | Full acceptance test | Two people talking plus music: select A, then B, then the music; turn away and keep tracking; alerts fire; replay works. | E1, E2, E3, D2, D3 | all | | | todo | |
-| G1 | Measure everything | At least 30 trials each: separation gain, wrong-speaker rate, direction error, delay per mode, switch time, false alerts. | F2, A6 | `eval/` | | | todo | |
+| G1 | Measure everything | At least 30 trials each: separation gain, wrong-speaker rate, direction error, delay per mode, switch time, false alerts. | F2, A6 | `eval/` | Shayaan | | todo | |
 | G2 | Echo and delay tuning | Make the enhanced voice stand out from the room's real sound; push delay down. | F1, C1 | `hub/modes` | | | todo | |
 | G3 | Glasses-like test mode | Lower camera quality and added delay to mimic glasses. | F2, A5 | `quest/ui` | | | todo | |
 | G4 | README | Setup, architecture, metrics, limitations. | F2 | `README.md` | | | todo | after product works |
