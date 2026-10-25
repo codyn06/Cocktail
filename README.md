@@ -235,8 +235,18 @@ powershell -ExecutionPolicy Bypass -File quest/tools/run_locate_take.ps1
 ```
 
 A voice tells you when to turn your head; it prints PASS/FAIL per take. The pieces can also run
-separately: `quest/tools/record_session.py` records (audio + head pose, to `hub/recordings/`,
-gitignored), and `uv run python -m locate.real_eval recordings/<take>` (from `hub/`) scores.
+separately: `quest/tools/record_session.py` records (audio + head pose + camera frames, to
+`hub/recordings/`, gitignored), and `uv run python -m locate.real_eval recordings/<take>` (from `hub/`)
+scores.
+
+Camera frames land in `<take>/video/<device_ts_us>.jpg` with the per-frame header (size, camera pose,
+field of view) in `<take>/video/frames.jsonl`, the layout `mockclient.Session.load` and
+`python -m mockclient.replay <take>` read, so a recorded take can be replayed into the hub and fed to
+SAM 3. Frames take about 0.5 MB/s; use `--video-fps N`, `--max-frames N` or `--no-video` to limit them, and
+`--camera-flipped` if the headset's `flipVertical` was on (that flag is not sent on the wire). To score
+"box on the real talker", label who talks when in `<take>/talkers.csv`
+(`start_s,end_s,talker_id,bearing_deg,note`, seconds since the first audio sample; format and helpers in
+`hub/mockclient/talkers.py`).
 
 To compare every direction method on all labeled takes at once (median / 90th-percentile
 error, front/back, seconds to lock, whether the confidence is honest), from `hub/`:
