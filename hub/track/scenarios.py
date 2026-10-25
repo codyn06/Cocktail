@@ -200,10 +200,116 @@ SCENES = [two_talkers_swap_slots, pause_and_return, head_turn_in_view, blip_igno
           talkers_crossing, duplicate_stream_without_direction, slot_reused_by_other_sound, wraps_around_behind]
 
 
+# ----------------------------------------------------------------------------- probes
+# Edge cases for workstream B (offline identity checks). Each states what SHOULD happen for the
+# true sources; tests/track/test_track.py marks the ones the tracker is known to fail (xfail,
+# strict) with the reason, so a fix flips them.
+def near_talkers(gap: float):
+    def scene() -> list[Check]:
+        def frame(t, rng):  # two different talkers, same label, gap deg apart, both talking throughout
+            return [raw("s1", "speech", jit(rng, 30, 3)), raw("s2", "speech", jit(rng, 30 + gap, 3))]
+        r = simulate(frame, 10)
+        return [(f"two talkers {gap:.0f} deg apart are two sources at the end", len(r.at(9.5)) == 2, f"{len(r.at(9.5))}"),
+                ("never more than two ids", len(r.ids_ever()) <= 2, f"{sorted(r.ids_ever())}")]
+    scene.__name__ = f"near_talkers_{gap:.0f}deg"
+    return scene
+
+
+def pause_beyond_forget() -> list[Check]:
+    def frame(t, rng):
+        if t < 3:
+            return [raw("s1", "speech", jit(rng, 0))]
+        if 70 <= t < 75:
+            return [raw("s2", "speech", jit(rng, 0))]
+        return []
+    r = simulate(frame, 75)
+    ids_end = [s.source_id for s in r.at(74.5)]
+    return [("gone after forget_s of silence (t=65)", r.at(65) == [], f"{[s.source_id for s in r.at(65)]}"),
+            ("back as one source (by design a NEW id: forget_s passed)", len(ids_end) == 1 and ids_end != ["t1"], f"{ids_end}"),
+            ("ids not reused", len(r.ids_ever()) == 2, f"{sorted(r.ids_ever())}")]
+
+
+def two_bearingless_births() -> list[Check]:
+    def frame(t, rng):  # two talkers start together; the locator has no direction for either for 6 s
+        if t < 6:
+            return [raw("s1", "speech", None), raw("s2", "speech", None)]
+        return [raw("s1", "speech", jit(rng, -40)), raw("s2", "speech", jit(rng, 50))]
+    r = simulate(frame, 12)
+    return [("both announced before directions exist (t=5)", len(r.at(5)) == 2, f"{len(r.at(5))}"),
+            ("two sources with directions at the end", len(r.at(11.5)) == 2
+             and by_bearing(r.at(11.5), -40) is not None and by_bearing(r.at(11.5), 50) is not None,
+             f"{[(s.source_id, s.bearing_deg) for s in r.at(11.5)]}"),
+            ("never more than two ids", len(r.ids_ever()) <= 2, f"{sorted(r.ids_ever())}")]
+
+
+def pause_while_crossing() -> list[Check]:
+    def frame(t, rng):  # A stands at 0; B walks -60 -> +60 over 12 s, silent 4-8 s while passing A,
+        out = [raw("s1", "speech", jit(rng, 0, 3))]                     # back in another slot
+        if not 4 <= t < 8:
+            out.append(raw("s2" if t < 4 else "s3", "speech", jit(rng, -60 + 10 * t, 3)))
+        return out
+    r = simulate(frame, 12)
+    b0, b1 = by_bearing(r.at(3.5), -25), by_bearing(r.at(11.5), 55)
+    a0, a1 = by_bearing(r.at(3.5), 0), by_bearing(r.at(11.5), 0)
+    return [("the one standing still keeps its id", a0 is not None and a1 is not None and a0.source_id == a1.source_id,
+             f"{getattr(a0, 'source_id', None)} -> {getattr(a1, 'source_id', None)}"),
+            ("the walker keeps its id across a pause it walked 40 deg during", b0 is not None and b1 is not None
+             and b0.source_id == b1.source_id, f"{getattr(b0, 'source_id', None)} -> {getattr(b1, 'source_id', None)}")]
+
+
+def return_near_other() -> list[Check]:
+    def frame(t, rng):  # A talks throughout at 0 in s1; B talks at -24 until 3 s, comes back at +10 in s3
+        out = [raw("s1", "speech", jit(rng, 0, 2))]
+        if t < 3:
+            out.append(raw("s2", "speech", jit(rng, -24, 2)))
+        elif t >= 6:
+            out.append(raw("s3", "speech", jit(rng, 10, 2)))
+        return out
+    r = simulate(frame, 10)
+    a0, a1 = by_bearing(r.at(2.5), 0, 6), by_bearing(r.at(9.5), 0, 6)
+    return [("the talker who never stopped keeps its id when another comes back nearby",
+             a0 is not None and a1 is not None and a0.source_id == a1.source_id,
+             f"{getattr(a0, 'source_id', None)} -> {getattr(a1, 'source_id', None)}")]
+
+
+def low_conf_second_talker() -> list[Check]:
+    def frame(t, rng):  # the locator is sure of A but calls B "ambiguous" (conf 0.15) the whole time
+        return [raw("s1", "speech", jit(rng, -30), conf=0.8), raw("s2", "speech", jit(rng, 40), conf=0.15)]
+    r = simulate(frame, 20)
+    return [("a second talker whose direction stays unsure is still announced", len(r.at(19.5)) == 2,
+             f"{[(s.source_id, s.bearing_deg) for s in r.at(19.5)]}")]
+
+
+def unreliable_bearings() -> list[Check]:
+    def frame(t, rng):  # every other reading is junk from anywhere, flagged with low confidence
+        if int(t * 10) % 2:
+            return [raw("s1", "speech", float(rng.uniform(-180, 180)), conf=0.15)]
+        return [raw("s1", "speech", jit(rng, 30), conf=0.8)]
+    r = simulate(frame, 10)
+    last = r.at(9.5)
+    return [("one id", len(r.ids_ever()) == 1, f"{sorted(r.ids_ever())}"),
+            ("low-confidence junk does not move the bearing (within 10 deg of 30)", len(last) == 1 and near(last[0], 30, 10),
+             f"{[s.bearing_deg for s in last]}")]
+
+
+def alternating_near_talkers() -> list[Check]:
+    def frame(t, rng):  # A at 20 and B at 30 take turns in the same slot (one separated voice at a time)
+        b = 30 if 5 <= t < 10 else 20
+        return [raw("s1", "speech", jit(rng, b, 3))]
+    r = simulate(frame, 15)
+    return [("two different talkers get two ids (needs voice identity: same slot, 10 deg apart)",
+             len(r.ids_ever()) == 2, f"{sorted(r.ids_ever())}")]
+
+
+PROBES = [near_talkers(8), near_talkers(15), near_talkers(20), pause_beyond_forget, two_bearingless_births,
+          pause_while_crossing, return_near_other, low_conf_second_talker, unreliable_bearings,
+          alternating_near_talkers]
+
+
 def main() -> int:
     want = sys.argv[1:]
     bad = 0
-    for sc in SCENES:
+    for sc in SCENES + PROBES:
         if want and not any(w in sc.__name__ for w in want):
             continue
         print(f"\n{sc.__name__}")

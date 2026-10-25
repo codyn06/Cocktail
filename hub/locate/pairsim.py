@@ -130,7 +130,9 @@ def simulate(truth_deg, seed=0, room: Room | None = None, secs=30.0, rate=48000)
 
 def _render(src, az_deg, pt, yaw, r: Room, rng, rate):
     """One source at world bearing az_deg as the two mics hear it: direct path, early
-    reflections from fixed world directions, and a late reverberant tail (coherent, zero delay)."""
+    reflections from fixed world directions, and a late reverberant tail (coherent, zero delay).
+    az_deg may be a function of time (s) for a moving source: the direct path follows it frame
+    by frame, the reflections stay at their fixed world directions."""
     n = len(src)
     N, H = 1024, 256
     tf = (np.arange((n - N) // H + 1) * H + N / 2) / rate
@@ -139,7 +141,7 @@ def _render(src, az_deg, pt, yaw, r: Room, rng, rate):
     f = np.fft.rfftfreq(N, 1 / rate)
 
     # direct path + early reflections: (world azimuth, elevation, gain, extra delay in samples)
-    paths = [(az_deg, r.elev_deg, 1.0, 0)]
+    paths = [(az_deg(tf) if callable(az_deg) else az_deg, r.elev_deg, 1.0, 0)]
     for _ in range(r.n_reflections):
         paths.append((rng.uniform(-180, 180), rng.uniform(-30, 40), rng.uniform(*r.reflection_gain),
                       int(rng.uniform(*r.reflection_delay_ms) * rate / 1000)))
@@ -172,11 +174,26 @@ def _finish(ch0, ch1, r: Room, rng, rate):
     return x
 
 
+def _mute(x, spans, rate, ramp_s=0.02):
+    """x with each (t0, t1) span (s) silenced, 20 ms ramps at the edges."""
+    g = np.ones(len(x))
+    t = np.arange(len(x)) / rate
+    for t0, t1 in spans:
+        g = np.minimum(g, np.clip(np.maximum(t0 - t, t - t1) / ramp_s, 0, 1))
+    return x * g
+
+
 def write_session(out: Path, angles, seed=0, room: Room | None = None, secs=40.0, rate=48000,
-                  start_ts_us: int = 1_000_000):
+                  start_ts_us: int = 1_000_000, paths=None, silent=None, pose_gaps=None):
     """A mockclient session (see mockclient/session.py) with a speech-like talker at each world
     bearing, the head turning slowly from 1 s on. stems/ hold each talker alone as the mics
-    hear it (mean over mics), 16 kHz, same scale as audio.wav, for scoring and oracle masks."""
+    hear it (mean over mics), 16 kHz, same scale as audio.wav, for scoring and oracle masks.
+
+    Scripted scenes (all optional; without them the output is unchanged for the same arguments):
+    paths[k] = [[t_s, deg], ...] keyframes: talker k moves (linear between keyframes, held at the
+    ends; "bearing_deg" in session.json is then its start bearing, "moving" is true and "path"
+    the keyframes). silent[k] = [[t0, t1], ...]: talker k says nothing in those spans (on top of
+    talker()'s own short phrase gaps). pose_gaps = [[t0, t1], ...]: no head poses are sent then."""
     from mockclient import Session
     from mockclient.simulate import quat_yaw_pitch
 
@@ -185,7 +202,18 @@ def write_session(out: Path, angles, seed=0, room: Room | None = None, secs=40.0
     n = int(secs * rate)
     pt = np.arange(0, secs, 1 / 72)
     yaw = head_yaw(pt, rng, r.head_amp_deg, go=1.0, stop=secs - 0.5)
-    images = [_render(talker(n, rng, rate), float(a), pt, yaw, r, rng, rate) for a in angles]
+    paths = paths or [None] * len(angles)
+    silent = silent or [None] * len(angles)
+    images = []
+    for a, path, quiet in zip(angles, paths, silent):
+        src = talker(n, rng, rate)
+        if quiet:
+            src = _mute(src, quiet, rate)
+        az = float(a)
+        if path:
+            kt, kd = np.array(path, float).T
+            az = lambda t, kt=kt, kd=kd: np.interp(t, kt, kd)
+        images.append(_render(src, az, pt, yaw, r, rng, rate))
     x = _finish(sum(i[0] for i in images), sum(i[1] for i in images), r, rng, rate)
     scale = 0.3 / np.abs(x).max()
     out.mkdir(parents=True, exist_ok=True)
@@ -195,12 +223,20 @@ def write_session(out: Path, angles, seed=0, room: Room | None = None, secs=40.0
         name = f"talker{k + 1}"
         ref = signal.resample_poly((c0 + c1) / 2 * scale, 1, rate // 16000).astype(np.float32)
         wavfile.write(out / "stems" / f"{name}.wav", 16000, ref)
-        sources.append({"name": name, "bearing_deg": float(a), "stem": f"stems/{name}.wav"})
+        q = {"name": name, "bearing_deg": float(a), "stem": f"stems/{name}.wav"}
+        if paths[k]:
+            q.update(bearing_deg=float(paths[k][0][1]), moving=True, path=[[float(t), float(d)] for t, d in paths[k]])
+        if silent[k]:
+            q["silent"] = [[float(t0), float(t1)] for t0, t1 in silent[k]]
+        sources.append(q)
+    keep = [not any(t0 <= ti < t1 for t0, t1 in (pose_gaps or [])) for ti in pt]
     poses = [{"device_ts_us": start_ts_us + int(ti * 1e6), "pos": [0.0, 1.6, 0.0],
-              "rot_xyzw": list(quat_yaw_pitch(float(yi), 0.0))} for ti, yi in zip(pt, yaw)]
+              "rot_xyzw": list(quat_yaw_pitch(float(yi), 0.0))} for ti, yi, ok in zip(pt, yaw, keep) if ok]
     meta = {"device": "pairsim", "simulated": True, "sample_rate": rate, "mic_channels": 2,
             "camera": False, "start_ts_us": start_ts_us, "duration_s": secs,
             "yaw_amp_deg": r.head_amp_deg, "seed": seed, "sources": sources}
+    if pose_gaps:
+        meta["pose_gaps"] = [[float(t0), float(t1)] for t0, t1 in pose_gaps]
     sess = Session(out, meta, (x * scale).astype(np.float32), rate, poses)
     sess.save()
     return sess
