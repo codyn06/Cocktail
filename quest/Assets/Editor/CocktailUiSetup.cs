@@ -229,28 +229,23 @@ namespace Cocktail.Editor
                 Check(ui.ActiveArrowCount >= 1, "out-of-view arrows follow head yaw (s_2/s_3 still out of view)");
                 ui.Head.rotation = Quaternion.identity;
 
-                // ---- speaker-only HUD (the default): outline on speakers in view, dot at the edge for speakers out of view, arrow toward the noise
+                // ---- speaker-only HUD (the default): outline on speakers in view, arrow at the edge toward speakers out of view; nothing is auto-picked
                 ui.SpeakerOnly = true; feed.ResetDemo(); ui.Head.rotation = Quaternion.identity; Run(2f);
                 float rel1 = UiMath.NormalizeDeg(feed.Current.Sources[0].BearingDeg.Value - ui.Head.eulerAngles.y);
                 float rel2 = UiMath.NormalizeDeg(feed.Current.Sources[1].BearingDeg.Value - ui.Head.eulerAngles.y);
                 Check(!ui.WorldRoot.gameObject.activeSelf && ui.MarkerCount >= 0 && !ui.HeadLockedRoot.Find("RadarRing").gameObject.activeSelf, "speaker-only HUD hides the full HUD (markers, radar ring)");
+                Check(ui.GetSpeaker("s_1") == null && ui.GetSpeaker("s_2") == null, "nothing is marked in the world until the wearer chooses");
+                Check(ui.ListRowCount >= 2, $"the picker lists the talking sources (rows: {ui.ListRowCount})");
+                feed.Select("s_1"); Run(1.5f);
                 var sp1 = ui.GetSpeaker("s_1"); var sp2 = ui.GetSpeaker("s_2");
-                Check(sp1 != null && sp1.OutlineVisible && !sp1.DotVisible, $"speaker s_1 in view gets the corner outline (rel {rel1:F0} deg)");
-                Check(sp1 != null && sp1.OutlineSize.x > 0.05f && sp1.OutlineSize.y > sp1.OutlineSize.x, $"outline is taller than wide ({(sp1 != null ? sp1.OutlineSize.ToString() : "none")})");
-                Check(sp2 != null && sp2.DotVisible && !sp2.OutlineVisible, $"speaker s_2 out of view gets a dot at the screen edge (rel {rel2:F0} deg)");
-                Check(sp2 != null && sp2.DotLocal.x < 0f && Mathf.Abs(sp2.DotLocal.x) > 0.5f, $"the dot is on the left edge, the side the speaker is on ({(sp2 != null ? sp2.DotLocal.ToString() : "none")})");
+                Check(sp1 != null && sp1.OutlineVisible && !sp1.DotVisible, $"the chosen speaker s_1, in view, gets the rectangle (rel {rel1:F0} deg)");
+                Check(sp1 != null && sp1.OutlineSize.x > 0.05f && sp1.OutlineSize.y > sp1.OutlineSize.x, $"the rectangle is taller than wide ({(sp1 != null ? sp1.OutlineSize.ToString() : "none")})");
+                Check(sp2 == null || (!sp2.OutlineVisible && !sp2.DotVisible), $"the other speaker (s_2 at {rel2:F0} deg) gets no marker");
                 Check(ui.GetSpeaker("s_3") == null, "music (not a speaker) gets no speaker indicator");
-                Check(ui.SpeakerOutlineCount == 1 && ui.SpeakerDotCount == 1, $"exactly one outline and one dot (got {ui.SpeakerOutlineCount} and {ui.SpeakerDotCount})");
-                var arrow = ui.SpeakerArrow;
-                float ang = arrow.AngleDeg;
-                Check(arrow.Visible, "the direction arrow is visible");
-                Check(Mathf.Abs(Mathf.DeltaAngle(ang, -rel1)) < 15f || Mathf.Abs(Mathf.DeltaAngle(ang, -rel2)) < 15f,
-                    $"the arrow points toward a speaker (arrow {ang:F0}, speakers at {-rel1:F0} and {-rel2:F0})");
-                ui.Head.rotation = Quaternion.Euler(0f, feed.Current.Sources[1].BearingDeg.Value, 0f); Run(1.5f);
-                float r1b = UiMath.NormalizeDeg(feed.Current.Sources[0].BearingDeg.Value - ui.Head.eulerAngles.y);
-                Check(ui.GetSpeaker("s_2").OutlineVisible && ui.GetSpeaker("s_1").DotVisible, $"after turning toward s_2 it gets the outline and s_1 becomes a dot (s_1 now at {r1b:F0} deg)");
-                ui.Head.rotation = Quaternion.Euler(0f, feed.Current.Sources[1].BearingDeg.Value + 180f, 0f); Run(2.5f);
-                Check(Mathf.Abs(Mathf.DeltaAngle(arrow.AngleDeg, 0f)) > 60f, $"with the head turned away the arrow points aside or behind, not up (arrow {arrow.AngleDeg:F0})");
+                Check(ui.SpeakerOutlineCount == 1 && ui.SpeakerDotCount == 0, $"exactly one rectangle and no arrow (got {ui.SpeakerOutlineCount} and {ui.SpeakerDotCount})");
+                ui.Head.rotation = Quaternion.Euler(0f, 180f, 0f); Run(1.5f);
+                Check(sp1 != null && sp1.DotVisible && !sp1.OutlineVisible, "turned away from the chosen speaker, an arrow at the edge replaces the rectangle");
+                feed.Stop(); Run(0.8f);
                 ui.SpeakerOnly = false; ui.Head.rotation = Quaternion.identity; Run(0.3f);
 
                 // ---- glasses HUD mode

@@ -92,7 +92,18 @@ namespace Cocktail.Ui
             return true;
         }
 
-        static Sprite MakePlate(bool outlineOnly)
+        static readonly System.Collections.Generic.Dictionary<int, Sprite> _scaledPlates = new System.Collections.Generic.Dictionary<int, Sprite>();
+        /// <summary>The chamfered plate (or its outline) with the diagonal cut equal to chamferMetres; 9-sliced, so any size keeps the cut.</summary>
+        public static Sprite PlateScaled(float chamferMetres, bool outline = false)
+        {
+            int key = Mathf.RoundToInt(chamferMetres * 100000f) * 2 + (outline ? 1 : 0);
+            if (_scaledPlates.TryGetValue(key, out var sp) && sp != null) return sp;
+            sp = MakePlate(outline, PlateCut / Mathf.Max(0.0005f, chamferMetres));
+            _scaledPlates[key] = sp;
+            return sp;
+        }
+
+        static Sprite MakePlate(bool outlineOnly, float ppu = PlatePpu)
         {
             int n = PlateN;
             var t = NewTex(n, n);
@@ -116,7 +127,7 @@ namespace Cocktail.Ui
                     }
                     px[y * n + x] = new Color32(255, 255, 255, a);
                 }
-            return Finish(t, px, PlatePpu, new Vector4(PlateBorder, PlateBorder, PlateBorder, PlateBorder));
+            return Finish(t, px, ppu, new Vector4(PlateBorder, PlateBorder, PlateBorder, PlateBorder));
         }
 
         static Sprite MakeGlow()
@@ -371,5 +382,16 @@ namespace Cocktail.Ui
 
         public static float Ease(float current, float target, float rate, float dt) =>
             Mathf.Lerp(current, target, 1f - Mathf.Exp(-rate * dt));
+
+        /// <summary>
+        /// Opacity (or any 0..1 value) glide with an exponential ease: fast at first, a long soft landing, no hard start or stop.
+        /// It settles to within ~1% after <paramref name="seconds"/>, and snaps the last 0.2% so hidden things really reach 0.
+        /// </summary>
+        public static float Fade(float current, float target, float seconds, float dt)
+        {
+            if (seconds <= 0f) return target;
+            float v = Mathf.Lerp(current, target, 1f - Mathf.Exp(-6.9f / seconds * dt));   // 1 - 2^(-10t): within 0.1% at 'seconds'
+            return Mathf.Abs(v - target) < 0.002f ? target : v;
+        }
     }
 }
