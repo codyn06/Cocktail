@@ -18,10 +18,12 @@ commands). `IngestState.input_hooks` hands each one to `EventsState.on_input`.
 **Continuity.** The choice is a Tracker id. The Tracker keeps one id per sound by world bearing + label
 through slot swaps and pauses, and is what the headset's list shows, so `t3` means the same talker when the
 separator calls them `s1` then `s2`. Per audio frame `Selection.route()` asks the Tracker which slot (and
-duplicate slots folded into the same source) carries the id. Only a `tracking` source is routed: a
-`last_seen` source's slot may already belong to another sound, so inner goes silent.
+duplicate slots folded into the same source) carries the id. Only a `tracking` source is routed, and a
+slot is dropped if another track has been heard in it more recently (a paused talker keeps a stale slot for
+`hold_s`). A `last_seen` source's slot may already belong to another sound, so inner goes silent.
 If the Tracker folds the chosen track into another, the choice follows (`reconcile`); if it is forgotten or
-the pose epoch restarts, the choice is cleared.
+the pose epoch restarts, the choice is cleared. The epoch reset is applied when an input arrives, before
+that input is handled, so an old-epoch id can never be selected after a reconnect.
 Voice memory (`separate/voice_memory.py`, `--voice-memory`) is complementary, not the key: it only keeps
 the two voice slots consistent over pauses with speaker embeddings (needs WavLM, covers no music or
 residual, has no ids the headset knows). It reduces slot swaps the Tracker has to absorb.
@@ -45,10 +47,17 @@ only stores the values (`EventsState.inner_db / outer_db`); applying them too wo
 
 ## Timing
 
-Chunks wait `--out-settle-s` (0.3 s) before playing so the Tracker has consumed the same hop (locator
-snapshot tick + delivery tick) and the route for that hop is current. Queue is capped at 2.5 s (oldest hops
-dropped). A route change is a 20 ms crossfade. With nothing queued the hub sends nothing (the headset
-re-primes) and counts an underrun.
+- Chunks wait `--out-settle-s` (0.3 s) before playing so the Tracker has consumed the same hop (locator
+  snapshot tick + delivery tick) and the route for that hop is current.
+- The first hop after idle or an underrun waits an extra `jitter_s` (0.2 s): the margin the next 1 s hop has
+  to arrive late by before playback starves.
+- The queue is bounded by `max_queue_s` (1.8 s; steady-state peak is about hop + settle + jitter = 1.5 s).
+  Past it the oldest audio is skipped down to `trim_to_s` (1.2 s) inside one frame, crossfading old into new
+  (no click). The upsampler runs on push, so its filter state stays continuous. A slot missing from a hop
+  drops its filter state.
+- `underruns` counts starvation episodes (not 20 ms pulls), only while a source is chosen. With nothing
+  queued the hub sends nothing (the headset re-primes).
+- A route change is a 20 ms crossfade.
 
 ## Tests
 

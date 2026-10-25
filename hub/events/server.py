@@ -82,18 +82,27 @@ class EventsState:
     def on_input(self, msg) -> None:
         """Headset user action (select / stop / next / prev) from the pose channel."""
         if isinstance(msg, p.InputEvent):
-            self.selection.handle(msg, self.latest.sources, self.head_yaw())
+            # A pose epoch change (headset reconnect) resets ids. Apply that reset before this input,
+            # not at the next tick, or a select arriving in between would be applied and then wiped.
+            self._sync_epoch(time.monotonic())
+            self.selection.handle(msg, self.latest.sources, self.head_yaw(), self.tracker)
 
-    def _clock(self, mono: float) -> tuple[int, float | None]:
+    def _sync_epoch(self, mono: float) -> int:
         epoch = self.ingest.pose_epoch
         if epoch != self._epoch:
             self.tracker.reset()
             self.selection.clear()  # tracker ids restart their history: the old choice means nothing
+            # Old-epoch sources must not be selectable (a stale id would survive until the next reset).
+            self.latest = p.SourcesUpdated(device_ts_us=0, sources=[])
             self._seen.clear()
             self._clock_key = None
             self._last_device_us = None
             self._anchor_us, self._anchor_mono = 0, mono
             self._epoch = epoch
+        return epoch
+
+    def _clock(self, mono: float) -> tuple[int, float | None]:
+        epoch = self._sync_epoch(mono)
         # Pose channels share the device clock; don't mix a previous connection's
         # audio or video timestamp into a newly restarted pose clock.
         stat = self.ingest.stats["pose"]

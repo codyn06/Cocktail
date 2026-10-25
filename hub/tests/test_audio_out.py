@@ -15,7 +15,7 @@ from events import EventsState
 from events.selection import cycle_order
 from ingest import IngestState, create_app
 from mockclient.simulate import quat_yaw_pitch
-from out import AudioOutConfig, AudioOutState, ClientFormatter, Upsampler, install_audio_out
+from out import AudioOutConfig, AudioOutState, ClientFormatter, LayerMixer, Upsampler, install_audio_out
 from separate.live import StreamChunk
 from track import TrackConfig, Tracker
 
@@ -97,7 +97,8 @@ class Rig:
 
     def send(self, action, **kw):
         self.ingest.on_pose_channel(p.InputEvent(
-            seq=self.ingest.stats["pose"].messages, device_ts_us=self.ts, epoch=0, action=action, **kw))
+            seq=self.ingest.stats["pose"].messages, device_ts_us=self.ts,
+            epoch=max(self.ingest.pose_epoch, 0), action=action, **kw))
 
     def play(self, tones, layout="layers", frames=50):
         """Push one hop and pull its frames; returns (n,2) float audio and the last header."""
@@ -186,11 +187,13 @@ def test_settle_delay_lets_the_route_catch_up_with_a_swap():
         # the hop is in; before the swap is observed, a pull must wait for the settle delay
         assert rig.out.mixer.pull(now=rig.out.mixer._hops[0].ready - 0.01) is None
         rig.out.mixer.reset()
+        rig.out.mixer.started = False
         # A is on s2 for this hop. The tracker sees that on the next ticks, before the hop plays.
         t0 = 100.0
         rig.out.mixer.push(hop_chunks(1, {"s2": 500, "s1": 1500}), now=t0)
         await rig.observe({"s2": -60, "s1": 50})
-        frame = rig.out.mixer.pull(now=t0 + 0.3)
+        assert rig.out.mixer.pull(now=t0 + 0.3) is None            # idle start: settle + jitter margin
+        frame = rig.out.mixer.pull(now=t0 + 0.5)
         assert frame is not None
         assert tone_db(frame.inner, 500, SR48) > tone_db(frame.inner, 1500, SR48) + 40
         assert frame.target_id == ids[-60]
@@ -429,6 +432,7 @@ def test_websocket_wire_format_matches_the_headset_player():
     pose(ingest, 1_000_000)
     tracker = Tracker(TrackConfig(confirm_hits=1))
     events = EventsState(ingest, None, tracker)
+    events._sync_epoch(0.0)
     tracker.update(1_000_000, [raw("s1", -60, 1_000_000), raw("s2", 50, 1_000_000)])
     events.latest = p.SourcesUpdated(device_ts_us=1_000_000, sources=tracker.sources(1_000_000))
     app = create_app(ingest)
@@ -454,3 +458,126 @@ def test_websocket_wire_format_matches_the_headset_player():
         with pytest.raises(WebSocketDisconnect):
             with c.websocket_connect(p.WS_AUDIO_OUT + "?layout=bogus") as ws:
                 ws.receive_bytes()
+
+
+# ---------------------------------------------------------------- review fixes
+
+def test_paused_chosen_track_does_not_route_the_voice_that_took_its_slot():
+    async def go():
+        rig = Rig()
+        ids = await two_sources(rig)
+        rig.send(p.Action.select, source_id=ids[-60])            # A on s1
+        await rig.observe({"s1": 50})                            # A pauses; B (50 deg) is now heard on s1
+        route = rig.events.selection.route(rig.events.tracker)
+        assert route.state == p.TrackState.tracking              # still inside hold_s with a stale slot
+        assert route.slots == ()
+        audio, hdr = rig.play({"s1": 1500, "s2": None})
+        assert np.abs(steady(audio[:, 0])).max() < 1e-3          # B's voice is never A's inner
+        assert tone_db(steady(audio[:, 1]), 1500) > -20          # it is the room
+        assert hdr.target_bearing_deg is None
+    asyncio.run(go())
+
+
+def test_stale_duplicate_slot_claimed_by_another_voice_is_not_routed():
+    async def go():
+        rig = Rig()
+        ids = await two_sources(rig)
+        rig.send(p.Action.select, source_id=ids[-60])            # A on s1
+        await rig.observe({"s2": 50})                            # only B talks, on s2
+        rig.events.tracker._dup_of["s2"] = ids[-60]              # stale: s2 was once folded into A
+        assert rig.events.selection.route(rig.events.tracker).slots == ("s1",)
+        audio, _ = rig.play({"s1": None, "s2": 1500})
+        assert np.abs(steady(audio[:, 0])).max() < 1e-3
+    asyncio.run(go())
+
+
+def test_select_then_merge_before_the_first_reconcile_follows_the_merge():
+    async def go():
+        rig = Rig()
+        ids = await two_sources(rig)
+        rig.send(p.Action.select, source_id=ids[50])             # B on s2; no tick/reconcile yet
+        tracker = rig.events.tracker
+        del tracker.tracks[ids[50]]                              # the Tracker folds B into A
+        tracker._dup_of["s2"] = ids[-60]
+        rig.events.selection.reconcile(tracker)
+        assert rig.events.selection.chosen == ids[-60]
+        rig.send(p.Action.stop)                                  # a cleared choice keeps no slot
+        assert rig.events.selection._slot is None
+    asyncio.run(go())
+
+
+def test_select_after_a_pose_epoch_change_is_ordered_after_the_reset():
+    async def go():
+        rig = Rig()
+        ids = await two_sources(rig)
+        rig.send(p.Action.select, source_id=ids[50])
+        pose(rig.ingest, 100_000, epoch=1)                       # reconnect; tick has not run yet
+        rig.send(p.Action.select, source_id=ids[-60])            # old-epoch id: must not stick
+        assert rig.events.selection.chosen is None
+        await rig.events.tick(rig.mono + 1)
+        assert rig.events.selection.chosen is None               # the tick neither revives nor wipes anything
+        assert rig.events.latest.sources == []
+    asyncio.run(go())
+
+
+def mixer_with(chosen, **cfg):
+    from events.selection import Route
+    route = lambda: Route("t1", ("s1",), 0.0, p.TrackState.tracking) if chosen["on"] else None
+    return LayerMixer(route, AudioOutConfig(**cfg))
+
+
+def test_first_hop_after_idle_gets_settle_plus_jitter_margin_later_hops_do_not():
+    m = mixer_with({"on": True})
+    m.push(hop_chunks(0, {"s1": 500}), now=0.0)
+    assert m.pull(now=0.49) is None and m.pull(now=0.5) is not None   # 0.3 settle + 0.2 jitter
+    m.push(hop_chunks(1, {"s1": 500}), now=1.0)                       # queue not empty: settle only
+    assert m._hops[-1].ready == pytest.approx(1.3)
+
+
+def test_underruns_count_episodes_only_while_a_source_is_chosen():
+    m = mixer_with({"on": True})
+    assert m.pull(now=0.0) is None and m.underruns == 0               # never started
+    m.push(hop_chunks(0, {"s1": 500}), now=0.0)
+    for _ in range(50):
+        assert m.pull(now=10.0) is not None
+    for _ in range(25):                                               # 0.5 s of starvation = one episode
+        assert m.pull(now=10.0) is None
+    assert m.underruns == 1
+    m.push(hop_chunks(1, {"s1": 500}), now=11.0)
+    assert m.pull(now=11.1) is None and m.underruns == 1              # re-priming is the same episode
+    assert m.pull(now=11.6) is not None
+    for _ in range(49):
+        m.pull(now=20.0)
+    for _ in range(5):
+        m.pull(now=20.0)
+    assert m.underruns == 2
+    idle = mixer_with({"on": False})
+    idle.push(hop_chunks(0, {"s1": 500}), now=0.0)
+    for _ in range(60):
+        idle.pull(now=10.0)
+    assert idle.underruns == 0                                        # nothing chosen: nobody to starve
+
+
+def test_queue_over_the_cap_is_trimmed_with_a_crossfade_not_a_click():
+    m = mixer_with({"on": False})                                     # all room: outer = the mix
+    for k in range(3):
+        m.push(hop_chunks(k, {"s1": 500}), now=0.0)                  # 3 s queued, cap 1.8
+    out = []
+    while True:
+        f = m.pull(now=10.0)
+        if f is None:
+            break
+        out.append(f.outer)
+    x = np.concatenate(out)
+    assert m.trims == 1 and m.hops_dropped == 0
+    assert 1.1 < len(x) / SR48 < 1.35                                 # trimmed to ~trim_to_s (+ the crossfade frame)
+    assert np.abs(np.diff(x[1000:])).max() < 0.05                     # a 0.2-amplitude 500 Hz tone moves < 0.014/sample
+    assert m.trimmed_s > 1.5
+
+
+def test_a_slot_missing_from_a_hop_forgets_its_filter_state():
+    m = mixer_with({"on": False})
+    m.push(hop_chunks(0, {"s1": 500, "s2": 1500}), now=0.0)
+    assert set(m._up) == {"s1", "s2"}
+    m.push(hop_chunks(1, {"s1": 500}), now=1.0)
+    assert set(m._up) == {"s1"}

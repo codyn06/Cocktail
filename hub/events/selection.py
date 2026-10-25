@@ -63,34 +63,38 @@ class Selection:
     chosen: str | None = None
     version: int = 0                # bumps on every change of the choice
     max_ray_error_deg: float = 30.0  # a ray further than this from every source selects nothing
-    _slot: str | None = None        # slot the chosen track was on at the last reconcile()
+    _slot: str | None = None        # slot the chosen track was on when chosen / at the last reconcile()
 
     def clear(self) -> None:
-        if self.chosen is not None:
-            self.chosen = None
-            self.version += 1
+        self._set(None)
 
-    def _set(self, source_id: str | None) -> None:
+    def _set(self, source_id: str | None, tracker=None) -> None:
+        """Change the choice. `tracker` (when given) records the chosen track's slot right away, so a
+        merge that happens before the next reconcile() can still be followed."""
         if source_id != self.chosen:
             self.chosen = source_id
             self.version += 1
             log.info("selection -> %s (v%d)", source_id, self.version)
+        t = tracker.tracks.get(source_id) if tracker is not None and source_id is not None else None
+        self._slot = t.stream if t is not None else None   # never keep the previous choice's slot
 
-    def handle(self, ev: p.InputEvent, sources: list[p.Source], head_yaw_deg: float | None) -> None:
+    def handle(self, ev: p.InputEvent, sources: list[p.Source], head_yaw_deg: float | None,
+               tracker=None) -> None:
         a = ev.action
         if a == p.Action.stop:
             self._set(None)
         elif a in (p.Action.next, p.Action.prev):
-            self.step(sources, +1 if a == p.Action.next else -1)
+            self.step(sources, +1 if a == p.Action.next else -1, tracker)
         elif a == p.Action.select:
-            self._select(ev, sources, head_yaw_deg)
+            self._select(ev, sources, head_yaw_deg, tracker)
         else:
             log.info("input action %s not handled by selection", a)
 
-    def _select(self, ev: p.InputEvent, sources: list[p.Source], head_yaw_deg: float | None) -> None:
+    def _select(self, ev: p.InputEvent, sources: list[p.Source], head_yaw_deg: float | None,
+                tracker=None) -> None:
         if ev.source_id is not None:
             if any(s.source_id == ev.source_id for s in sources):
-                self._set(ev.source_id)
+                self._set(ev.source_id, tracker)
             else:
                 log.info("select of unknown source ignored")
             return
@@ -111,9 +115,9 @@ class Selection:
             if err <= best_err:
                 best, best_err = s, err
         if best is not None:
-            self._set(best.source_id)
+            self._set(best.source_id, tracker)
 
-    def step(self, sources: list[p.Source], direction: int) -> None:
+    def step(self, sources: list[p.Source], direction: int, tracker=None) -> None:
         pool = [s for s in sources if s.state != p.TrackState.lost or s.source_id == self.chosen]
         ordered = cycle_order(pool)
         if not ordered:
@@ -123,7 +127,7 @@ class Selection:
             i = (ids.index(self.chosen) + direction) % len(ids)
         else:
             i = 0 if direction > 0 else len(ids) - 1
-        self._set(ids[i])
+        self._set(ids[i], tracker)
 
     def reconcile(self, tracker) -> None:
         """Call after every Tracker.update. If the chosen track disappeared because the Tracker
@@ -138,8 +142,7 @@ class Selection:
         merged = getattr(tracker, "_dup_of", {}).get(self._slot or "")
         if merged in tracker.tracks:
             log.info("chosen source %s merged into %s", self.chosen, merged)
-            self._set(merged)
-            self._slot = tracker.tracks[merged].stream
+            self._set(merged, tracker)
         else:
             log.info("chosen source %s forgotten", self.chosen)
             self._set(None)
@@ -148,8 +151,8 @@ class Selection:
         """Slots that currently carry the chosen source, or None when nothing is chosen.
 
         Reads the Tracker's `tracks[id].stream` (its current slot) and `_dup_of` (extra slots
-        folded into the same source). The slot only counts while the track is `tracking`: after
-        that the slot may already belong to another source."""
+        folded into the same source). A slot only counts while the track is `tracking` and no other
+        track has been heard in it more recently."""
         if self.chosen is None:
             return None
         t = tracker.tracks.get(self.chosen)
@@ -157,7 +160,13 @@ class Selection:
             return Route(self.chosen, (), None, p.TrackState.lost)
         slots: list[str] = []
         if t.state == p.TrackState.tracking:
-            slots.append(t.stream)
+            # A paused track stays `tracking` for hold_s with a stale slot. If another track has been
+            # heard in that slot since, the slot now carries that other sound: do not route it.
+            def claimed(slot: str) -> bool:
+                return any(o is not t and o.stream == slot and o.last_obs_us > t.last_obs_us
+                           for o in tracker.tracks.values())
             dup = getattr(tracker, "_dup_of", {})
-            slots += sorted(s for s, tid in dup.items() if tid == self.chosen and s != t.stream)
+            for slot in [t.stream] + sorted(s for s, tid in dup.items() if tid == self.chosen and s != t.stream):
+                if not claimed(slot):
+                    slots.append(slot)
         return Route(self.chosen, tuple(slots), t.bearing, t.state)

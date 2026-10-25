@@ -18,12 +18,17 @@ Owner: Cody / integration-engineer subagent   PR: see draft PR on this branch
 - Uses private Tracker fields `_dup_of` (via getattr) and `tracks[id].stream`; hub/track is not ours.
 
 ## Verification
-- `cd hub; uv run pytest -q` -> 102 passed, 1 skipped (mocked: scripted tones, no device/GPU)
-- Mutation check: disabling hub gains makes 3 volume tests fail (red-green)
+- `cd hub; uv run pytest -q` -> 110 passed, 1 skipped (mocked: scripted tones, no device/GPU)
+- Red-green: disabling hub gains fails 3 volume tests; disabling the slot-claim guard / epoch ordering fails 3 review-fix tests
 - Not tested: real headset playback, real separator output, latency on hardware
 
+## Review fixes (PR #42)
+- Route drops slots claimed by a more recently heard track (stale slot / stale `_dup_of`); selection records the slot at select time; epoch reset ordered before inputs; jitter prime + underrun episodes; trim with crossfade (cap 1.8 s); upsampler forgets absent slots.
+- Hardware-pending: real jitter/underrun behaviour, settle/jitter/cap tuning, `forwardVolumesToHub` interplay.
+
 ## Next steps
-- Agree `?layout=` query param with the protocol owner (Lalitha); no protocol change was made.
+- `?layout=` approved by Cody, recorded in `.agents/decisions.md`; no protocol change.
+- Open for the track owner: public Tracker accessor for stream / `_dup_of` (we read private state).
 - Real-hardware run with the Quest (check settle delay, who applies volumes).
 - StateChanged / TargetUpdated events are not emitted (the /events fan-out is latest-only SourcesUpdated).
 - Delay/gain printout (docs/STATUS.md M2) is partly in /audio/out/status; end-to-end delay not measured.

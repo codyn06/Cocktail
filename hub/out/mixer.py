@@ -32,7 +32,14 @@ class AudioOutConfig:
     # Chunks are held this long before playing so the Tracker has consumed the same hop
     # (locator snapshot tick + delivery tick, about 2 x 100 ms) and the route for the hop is current.
     settle_s: float = 0.3
-    max_queue_s: float = 2.5          # beyond this the oldest hops are dropped (bounds latency)
+    # Extra hold for the first hop after idle or an underrun: the margin the next 1 s hop has to arrive
+    # late by before playback starves. Steady state: the next hop arrives about 1 - (settle + jitter) s
+    # before the current one ends.
+    jitter_s: float = 0.2
+    # Latency bound. Steady-state peak is about 1 s (hop) + settle + jitter, so keep this above ~1.6.
+    # Past it the oldest audio is skipped down to trim_to_s with a 20 ms crossfade (no click).
+    max_queue_s: float = 1.8
+    trim_to_s: float = 1.2
     default_layout: str = "layers"
     # layers: the Quest applies inner/outer gain itself (AudioOutPlayer.SetVolumesDb), so the hub
     # sends unity-gain layers. Set True only for a client that does not apply them.
@@ -87,8 +94,11 @@ class LayerMixer:
         self._seq = 0
         self.started = False
         self.hops_in = 0
-        self.hops_dropped = 0
-        self.underruns = 0
+        self.hops_dropped = 0           # emergency whole-hop drops (queue far past the cap)
+        self.trims = 0                  # times audio was skipped to get back under max_queue_s
+        self.trimmed_s = 0.0
+        self.underruns = 0              # episodes: starvation while a source is chosen, counted once
+        self._starved = False
         self.frames_out = 0
 
     @property
@@ -106,13 +116,18 @@ class LayerMixer:
         for c in chunks:
             up = self._up.setdefault(c.stream_id, Upsampler())
             audio[c.stream_id] = up(np.asarray(c.audio, np.float32))
+        # A slot absent from this hop would resume later with stale filter state: forget it.
+        for slot in [k for k in self._up if k not in audio]:
+            del self._up[slot]
         n = min(len(a) for a in audio.values())
-        hop = _Hop(now + self.cfg.settle_s, int(chunks[0].start_ts_us), {k: a[:n] for k, a in audio.items()}, n)
         with self._lock:
-            self._hops.append(hop)
+            idle = not self._hops
+            # Idle (start, or after an underrun): hold the hop a little longer so playback has margin.
+            ready = now + self.cfg.settle_s + (self.cfg.jitter_s if idle else 0.0)
+            self._hops.append(_Hop(ready, int(chunks[0].start_ts_us), {k: a[:n] for k, a in audio.items()}, n))
             self.hops_in += 1
-            limit = int(self.cfg.max_queue_s * SR_OUT)
-            while len(self._hops) > 1 and sum(h.n - h.pos for h in self._hops) > limit:
+            hard = int(4 * self.cfg.max_queue_s * SR_OUT)    # a stalled consumer must not grow memory
+            while len(self._hops) > 1 and sum(h.n - h.pos for h in self._hops) > hard:
                 self._hops.popleft()
                 self.hops_dropped += 1
 
@@ -123,36 +138,66 @@ class LayerMixer:
         self._prev_slots = ()
 
     # ---------------------------------------------------------------- consumer side (event loop)
-    def _take(self, n: int, now: float):
-        """Next n samples per slot (spanning hops) and their capture time, or None if not ready."""
-        with self._lock:
-            ready = [h for h in self._hops if h.ready <= now]
-            if sum(h.n - h.pos for h in ready) < n:
-                return None
-            segs, need, ts = [], n, 0
-            while need:
-                h = self._hops[0]
-                k = min(need, h.n - h.pos)
-                segs.append((h, h.pos, k))
-                h.pos += k
-                need -= k
-                ts = h.start_ts_us + h.pos * 1_000_000 // SR_OUT
-                if h.pos >= h.n:
-                    self._hops.popleft()
+    def _read(self, n: int):
+        """Consume n samples per slot (spanning hops), and the capture time of the last one. Lock held."""
+        segs, need, ts = [], n, 0
+        while need:
+            h = self._hops[0]
+            k = min(need, h.n - h.pos)
+            segs.append((h, h.pos, k))
+            h.pos += k
+            need -= k
+            ts = h.start_ts_us + h.pos * 1_000_000 // SR_OUT
+            if h.pos >= h.n:
+                self._hops.popleft()
         slots = {s for h, _, _ in segs for s in h.audio}
         out = {s: np.concatenate([h.audio[s][a:a + k] if s in h.audio else np.zeros(k, np.float32)
                                   for h, a, k in segs]) for s in slots}
         return out, ts
 
+    def _skip(self, n: int) -> None:
+        while n and self._hops:
+            h = self._hops[0]
+            k = min(n, h.n - h.pos)
+            h.pos += k
+            n -= k
+            if h.pos >= h.n:
+                self._hops.popleft()
+
+    def _take(self, n: int, now: float):
+        """Next n samples per slot and their capture time, or None if not ready. If the queue is over
+        max_queue_s, skip the oldest audio down to trim_to_s, crossfading old into new over this frame."""
+        with self._lock:
+            ready = sum(h.n - h.pos for h in self._hops if h.ready <= now)
+            if ready < n:
+                return None
+            queued = sum(h.n - h.pos for h in self._hops)
+            drop = queued - int(self.cfg.trim_to_s * SR_OUT)
+            if queued > int(self.cfg.max_queue_s * SR_OUT) and drop > 0 and ready - drop >= 2 * n:
+                old, _ = self._read(n)
+                self._skip(drop)
+                new, ts = self._read(n)
+                ramp = np.linspace(0.0, 1.0, n, endpoint=False, dtype=np.float32)
+                zero = np.zeros(n, np.float32)
+                out = {s: old.get(s, zero) * (1 - ramp) + new.get(s, zero) * ramp for s in set(old) | set(new)}
+                self.trims += 1
+                self.trimmed_s += (drop + n) / SR_OUT
+                return out, ts
+            return self._read(n)
+
     def pull(self, now: float | None = None) -> LayerFrame | None:
         now = self.clock() if now is None else now
         got = self._take(FRAME, now)
         if got is None:
-            if self.started:
+            # Starvation only matters to someone who is listening: audio was flowing, a source is chosen.
+            # Count the episode once (not each 20 ms pull) and not while idle with nothing chosen.
+            if self.started and not self._starved and self.route_fn() is not None:
                 self.underruns += 1
+                self._starved = True
             return None
         audio, ts = got
         self.started = True
+        self._starved = False
         total = np.zeros(FRAME, np.float32)
         for a in audio.values():
             total += a

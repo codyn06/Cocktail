@@ -22,6 +22,8 @@ status does not belong here (see `AGENTS.md` > Continuity).
 - Task handoffs are per branch in `.agents/handoff/`; live task status is tracked in
   GitHub draft PRs.
 
+- `/audio/out` takes an optional `?layout=layers|stereo` query parameter (default `layers`, the Quest). `layers` frames are unity gain because the Quest applies inner/outer dB itself; the hub applies `SetVolumes` only for `stereo` clients (or with `--out-gains-in-layers`). Approved by Cody (PR #42); no change to `hub/protocol`.
+
 ## Open items
 - Each teammate: confirm their tool loads the roles/skills (README "pending runtime
   checks" and smoke checks).
