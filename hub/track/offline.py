@@ -149,15 +149,41 @@ def run_case(d: Path, calib, swaps_s=(), cfg: TrackConfig | None = None, pair_cf
     raw = []
     score_live.run(s, live, "tdoa", calib, pair_cfg, on_step=lambda loc: raw.append(
         (loc.now_us, [x.model_copy() for x in loc.sources()])))
-    tr, ticks, k = Tracker(cfg), [], 0
+    tr, ticks, events, k = Tracker(cfg), [], [], 0
     raw = [r for r in raw if r[0] > 0]
     for now in range(raw[0][0], raw[-1][0] + 1, DT_US):
         while k + 1 < len(raw) and raw[k + 1][0] <= now:
             k += 1
-        tr.update(now, raw[k][1], None)
+        out = tr.update(now, raw[k][1], None)
+        events.append(p.SourcesUpdated(device_ts_us=now, sources=out).model_dump_json())
         ticks.append((now, {t.tid: (t.stream, t.bearing, t.state, t.last_obs_us) for t in tr.tracks.values() if t.confirmed},
                       {x.source_id: x.bearing_deg for x in raw[k][1]}))
-    return {"session": s, "ticks": ticks, "swaps_us": [s.start_ts_us + int(t * 1e6) for t in swaps_s]}
+    return {"session": s, "ticks": ticks, "events": events,
+            "swaps_us": [s.start_ts_us + int(t * 1e6) for t in swaps_s]}
+
+
+def write_logs(res: dict, out: Path, key: str) -> None:
+    """<key>.tracker.jsonl: the tracker's sources.updated messages; <key>.phase4/: an ORACLE stand-in
+    for Phase 4 output (timeline/index.json + one page), talker k = src_<k+1> wherever its stem is
+    audible, for track.compare_ids. Real Phase 4 ids will make mistakes this one cannot."""
+    s = res["session"]
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{key}.tracker.jsonl").write_text("\n".join(res["events"]))
+    segs = []
+    for k, q in enumerate(s.meta["sources"]):
+        st = wavfile.read(s.path / q["stem"])[1].astype(np.float32)
+        n = len(st) // TICK
+        e = np.sqrt(np.mean(st[: n * TICK].reshape(n, TICK) ** 2, axis=1))
+        on = np.concatenate([[False], e > np.percentile(e, 90) * 10 ** (AUDIBLE_DB / 20), [False]])
+        for a, b in zip(np.flatnonzero(~on[:-1] & on[1:]), np.flatnonzero(on[:-1] & ~on[1:])):
+            segs.append({"source_id": f"src_{k + 1}", "start_sample": int(a * TICK), "end_sample": int(b * TICK),
+                         "start_us": int(a * TICK * 1e6 / 16000), "end_us": int(b * TICK * 1e6 / 16000)})
+    d = out / f"{key}.phase4" / "timeline"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "page_0000.json").write_text(json.dumps({"segments": segs}))
+    (d / "index.json").write_text(json.dumps({"version": 1, "sample_rate": 16000, "n_samples": n * TICK,
+                                              "pages": [{"path": "timeline/page_0000.json", "start_us": 0,
+                                                         "end_us": int(n * TICK * 1e6 / 16000)}]}))
 
 
 def score_case(res: dict, forget_s: float = TrackConfig.forget_s, settle_s: float = SETTLE_S) -> dict:
@@ -220,7 +246,7 @@ def score_case(res: dict, forget_s: float = TrackConfig.forget_s, settle_s: floa
     return out
 
 
-def run_suite(root: Path, calib, names, seeds, cfg: TrackConfig | None = None) -> dict:
+def run_suite(root: Path, calib, names, seeds, cfg: TrackConfig | None = None, log_dir: Path | None = None) -> dict:
     results = {}
     for name in names:
         spec = CASES[name]
@@ -229,7 +255,10 @@ def run_suite(root: Path, calib, names, seeds, cfg: TrackConfig | None = None) -
             c = dataclasses.replace(calib, offset_s=calib.offset_s + spec["calib_offset_us"] * 1e-6)
         for seed in seeds:
             d = ensure_case(root, name, spec, seed)
-            sc = score_case(run_case(d, c, spec.get("swaps", ()), cfg), cfg.forget_s if cfg else TrackConfig.forget_s)
+            res = run_case(d, c, spec.get("swaps", ()), cfg)
+            if log_dir is not None:
+                write_logs(res, log_dir, f"{name}-s{seed}")
+            sc = score_case(res, cfg.forget_s if cfg else TrackConfig.forget_s)
             results[f"{name}-s{seed}"] = sc
             print_case(f"{name}-s{seed}", sc)
     return results
@@ -259,13 +288,15 @@ def main(argv=None) -> int:
     ap.add_argument("--seed0", type=int, default=300)
     ap.add_argument("--set", action="append", default=[], help="TrackConfig override, e.g. merge_deg=8")
     ap.add_argument("--json", type=Path, default=None)
+    ap.add_argument("--log-dir", type=Path, default=None,
+                    help="also write each case's tracker log and an oracle Phase 4 stand-in (for track.compare_ids)")
     a = ap.parse_args(argv)
     cfg = TrackConfig()
     for kv in a.set:
         k, v = kv.split("=")
         setattr(cfg, k, type(getattr(cfg, k))(v))
     names = [n for n in CASES if not a.only or any(w in n for w in a.only)]
-    res = run_suite(a.root, PairCalibration.load(a.calib), names, range(a.seed0, a.seed0 + a.seeds), cfg)
+    res = run_suite(a.root, PairCalibration.load(a.calib), names, range(a.seed0, a.seed0 + a.seeds), cfg, a.log_dir)
     if a.json:
         a.json.write_text(json.dumps(res, indent=1))
     return 0
