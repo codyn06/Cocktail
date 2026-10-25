@@ -35,6 +35,23 @@ def stem_nyquist_hz(origin_rate_hz: int, master_rate_hz: int) -> float | None:
 
 
 @dataclass
+class EventRef:
+    """Pointer to a finished event window; the stem is loaded from disk only when a residual window overlaps it."""
+
+    source_id: str
+    start_master_sample: int
+    end_master_sample: int
+    key: str
+    entry: Path
+    origin_rate_hz: int = 48000
+    has_stem: bool = True
+
+    def load(self) -> "SparseStem":
+        return SparseStem(self.source_id, self.start_master_sample, np.load(self.entry / "stem.npy"),
+                          self.origin_rate_hz)
+
+
+@dataclass
 class SparseStem:
     """A stem that exists only for a span (event windows). Everything outside is silence by definition."""
 
@@ -53,7 +70,7 @@ class ResidualStage:
         self.r, self.cfg = runner, cfg
         self.fp = code_fingerprint(rs, __import__(__name__, fromlist=["x"]))
 
-    def _stems_for_window(self, spec: ChunkSpec, sentry: Path, events: list[SparseStem], m0: int, m1: int,
+    def _stems_for_window(self, spec: ChunkSpec, sentry: Path, events: list[EventRef], m0: int, m1: int,
                           master_rate: int):
         stems, nyq, ids = [], [], []
         for sid, (start16, a) in sorted(read_arrays(sentry, "win", "win.json").items()):
@@ -63,12 +80,12 @@ class ResidualStage:
             stems.append(up.astype(np.float32))
             nyq.append(stem_nyquist_hz(SPEECH_SR, master_rate))
             ids.append(sid)
-        for ev in events:
+        for ref in events:
+            if not ref.has_stem or ref.end_master_sample <= m0 or ref.start_master_sample >= m1:
+                continue
+            ev = ref.load()                                           # only overlapping stems ever enter memory
             rate = ev.origin_rate_hz
             e0 = ev.start_master_sample
-            e1 = e0 + int(len(ev.audio) * master_rate / rate)
-            if e1 <= m0 or e0 >= m1:
-                continue
             up = resample_to(ev.audio[None].astype(np.float32), rate, master_rate)[0]
             buf = np.zeros(m1 - m0, np.float32)
             a0, a1 = max(e0, m0), min(e0 + len(up), m1)
@@ -78,8 +95,7 @@ class ResidualStage:
             ids.append(ev.source_id)
         return stems, nyq, ids
 
-    def run(self, res: SpeechRunResult, events: list[SparseStem], event_keys: dict[str, str] | None = None
-            ) -> list[tuple[ChunkSpec, Path]]:
+    def run(self, res: SpeechRunResult, events: list[EventRef]) -> list[tuple[ChunkSpec, Path]]:
         src = self.r.src
         master_rate = src.audio_rate_hz
         out = []
@@ -87,11 +103,12 @@ class ResidualStage:
             spec = rec.spec
             m0, m1 = self.r._master(spec.win_start), self.r._master(spec.win_end)
             o0, o1 = self.r._master(spec.own_start), self.r._master(spec.own_end)
-            overlapping = sorted(k for k, v in (event_keys or {}).items() if v)
+            overlapping = sorted((r for r in events if r.end_master_sample > m0 and r.start_master_sample < m1),
+                                 key=lambda r: r.start_master_sample)
             key = self.r.cache.key(
                 "residual_chunk", inputs={"media": self.r.media_id, "chunk": str(spec.to_dict())},
                 config={"residual": self.cfg.residual.__dict__, "master_rate": master_rate},
-                upstream={"speech_chunk": rec.speech_key, **{f"event:{k}": event_keys[k] for k in overlapping}},
+                upstream={"speech_chunk": rec.speech_key, **{f"event:{r.source_id}": r.key for r in overlapping}},
                 fingerprint=self.fp)
 
             def produce(d: Path, meta: dict, spec=spec, rec=rec, m0=m0, m1=m1, o0=o0, o1=o1) -> None:

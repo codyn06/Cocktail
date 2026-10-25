@@ -44,7 +44,8 @@ def cmd_preflight(args) -> int:
             "ffmpeg": ff.to_dict(),
             "mp4_output": ff.can_mux_mp4,
             "sam3_image": "not checked (Phase 2)", "sam3_video": "not checked (Phase 2)",
-            "sam_audio": "not checked (Phase 2)", "diarization": "not checked (Phase 3)",
+            "sam_audio": "not checked (Phase 2)",
+            "diarization": "not checked (use --av; reports not_attempted/ok/fail, never a token)",
         },
         "notes": [] if ff.ffmpeg else ["ffmpeg not found: bundles use PNG frame sequences; set COCKTAIL_FFMPEG "
                                        "or --ffmpeg to enable annotated.mp4/source_video.mp4"],

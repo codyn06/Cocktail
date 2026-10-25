@@ -121,7 +121,7 @@ def baseline(tmp_path_factory):
 def test_streams_tile_without_gap_or_duplicate_and_identities_survive_permutation(baseline):
     r, res, _ = baseline
     n = res.n_samples
-    assert len(res.records) == 6 and res.records[-1].spec.own_end == n
+    assert len(res.records) == 7 and res.records[-1].spec.own_end == n
     per_src: dict[str, list[tuple[int, int]]] = {}
     for rec in res.records:
         for sid, (st, a) in read_arrays(rec.speech_dir, "final", "final.json").items():
@@ -165,12 +165,12 @@ def test_warm_cache_invokes_no_model_and_matches(baseline, tmp_path):
     r1 = make_runner(d, cache=r0.cache, name="run_warm")
     res1 = r1.run()
     assert not r1.counters.calls and not r1.counters.chunks_computed
-    assert len(r1.counters.chunks_restored) == 12             # 6 visual + 6 speech
+    assert len(r1.counters.chunks_restored) == 14             # 7 visual + 7 speech
     assert digest(res0) == digest(res1)
 
 
 @pytest.mark.parametrize("boundary", [("visual:mid", 2), ("visual:after", 3), ("speech:before", 1), ("speech:mid", 3),
-                                      ("speech:after", 2), ("speech:mid", 5)])
+                                      ("speech:after", 2), ("speech:mid", 6)])
 def test_forced_termination_resumes_to_the_same_result(baseline, tmp_path, boundary):
     _, ref, _ = baseline
     cache = StageCache(tmp_path / "cache")
@@ -182,10 +182,12 @@ def test_forced_termination_resumes_to_the_same_result(baseline, tmp_path, bound
         make_runner(tmp_path, cache=cache, fault=fault, name="a").run()
     r2 = make_runner(tmp_path, cache=cache, name="b")
     res = r2.run()
-    k = boundary[1]
-    # unfinished work only: nothing before the crash point is recomputed
-    done_before = [c for c in r2.counters.chunks_computed if c[1] < k and not (boundary[0] == "speech:after" and c[1] == k)]
-    assert not [c for c in done_before if c[0] == "speech"], r2.counters.chunks_computed
+    k, stage = boundary[1], boundary[0].split(":")[0]
+    # unfinished work only: in the crashed stage's own pass nothing completed before the crash is recomputed
+    # (a published chunk at the crash point itself, for the ":after" boundaries, is also reused)
+    last_done = k if boundary[0].endswith(":after") else k - 1
+    redone = [c for c in r2.counters.chunks_computed if c[0] == stage and c[1] <= last_done]
+    assert not redone, r2.counters.chunks_computed
     assert digest(res) == digest(ref)                         # IDs, timeline, sample counts and audio bit-identical
 
 
@@ -210,8 +212,8 @@ def test_changed_model_revision_invalidates_speech_but_not_visual(baseline, tmp_
     r1 = make_runner(d, cache=r0.cache, rev="r2", name="rev")
     r1.run()
     kinds = {c[0] for c in r1.counters.chunks_computed}
-    assert kinds == {"speech"} and len(r1.counters.chunks_computed) == 6
-    assert len([c for c in r1.counters.chunks_restored if c[0] == "visual"]) == 6
+    assert kinds == {"speech"} and len(r1.counters.chunks_computed) == 7
+    assert len([c for c in r1.counters.chunks_restored if c[0] == "visual"]) == 7
 
 
 def test_reads_are_bounded_to_windows_not_the_whole_clip(baseline):
