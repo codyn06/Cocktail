@@ -82,9 +82,13 @@ real-data tools (D16) live in `eval/`, the former with its own `bench` dependenc
 - **The schema is frozen:** changes only by team agreement.
 - **Audio chunk timestamp = capture time of the chunk's first sample.** The hub assumed this
   (PR #15) and the Quest client sets it this way (PR #18, `MicStreamer.cs`).
-- **The Quest 3S delivers 2 raw mic channels at 48 kHz** (PR #18, hardware-tested: native
-  `AudioRecord` UNPROCESSED, Unity Microphone as fallback). Channel order (left/right) is still
-  unconfirmed; it matters for D8.
+- **The Quest 3S stream has 4 channels at 48 kHz, of which 2 carry sound** (PR #18; re-measured 2026-10-25 on a
+  40 s two-talker take). The app asks for 4 native channels first (`MicStreamer.wantNativeChannels`), and the 3S
+  delivers 4 UNPROCESSED raw channels: ch2 and ch3 are exactly zero; ch0 sits 15 to 32 dB below ch1 in the speech
+  bands and is only weakly coherent with it (0.2 to 0.35 at 0.5 to 2 kHz); the inter-mic delay offset is about
+  +150 us, not the ~0 us of the 2-channel calibration. The live locator uses the first 2 channels (PR #63). Channel
+  order and what ch0/ch1 physically are remain unconfirmed; it matters for D8. Measurements and the audit command:
+  `hub/locate/TUNING.md`, `python -m locate.audit <take>`.
 
 ### D4. One clock: the headset's; audio converted to 16 kHz at ingest
 **Merged** (PR #15, simulated).
@@ -409,7 +413,28 @@ on the RTX 5070 Ti Laptop; numbers in [`docs/STATUS.md`](docs/STATUS.md); no rec
   candidates reached +3 dB SI-SDRi for the prompted voice), while MossFormer2 separated both voices
   (+14.5 / +17.9 dB). Separation succeeds where SAM Audio selection fails.
 
+### D19. Headset HUD: the wearer chooses, the headset remembers, the hub's data is checked once
+**Merged** (PRs #54, #60; #61 carried to main by #66; mocked and partly hardware-tested on a Quest 3S).
+- **Speaker-only HUD:** picker rows for talking sources, the right hand points (head gaze fallback), pinch chooses or
+  stops; nothing is auto-chosen. `CocktailUI` is the only sender of `select` (by `source_id`); `InputSender` no longer
+  sends its own head-ray select.
+- **The live hub sends `sources.updated` only.** Nothing in `hub/` emits `state.changed` or `target.updated` yet, so
+  the headset keeps the wearer's choice locally (and mirrors next/prev in `hub/events/selection.py` order) until the hub
+  sends a state that reports a choice; then the hub wins.
+- **Hub data is checked at the door** (`Stream/HubDataGuard.cs`): null, duplicate and id-less sources dropped,
+  NaN/Infinity become unknown, at most 64 sources; only the newest snapshot of a backlog is applied; the incoming queue
+  is capped at 512; one failing listener cannot stop the others.
+- **DevMode** gates every developer aid (fake data, test cubes, DEMO panel, diagnostics, event log); off by default.
+
 ## Open items
+
+- **Hub announces the choice:** `hub/events` should send the existing `state.changed` (target = chosen `source_id`)
+  when the selection changes, so the headset stops relying on its local record (D19).
+- **Rectangle not on the talker:** the level locator's equal-gain mic model misreads the ch0/ch1 gap as a side
+  direction (locked at +83 deg with confidence 1.0 on a real take). Opt-in fixes and gates: PR #65 / #67 and
+  `hub/locate/TUNING.md`. Needs labeled 4-channel takes (0/90/180/270 deg, speech and pink noise, head turning and
+  still) and a 4-channel refit of `locate/calib/quest3s.json`.
+- **`separate/status` `hops_done`** is the length of a list capped at 100, so it stops at 100 while processing goes on.
 
 - **Integration owner:** unassigned. `.agents/decisions.md` is out of date ("no app stack
   chosen") and should be updated by whoever takes the role. Its decisions on agent tooling and
@@ -426,8 +451,8 @@ on the RTX 5070 Ti Laptop; numbers in [`docs/STATUS.md`](docs/STATUS.md); no rec
   mode yet; reconcile with D7.
 - **Camera outlines (C5/M4):** SAM 3 per frame (D9) is measured but not wired; frames can be recorded
   and replayed (PR #44).
-- **Headset checks:** mic channel order (left/right), tracking-origin yaw (D8), real delay
-  over Wi-Fi vs USB (the delay test, D16). Mic count and raw access are confirmed (D3).
+- **Headset checks:** mic channel order and what ch0/ch1 are, tracking-origin yaw (D8), real delay
+  over Wi-Fi vs USB (the delay test, D16). Mic count (4 channels, 2 live) and raw access are confirmed (D3).
 - **Locating:** see D8. The live default is still the `level` method.
 - **A flaky test:** `tests/test_events.py::test_simulated_two_voice_music_replay_events` asserts
   timing from a real-time replay and fails about half the time, also on `main`; it makes every
