@@ -3,7 +3,23 @@
 (function () {
   'use strict';
   const $ = (s) => document.querySelector(s);
-  const SCALE = 3;
+  // ---- video sync policy (pure; audio clock is master). drift = video.currentTime - audioTime (s).
+  // |drift| >= 0.150 -> hard seek, rate 1; 0.015 <= |drift| < 0.150 while playing -> rate = clamp(1 - 0.5*drift, 0.9, 1.1);
+  // |drift| < 0.015 -> rate 1; paused -> seek only when |drift| > 0.045.
+  function videoSyncAction(drift, playing) {
+    const a = Math.abs(drift);
+    if (!playing) return { seek: a > 0.045, rate: 1 };
+    if (a >= 0.150) return { seek: true, rate: 1 };
+    if (a < 0.015) return { seek: false, rate: 1 };
+    return { seek: false, rate: Math.min(1.1, Math.max(0.9, 1 - drift * 0.5)) };
+  }
+  // ---- FrameTransform: {version, frame_w, frame_h, mask_w, mask_h, stage_w, stage_h, sx, sy}; sx/sy = mask->frame scale.
+  function makeFrameTransform(manifest, frames, stageW, stageH) {
+    const ft = (manifest && manifest.capabilities && manifest.capabilities.frame_transform) || (frames && frames.transform) || {};
+    const fw = ft.frame_w || (frames && frames.width) || 320, fh = ft.frame_h || (frames && frames.height) || 240;
+    const mw = ft.mask_w || fw, mh = ft.mask_h || fh;
+    return { version: 1, frame_w: fw, frame_h: fh, mask_w: mw, mask_h: mh, stage_w: stageW, stage_h: stageH, sx: fw / mw, sy: fh / mh };
+  }
   const COLORS = { active: [255, 214, 10], possible: [80, 220, 255] };
 
   // ---- RLE (row-major, background run first; mirrors vision/mask_store.py) ----
@@ -20,6 +36,7 @@
     return out;
   }
   (typeof window !== 'undefined' ? window : globalThis).__decodeRle = decodeRle;
+  (typeof window !== 'undefined' ? window : globalThis).__viewerHelpers = { videoSyncAction, makeFrameTransform };
   if (typeof document === 'undefined' || !document.getElementById('stage')) return;
 
   const fetchJson = async (p) => { const r = await fetch(p); if (!r.ok) throw new Error(p + ': ' + r.status); return r.json(); };
@@ -172,17 +189,20 @@
   function maskAt(tid, f) { const r = S.masks[tid][f]; return r && r.rle ? r.rle : null; }
   function draw() {
     const t = position(), f = frameAt(t * 1e6); S.frame = f;
-    const W = S.frames.width, H = S.frames.height;
+    const FT = S.ft;
     g2.imageSmoothingEnabled = false;
     if (S.useVideo) g2.drawImage($('#video'), 0, 0, stage.width, stage.height);
     else if (S.images[f] && S.images[f].complete) g2.drawImage(S.images[f], 0, 0, stage.width, stage.height);
-    off.width = W; off.height = H;
-    const img = og.createImageData(W, H), d = img.data;
     const labels = [];
+    off.width = FT.mask_w; off.height = FT.mask_h;
+    const img = og.createImageData(FT.mask_w, FT.mask_h);
+    let d = img.data;
     S.manifest.tracks.forEach((tr) => {
       const state = S.tstate[tr.track_id].state[f];
       if (!state || state === 'idle') return;
       const rle = maskAt(tr.track_id, f); if (!rle) return;
+      const W = rle.w, H = rle.h;
+      if (W !== img.width || H !== img.height) return;   // mask size disagrees with the transform: skip rather than mis-draw
       const m = decodeRle(rle), col = COLORS[state === 'possible' ? 'possible' : 'active'];
       let minx = W, miny = H;
       for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
@@ -194,17 +214,21 @@
         if (x < minx) minx = x; if (y < miny) miny = y;
       }
       const word = state === 'speaking' ? 'speaking' : (state === 'sounding' ? 'sounding' : 'possible match');
-      labels.push([minx, miny, `${tr.track_id} ${word}`, col]);
+      labels.push([minx * stage.width / W, miny * stage.height / H, `${tr.track_id} ${word}`, col]);
     });
     og.putImageData(img, 0, 0); g2.drawImage(off, 0, 0, stage.width, stage.height);
     g2.font = '600 15px system-ui, sans-serif'; g2.textBaseline = 'bottom';
-    labels.forEach(([x, y, txt, col]) => { const w = g2.measureText(txt).width + 8; g2.fillStyle = 'rgba(10,10,16,0.8)'; g2.fillRect(x * SCALE, Math.max(y * SCALE - 20, 0), w, 20); g2.fillStyle = `rgb(${col})`; g2.fillText(txt, x * SCALE + 4, Math.max(y * SCALE - 3, 17)); });
+    labels.forEach(([x, y, txt, col]) => { const w = g2.measureText(txt).width + 8; g2.fillStyle = 'rgba(10,10,16,0.8)'; g2.fillRect(x, Math.max(y - 20, 0), w, 20); g2.fillStyle = `rgb(${col})`; g2.fillText(txt, x + 4, Math.max(y - 3, 17)); });
     const un = Object.values(S.act).find((a) => !a.attributed && a.gate_active[f]);
     if (un) { g2.fillStyle = 'rgba(20,10,24,0.85)'; g2.fillRect(0, stage.height - 30, stage.width, 30); g2.fillStyle = 'rgb(255,120,220)'; g2.fillText('UNATTRIBUTED SOUND: ' + un.label, 10, stage.height - 8); }
     $('#time').textContent = `${Math.min(t, S.duration).toFixed(2)} / ${S.duration.toFixed(2)} s`;
     if (!seekDrag) $('#seek').value = String(Math.round((Math.min(t, S.duration) / S.duration) * 1000));
     if (S.playing && t >= S.duration) pause();
-    if (S.useVideo) { const v = $('#video'); if (!S.playing || Math.abs(v.currentTime - t) > 0.045) v.currentTime = Math.min(t, S.duration); }   // within about one frame of the audio clock
+    if (S.useVideo) {
+      const v = $('#video'), act = videoSyncAction(v.currentTime - t, S.playing);
+      if (act.seek) v.currentTime = Math.min(t, S.duration);
+      if (v.playbackRate !== act.rate) v.playbackRate = act.rate;
+    }
     requestAnimationFrame(draw);
   }
 
@@ -212,8 +236,8 @@
   let seekDrag = false;
   stage.addEventListener('click', (e) => {
     const r = stage.getBoundingClientRect();
-    const x = Math.floor(((e.clientX - r.left) / r.width) * S.frames.width), y = Math.floor(((e.clientY - r.top) / r.height) * S.frames.height);
-    const hits = S.manifest.tracks.filter((tr) => { const rle = maskAt(tr.track_id, S.frame); return rle && decodeRle(rle)[y * rle.w + x]; }).map((tr) => tr.track_id);
+    const u = (e.clientX - r.left) / r.width, vv = (e.clientY - r.top) / r.height;
+    const hits = S.manifest.tracks.filter((tr) => { const rle = maskAt(tr.track_id, S.frame); if (!rle) return false; if (rle.w !== S.ft.mask_w || rle.h !== S.ft.mask_h) return false; /* same rule as draw(): a mask the transform does not describe is neither drawn nor clickable */ const x = Math.min(rle.w - 1, Math.floor(u * rle.w)), y = Math.min(rle.h - 1, Math.floor(vv * rle.h)); return decodeRle(rle)[y * rle.w + x]; }).map((tr) => tr.track_id);
     const box = $('#candidates'); box.textContent = '';
     if (hits.length === 0) { box.hidden = true; return; }
     const choose = (tid) => { box.hidden = true; const sid = sourceForTrack(tid); if (sid) selectSource(sid, true); else { S.selected = null; const el = $('#inspector'); el.className = 'inspector'; el.textContent = `${tid}: no sound source is associated with this object (silent or unmatched).`; renderSources(); } };
@@ -236,6 +260,7 @@
     try {
       S.manifest = await fetchJson('manifest.json');
       S.frames = await fetchJson('frames.json');
+      S.ft = makeFrameTransform(S.manifest, S.frames, stage.width, stage.height);
       const A = S.manifest.assets;
       $('#tier').textContent = 'evidence: ' + S.manifest.evidence_tier;
       $('#banner').textContent = S.manifest.evidence_note;

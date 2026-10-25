@@ -149,6 +149,16 @@ def test_exported_stem_bytes_are_untouched_by_the_envelope_branch(scene):
 
 
 # ------------------------------------------------------------------ viewer and server
+def test_bundle_exports_frame_transform(scene):
+    man = json.loads((scene["out"] / "manifest.json").read_text())
+    frames = json.loads((scene["out"] / "frames.json").read_text())
+    ft = man["capabilities"]["frame_transform"]
+    assert ft["version"] == 1 and frames["transform"] == ft
+    for k in ("frame_w", "frame_h", "mask_w", "mask_h"):
+        assert isinstance(ft[k], int) and ft[k] > 0
+    assert (ft["frame_w"], ft["frame_h"]) == (frames["width"], frames["height"])
+
+
 def test_viewer_assets_have_no_network_dependencies():
     for name in ("viewer.html", "viewer.js", "viewer.css"):
         text = (ASSETS / name).read_text(encoding="utf-8")

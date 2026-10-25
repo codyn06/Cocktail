@@ -153,3 +153,44 @@ def test_omitted_source_overlapping_an_included_stems_bins_is_detected_when_clea
     loud *= 3.0 * np.max(np.abs(s)) / np.max(np.abs(loud))              # about +10 dB over the included stem
     events, _ = find_unexplained_events(s + loud, [stem], FS, CFG)
     assert len(events) == 1 and events[0]["start_s"] < 1.4 and events[0]["end_s"] > 1.3
+
+
+def _hf_case(tone):
+    """48 kHz master: speech-like source with harmonics to ~11 kHz; 16 kHz stem has only < 8 kHz."""
+    fs = 48000
+    n = 2 * fs
+    t = np.arange(n) / fs
+    ph = 2 * np.pi * 140 * t
+    env = 0.55 + 0.45 * np.sin(2 * np.pi * 3.0 * t) ** 2
+    speech = sum(np.sin(h * ph) / h ** 0.5 for h in range(1, 80) if h * 140 < 11000) * env
+    speech *= 0.05 / np.max(np.abs(speech))
+    stem = signal.resample_poly(signal.resample_poly(speech, 1, 3), 3, 1)   # 16 kHz round trip, back at 48 kHz
+    master = speech.copy()
+    if tone:
+        a, b = int(1.2 * fs), int(1.5 * fs)
+        master[a:b] += 0.05 * np.sin(2 * np.pi * 12000 * t[a:b]) * np.hanning(b - a)
+    return fs, master, stem
+
+
+def test_16k_speech_stem_does_not_leave_10khz_harmonics_unexplained():
+    fs, master, stem = _hf_case(tone=False)
+    cfg = ResidualConfig(n_fft=1024, hop=256)
+    hf = np.abs(np.fft.rfft(master))[int(9500 * len(master) / fs):int(10500 * len(master) / fs)].max()
+    assert hf > 10                                                         # master really has 10 kHz harmonics
+    naive, _ = find_unexplained_events(master, [stem], fs, cfg)
+    assert naive != []                                                      # without the guard it falsely fires
+    events, _ = find_unexplained_events(master, [stem], fs, cfg, stem_nyquist_hz=[8000.0])
+    assert events == []
+
+
+def test_genuine_12khz_tone_still_fires_with_16k_speech_stem():
+    fs, m0, stem = _hf_case(tone=False)
+    tone = _hf_case(tone=True)[1] - m0
+    a, b = int(1.2 * fs), int(1.5 * fs)
+    quiet = np.ones(len(m0))
+    quiet[a - 2400:b + 2400] = 0.0                                          # speech silent around the tone
+    master, stem = m0 * quiet + tone, stem * quiet
+    cfg = ResidualConfig(n_fft=1024, hop=256)
+    events, _ = find_unexplained_events(master, [stem], fs, cfg, stem_nyquist_hz=[8000.0])
+    assert len(events) == 1
+    assert events[0]["start_s"] == pytest.approx(1.2, abs=0.12) and events[0]["end_s"] == pytest.approx(1.5, abs=0.15)

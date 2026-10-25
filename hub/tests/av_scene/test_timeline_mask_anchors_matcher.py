@@ -318,6 +318,33 @@ def test_off_axis_blocks_adaptation_but_not_clean_intervals():
     assert elig.blocked(0, 3 * S1, 4 * S1)[0] and not elig.blocked(0, 12 * S1, 13 * S1)[0]
 
 
+@pytest.mark.parametrize("limit,yaw,eligible", [(30.0, 45.0, False), (30.0, 25.0, True),
+                                                (80.0, 70.0, True), (80.0, 85.0, False),
+                                                (60.0, 70.0, False)])
+def test_off_axis_limit_is_configurable(limit, yaw, eligible):
+    e = LearningEligibility(yaw_limit_deg=limit)
+    assert e.observe(0, FaceObservation(0, S1, yaw_deg=yaw)).eligible is eligible
+    assert e.observe(0, FaceObservation(0, S1, yaw_deg=-yaw)).eligible is eligible
+    assert lip_asd_available(FaceObservation(0, S1, yaw_deg=yaw), limit) is eligible
+
+
+def test_off_axis_with_custom_limit_never_adapts_but_still_recognises():
+    clean = [[voice(300), SIL]] * 3
+    drift = [[voice(1500), SIL]] * 3
+    for limit, yaw in ((30.0, 40.0), (80.0, 85.0)):
+        elig = LearningEligibility(yaw_limit_deg=limit)
+        elig.observe(0, FaceObservation(0, 3 * S1, yaw_deg=0.0))
+        elig.observe(0, FaceObservation(3 * S1, 9 * S1, yaw_deg=yaw))
+        gated = VoiceMemory(make_encoder(), CFGM)
+        g = EligibilityGatedVoiceMemory(gated, elig)
+        run(g, clean)
+        a = snapshot(gated, 0)
+        assert a[0] is not None and a[2] > 0
+        run(g, drift, t0=3 * S1)
+        b = snapshot(gated, 0)
+        assert np.array_equal(a[0], b[0]) and a[1:] == b[1:]
+
+
 def test_return_window_creation_is_blocked_but_recognition_continues():
     # slot 1 is silent for a second, then a new voice returns: VoiceMemory would create its profile directly
     seq = [[voice(300), SIL], [voice(300), voice(1500)], [voice(300), voice(1500)]]

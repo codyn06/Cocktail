@@ -160,3 +160,54 @@ def test_bad_message_does_not_kill_stream(hub):
     asyncio.run(go())
     assert state.bad_messages == 1 and state.stats["audio"].messages == 2
     assert state.audio.seconds_held == 0.02
+
+
+# ---- read_png filters (wrap-around) and invalid filter
+def _png_with_filters(rows, w):
+    import struct
+    import zlib
+
+    def chunk(tag, body):
+        return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
+
+    raw = b"".join(bytes([f]) + bytes(r) for f, r in rows)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, len(rows), 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def _paeth(a, b, c):
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    return a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+
+
+def test_read_png_all_filters_wrap_around(tmp_path):
+    import numpy as np
+    from ingest.media_io import read_png
+    w, bpp = 3, 3
+    rng = np.random.default_rng(1)
+    want = rng.integers(0, 256, (5, w * bpp), dtype=np.uint8)
+    want[0] = 250
+    rows = []
+    for y, f in enumerate([1, 2, 3, 4, 0]):
+        prev = want[y - 1].astype(int) if y else np.zeros(w * bpp, int)
+        cur = want[y].astype(int)
+        enc = []
+        for x in range(w * bpp):
+            a = cur[x - bpp] if x >= bpp else 0
+            c = prev[x - bpp] if x >= bpp else 0
+            pred = {0: 0, 1: a, 2: prev[x], 3: (a + prev[x]) // 2, 4: _paeth(a, prev[x], c)}[f]
+            enc.append(int((cur[x] - pred) & 0xFF))
+        rows.append((f, enc))
+    p = tmp_path / "f.png"
+    p.write_bytes(_png_with_filters(rows, w))
+    assert np.array_equal(read_png(p).reshape(5, -1), want)
+
+
+def test_read_png_rejects_filter_above_4(tmp_path):
+    import pytest
+    from ingest.media_io import read_png
+    p = tmp_path / "bad.png"
+    p.write_bytes(_png_with_filters([(5, [1] * 6)], 2))
+    with pytest.raises(ValueError, match="filter 5"):
+        read_png(p)

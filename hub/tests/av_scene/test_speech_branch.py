@@ -140,3 +140,90 @@ def test_tse_path_offscreen_voice_is_outside_view():
     assert all(s is None for s, _ in r.selection.values())
     assert any(x.visibility == "outside_view" for x in r.associations)
     assert not any(x.status == "matched" for x in r.associations)
+
+
+def test_tse_path_three_talkers_is_degraded():
+    """Three visible talkers into a 2-voice separator: owners keep a stream but it is degraded."""
+    box_c = (40, 0, 50, 10)
+    a, b, c = _bursts(A_ON, 1), _bursts(B_ON, 2), _bursts([(0, 8)], 3)
+    boxes = {"tA": [BOX_A] * N25, "tB": [BOX_B] * N25, "tC": [box_c] * N25}
+    r = run_speech_branch(a + b + c, FRAMES, 25.0, boxes, separator=FakeSep(a, b),
+                          scorer=FakeScorer({BOX_A: _speaking(A_ON), BOX_B: _speaking(B_ON),
+                                             box_c: _speaking([(0, 8)])}),
+                          tse=FakeTSE({BOX_A: a, BOX_B: b, box_c: c}))
+    assert r.info["n_suspected_talkers"] == 3
+    assert r.selection["tA"][1].status == r.selection["tB"][1].status == "degraded"
+    assert r.selection["tC"][0] is None
+    # explicit count still wins
+    r2 = run_speech_branch(a + b, FRAMES, 25.0, {k: boxes[k] for k in ("tA", "tB")}, separator=FakeSep(a, b),
+                           scorer=FakeScorer({BOX_A: _speaking(A_ON), BOX_B: _speaking(B_ON)}),
+                           tse=FakeTSE({BOX_A: a, BOX_B: b}), n_suspected_talkers=2)
+    assert r2.selection["tA"][1].status == "ok" and r2.info["n_suspected_talkers"] == 2
+
+
+def _tse_run(speak_a, speak_b, **kw):
+    a, b = _bursts(A_ON, 1), _bursts(B_ON, 2)
+    return run_speech_branch(a + b, FRAMES, 25.0, {"tA": [BOX_A] * N25, "tB": [BOX_B] * N25},
+                             separator=FakeSep(a, b),
+                             scorer=FakeScorer({BOX_A: _speaking(speak_a), BOX_B: _speaking(speak_b)}),
+                             tse=FakeTSE({BOX_A: a, BOX_B: b}), **kw)
+
+
+def test_activity_gate_rescues_talknet_miss_only_when_enabled():
+    off = _tse_run(A_ON, [])                                  # TalkNet misses B entirely
+    assert off.selection["tB"][0] is None
+    on = _tse_run(A_ON, [], activity_gate=True)
+    assert on.selection["tB"][1].status == "ok" and on.selection["tA"][1].status == "ok"
+    assert "activity_gate" in on.info
+
+
+def test_activity_gate_keeps_silent_bystander_gated():
+    a, b = _bursts(A_ON, 1), _bursts([], 2)
+    leak = 0.12 * a                                            # B's TSE is only A bleeding through (-18.7 dB)
+    r = run_speech_branch(a, FRAMES, 25.0, {"tA": [BOX_A] * N25, "tB": [BOX_B] * N25}, separator=FakeSep(a, b),
+                          scorer=FakeScorer({BOX_A: _speaking(A_ON), BOX_B: _speaking([])}),
+                          tse=FakeTSE({BOX_A: a, BOX_B: leak}), activity_gate=True)
+    assert r.selection["tB"][0] is None and r.selection["tA"][0] is not None
+
+
+def test_peel_adds_third_voice_only_when_enabled():
+    a, b, c = _bursts(A_ON, 1), _bursts(B_ON, 2), _bursts([(0, 8)], 3)
+    kw = dict(separator=FakeSep(a, b), scorer=None)
+    base = run_speech_branch(a + b + c, FRAMES, 25.0, {"tA": [BOX_A] * N25}, **kw)
+    peeled = run_speech_branch(a + b + c, FRAMES, 25.0, {"tA": [BOX_A] * N25}, peel=True, **kw)
+    assert len(base.streams) == 2
+    assert len(peeled.streams) >= 2 and "peeling" in peeled.info
+
+
+def test_offscreen_upgrade_marks_unexplained_voice_outside_view_with_reason():
+    a, b = _bursts(A_ON, 1), _bursts([(0.5, 2), (3.5, 5)], 2)   # overlaps A: old rule says 'unknown'
+    r0 = run_speech_branch(a + b, FRAMES, 25.0, {"tA": [BOX_A] * N25}, separator=FakeSep(a, b),
+                           scorer=FakeScorer({BOX_A: _speaking(A_ON)}), tse=FakeTSE({BOX_A: a}))
+    assert not [x for x in r0.associations if x.visibility == "outside_view"]
+    r = run_speech_branch(a + b, FRAMES, 25.0, {"tA": [BOX_A] * N25}, separator=FakeSep(a, b),
+                          scorer=FakeScorer({BOX_A: _speaking(A_ON)}), tse=FakeTSE({BOX_A: a}),
+                          offscreen_upgrade=True)
+    ov = [x for x in r.associations if x.visibility == "outside_view"]
+    assert ov and "no visible face's TSE output resembles it" in ov[0].components[0].note
+
+
+def test_activity_gate_updates_reported_activity():
+    off = _tse_run(A_ON, [])
+    on = _tse_run(A_ON, [], activity_gate=True)
+    assert not off.activity_us["tB"] and on.activity_us["tB"]
+
+
+def test_peel_empty_audio_falls_back_to_plain_separator():
+    z = np.zeros(DUR * SR16, np.float32)
+    r = run_speech_branch(z, FRAMES, 25.0, {"tA": [BOX_A] * N25}, separator=FakeSep(z, z), scorer=None, peel=True)
+    assert len(r.streams) == 2
+
+
+def test_offscreen_upgrade_spares_a_visible_face_talknet_missed():
+    """stkM-like: B speaks on screen but TalkNet scores B silent; B's voice must not be called off-screen."""
+    a, b = _bursts(A_ON, 1), _bursts([(0.5, 2), (3.5, 5)], 2)   # B overlaps A, so the old rule says 'unknown'
+    r = run_speech_branch(a + b, FRAMES, 25.0, {"tA": [BOX_A] * N25, "tB": [BOX_B] * N25},
+                          separator=FakeSep(a, b),
+                          scorer=FakeScorer({BOX_A: _speaking(A_ON), BOX_B: _speaking([])}),
+                          tse=FakeTSE({BOX_A: a, BOX_B: b}), offscreen_upgrade=True)
+    assert not [x for x in r.associations if x.visibility == "outside_view"]

@@ -166,7 +166,7 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
         max_side: int = 640, stride: int = 1, device: str = "cuda", probe_bystanders: int = 2,
         ffmpeg_path: str | None = None, sam3_threshold: float = 0.25,
         vram_fraction: float | None = 0.75, speech_backend: str = "sam_audio",
-        use_tse: bool = False) -> RunManifest | None:
+        use_tse: bool = False, speech_opts: dict | None = None) -> RunManifest | None:
     if speech_backend not in ("sam_audio", "mossformer2"):
         raise ValueError(f"speech_backend must be sam_audio or mossformer2, got {speech_backend!r}")
     t_run = time.perf_counter()
@@ -246,7 +246,7 @@ def run(video: str | Path, out_dir: str | Path, *, run_id: str = "phase2", speak
         # ---- speech branch (D11): MossFormer2 separates voices, TalkNet + envelope correlation attributes them
         t0 = time.perf_counter()
         speech = _speech_stage(clip, records, work, reports, device=device, vram_fraction=vram_fraction,
-                               use_tse=use_tse)
+                               use_tse=use_tse, speech_opts=speech_opts)
         sel_stream, sel_ext = speech.selection[sid]
         diag: dict[str, dict] = {}
         if sel_stream is not None:
@@ -424,7 +424,7 @@ def _masks_by_track(records: dict[str, list[MaskRecord]], n_frames: int) -> dict
     return out
 
 
-def _speech_stage(clip, records, work, reports, *, device, vram_fraction, use_tse) -> SpeechResult:
+def _speech_stage(clip, records, work, reports, *, device, vram_fraction, use_tse, speech_opts=None) -> SpeechResult:
     from separate.models import VoiceSeparator
     from vision.face_detect import FaceDetector, face_boxes_by_track
     from vision.talknet import TalkNetScorer
@@ -446,7 +446,8 @@ def _speech_stage(clip, records, work, reports, *, device, vram_fraction, use_ts
             boxes = face_boxes_by_track(det, rgb, masks)
         with mgr.phase("inference"):
             _log(work, f"speech: separating + scoring {len(boxes)} track(s)")
-            return run_speech_branch(a16, rgb, clip.fps, boxes, separator=sep, scorer=scorer, tse=tse)
+            return run_speech_branch(a16, rgb, clip.fps, boxes, separator=sep, scorer=scorer, tse=tse,
+                                    **(speech_opts or {}))
 
     res = run_stage("speech_mossformer2_talknet", load, go, reports=reports, device=device,
                     vram_fraction=vram_fraction, workload={"tracks": len(masks), "tse": use_tse})
@@ -536,13 +537,17 @@ def main(argv=None) -> int:
     ap.add_argument("--speech-backend", choices=["sam_audio", "mossformer2"], default="mossformer2",
                     help="mossformer2: separate voices then attribute with TalkNet (D11); sam_audio: visual prompt")
     ap.add_argument("--tse", action="store_true", help="also run AV_MossFormer2_TSE per active face track")
+    ap.add_argument("--gate", action="store_true", help="Phase 3: TalkNet + TSE activity gate (needs --tse)")
+    ap.add_argument("--offscreen", action="store_true", help="Phase 3: upgraded outside_view rule")
+    ap.add_argument("--peel", action="store_true", help="Phase 3: residual speech peeling for a third voice")
     a = ap.parse_args(argv)
     xy = tuple(float(v) for v in a.speaker_xy.split(",")) if a.speaker_xy else None
     out = Path(a.out) if a.out else Path("sessions") / a.run_id / "av"
     m = run(a.video, out, run_id=a.run_id, speaker_xy=xy, speaker_track=a.speaker_track, reuse_tracks=a.reuse_tracks,
             concept=a.concept, text=a.text, max_seconds=a.max_seconds, max_side=a.max_side, stride=a.stride,
             device=a.device, probe_bystanders=a.probe_bystanders, ffmpeg_path=a.ffmpeg, sam3_threshold=a.sam3_threshold,
-            vram_fraction=a.vram_fraction or None, speech_backend=a.speech_backend, use_tse=a.tse)
+            vram_fraction=a.vram_fraction or None, speech_backend=a.speech_backend, use_tse=a.tse,
+            speech_opts=dict(activity_gate=a.gate, offscreen_upgrade=a.offscreen, peel=a.peel))
     if m is None:
         return 2
     print(f"bundle: {out.resolve()}\nserve:  uv run python -m av_scene serve {out}")

@@ -313,3 +313,59 @@ alert messages, Meta glasses version, search and rescue.
   Limitations: 2-talker separator limit; a single speaker pair; seeds are not generalization; reference B
   is derived (compB - compA); no recorded natural-scene or device test yet; off-screen attribution relies
   on visible faces being confidently silent; latency is not real-time.
+
+  **Phase 3 Row 0 baseline** (2026-10-25, branch `feat/av-phase3-overlap-identity`, commit e842c7c + Step 0 fixes;
+  `eval/av_scene/run_speech.py --tse`, output `hub/sessions/av_matrix/row0/`; GPU idle, hardware-run models on
+  SYNTHETIC mixtures; no listening review). Ablation rows below compare against this.
+
+  | case | A | B | C | notes |
+  |---|---|---|---|---|
+  | overlap, 4 layouts | ok +16.9 dB, correct | ok +16.9 dB, correct | | both voices matched; TalkNet p 0.52 / 0.64 (3.7-3.8 s / 5.2-5.6 s active) |
+  | A alone / B alone | ok / refused (inactive) | refused / ok | | 2nd voice `unmatched`, `unknown` |
+  | nobody speaks | refused | refused | | none matched |
+  | A + off-screen V3 | ok +17.8 dB, correct | refused | | V3 `unmatched`, `unknown` |
+  | only off-screen V3 | refused | refused | | both voices `outside_view` |
+  | A + off-screen music | ok +11.5 dB, correct | | | |
+  | **overlap3_side_ABC** (new) | refused: "TSE output matches no separated voice" (TSE itself +15.9 dB) | `degraded` +18.2 dB, correct | refused: inactive (TalkNet p 0.12) | 3 suspected talkers > 2-voice separator |
+
+  - Wall 2.7-8.4 s per case, peak VRAM 1.6 GiB.
+  - overlap3 caveat: C's video tile is A's video rolled in time, so C's lips are NOT synced to C's audio
+    (TalkNet correctly scores it inactive). It exercises the 3-track path, not lip-sync identity for a third talker.
+  - Second speaker pair: no real recording has clean per-speaker references. `pair2_*` (demo voice1/voice2) is
+    synthetic and audio-only, so it is not in the video-based Row 0.
+  - Not yet run: the real AV clip `stkM` through the Row 0 path (it has no clean references, so it can only be
+    scored for attribution/refusal, not SI-SDRi).
+  - Phase 3 modules merged but mocked/synthetic only: slice 1 activity gate, slice 2 off-screen rule, slice 3b
+    residual peeling, 4a identity windows, 5 pyannote adapter (mocked, no token), 6a/6b non-speech attribution,
+    6c Nyquist guard (activity-gated: a tone overlapping active speech is not reported). 4b was already wired.
+
+  **Phase 3 ablation rows vs Row 0** (2026-10-25, same runner and cases, `--tse` plus one switch;
+  `hub/sessions/av_matrix/abl_{gate,offscreen,peel,all}/`; GPU hardware-run, SYNTHETIC mixtures; first attempts
+  crashed/predated review fixes and were re-run on the fixed code):
+
+  | row | change vs Row 0 | cost (mean wall / case; Row 0 5.9 s) |
+  |---|---|---|
+  | `--peel` (3b) | overlap3 A: refused -> `ok` +15.9 dB (matched to peeled `voice_2`); B: `degraded` -> `ok`. 2-talker cases identical. Adds an unmatched 4th stream (`voice_3`). | 6.7 s |
+  | `--offscreen` (2) | no target status change. Off-screen V3 voice: `unknown` -> `outside_view` (closes the "overlapping off-screen voice stays `unknown`" limitation); both off-screen cases still `outside_view`. A voice is off-screen only if no visible face's TSE output, including faces TalkNet called silent, resembles it. | 7.9 s (extra TSE probes) |
+  | `--gate` (1) | no status change; reported activity +0.4 s in the overlap cases (TalkNet misses rescued). Silent-bystander statuses unchanged, but the silent case shows 0.8 s of rescued activity (< the 1.0 s `MIN_ACTIVE_S` line), the off-screen case 0.36 s. | 7.8 s |
+  | all three | union of the above | 8.5 s |
+
+  - `overlap3` C stays refused (its tile's lips are not synced to its audio; a fixture artifact).
+  - 4b (off-axis yaw limit): already wired through `cfg.off_axis.yaw_limit_deg`; tests only, no ablation row.
+  - 4a, 5, 6a/6b, 6c: library modules with mocked/synthetic tests, not attached to a pipeline stage, so no row.
+
+  **Real clip `stkM`** (`hub/sessions/{row0,gate,offscreen,peel,all}_stkM/`; replayed re-encode of
+  `stack_man_top.mp4`, 6 s, 2 people stacked; `phase2 --tse` plus switch; no clean references, so this is attribution
+  only, not SI-SDRi). Ground truth from the user: both people speak. Track `.0` = bottom, `.1` = top.
+
+  | config | `voice_0` (second voice) | `voice_1` |
+  |---|---|---|
+  | baseline | `unmatched`, `unknown` | `.0`, matched |
+  | `--gate` | **`.1` matched (correct)** | `.0`, matched |
+  | `--offscreen` (fixed) | `unmatched`, `unknown` (the first version wrongly said `outside_view`: fixed by probing TalkNet-silent faces) | `.0`, matched |
+  | `--peel` | unchanged | `.0`, matched |
+  | all three | `.1` matched | `.0`, matched |
+
+  - The gate recovers the second talker that TalkNet misses; this is the first evidence on a real clip.
+  - Caveat: one clip, one run each; the silent-bystander side of the gate is only tested on the synthetic silent
+    case (0.8 s of rescued activity there, under the 1 s line).

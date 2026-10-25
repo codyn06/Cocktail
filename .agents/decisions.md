@@ -66,6 +66,26 @@ status does not belong here (see `AGENTS.md` > Continuity).
   recently; the room (outer) is every other slot. Hop audio waits `--out-settle-s` (0.3 s) so the route is current. The hub
   reads private Tracker state (`tracks[id].stream`, `_dup_of`) until the track owner adds a public accessor; `hub/track` is
   untouched. Hardware-pending: real jitter/underrun behaviour, settle/jitter/queue-cap tuning, end-to-end delay.
+- AV speech attribution (PR #53): MossFormer2_SS separates 2 voices; S3FD faces are assigned to SAM 3 person masks;
+  TalkNet gives per-person activity; AV_MossFormer2_TSE runs per active person and must match one separated voice
+  (SI-SDR >= 3 dB, 3 dB margin) that is active while the face speaks. Contested voices go to one claimant only with a
+  2x / 1 s activity lead, else all are refused; an inactive or unmatched person gets `unavailable`, never another voice.
+  Envelope correlation (`associate.py`) is the no-TSE fallback only. SAM Audio is not used to select a speaker (its
+  visual mask did not steer the output); it stays for non-speech prompts. Checkpoints (AV_MossFormer2_TSE_16K, TalkNet
+  `6d68214` + `pretrain_TalkSet.model`, S3FD `sfd_face.pth`) are project-local and gitignored under `hub/checkpoints/`.
+- AV overlap and identity, Phase 3 (branch `feat/av-phase3-overlap-identity`): three speech-branch switches, all default
+  OFF in `run_speech_branch` (`activity_gate`, `offscreen_upgrade`, `peel`); Row 0 and ablation rows are in
+  `docs/STATUS.md`. `peel` (bounded residual speech peeling, `av_scene/peeling.py`) is the 3-talker route because no
+  3-speaker checkpoint loads through ClearVoice (only `alibabasglab/mossformer2-wsj0mix-3spk`: 8 kHz, other loader,
+  untested), so `MAX_SEPARABLE_TALKERS` stays 2. `activity_gate` rescues TalkNet misses from TSE energy, guarded by an
+  absolute floor, a 6 dB lead over other tracks, and a mouth-sync veto (bleed at -18.7 dBFS stays gated; a lone bystander
+  relies on the -11 dB threshold alone). `offscreen_upgrade` calls a voice `outside_view` only if no visible face's TSE
+  output, including faces TalkNet called silent, resembles it. Library modules without a pipeline stage yet, tested on
+  mocks only: identity windows (`continuity_windows.py`), pyannote adapter (`separate/pyannote_diar.py`, mocked, needs an
+  HF token and accepted terms), non-speech attribution (`nonspeech_attr.py`), residual Nyquist guard
+  (`stem_nyquist_hz`, activity-gated: a tone overlapping active speech is not reported). The viewer exports a
+  `frame_transform` (manifest `capabilities` and `frames.json`). The synthetic second pair (demo voice1/voice2) is not a
+  real second speaker pair; no recording has clean per-speaker references.
 
 ## Open items
 - Each teammate: confirm their tool loads the roles/skills (README "pending runtime

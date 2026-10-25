@@ -52,6 +52,46 @@ def _corr(a: np.ndarray, b: np.ndarray, valid: np.ndarray, min_valid: int):
     return float(np.corrcoef(x, y)[0, 1])
 
 
+def outside_view_reason(mask: np.ndarray, tids: list[str],
+                        scores: Mapping[str, np.ndarray],
+                        corr_s: Mapping[str, float | None],
+                        min_valid_frames: int = MIN_VALID_FRAMES,
+                        silent_thr: float = SILENT_THR,
+                        min_corr: float = MIN_CORR,
+                        active_face_offscreen: bool = False,
+                        tdoa_outside: bool | None = None) -> str | None:
+    """Pure: why an unmatched, energetic stream is outside the view, else None.
+
+    mask: stream-active boolean mask. corr_s: this stream's correlation per track
+    (None = undefined). Rule 1 (always): every observed track is silent while the
+    stream is active. Rule 2 (active_face_offscreen=True): some observed face is
+    speaking but none clears min_corr against this stream. tdoa_outside is an
+    optional calibrated-TDOA cross-check (None = skip); it only annotates/confirms
+    a decision already supported by the visual evidence and never creates a match.
+    """
+    seen = silent = 0
+    for u in tids:
+        sc = np.asarray(scores[u], dtype=float)
+        n2 = min(len(mask), len(sc))
+        m2 = mask[:n2] & ~np.isnan(sc[:n2])
+        if m2.sum() >= min_valid_frames:
+            seen += 1
+            if float(np.mean(sc[:n2][m2])) < silent_thr:
+                silent += 1
+    if seen == 0:
+        return None
+    if seen == silent:
+        why = "stream active while all visible tracks silent"
+    elif active_face_offscreen and not any(
+            c is not None and c >= min_corr for c in corr_s.values()):
+        why = "stream active; no visible speaking face matches it"
+    else:
+        return None
+    if tdoa_outside:
+        why += " (calibrated TDOA confirms off-screen)"
+    return why
+
+
 def associate_streams(stream_env: dict[str, np.ndarray],
                       track_scores: dict[str, np.ndarray],
                       fps: int = FPS,
@@ -61,10 +101,15 @@ def associate_streams(stream_env: dict[str, np.ndarray],
                       one_to_one: bool = True,
                       min_valid_frames: int = MIN_VALID_FRAMES,
                       silent_thr: float = SILENT_THR,
-                      t0_us: int = 0) -> list[Association]:
+                      t0_us: int = 0,
+                      active_face_offscreen: bool = False,
+                      tdoa_outside: Mapping[str, bool | None] | None = None
+                      ) -> list[Association]:
     """Associate each separated stream with at most one visual track.
 
     one_to_one=False lets several streams map to the same track.
+    active_face_offscreen / tdoa_outside: see outside_view_reason (defaults keep
+    the original behavior).
     """
     sids, tids = list(stream_env), list(track_scores)
     acts = {s: _activity(stream_env[s]) for s in sids}
@@ -124,16 +169,12 @@ def associate_streams(stream_env: dict[str, np.ndarray],
         note = "stream inactive" if s not in eligible else "no track above threshold"
         mask = acts[s][1]
         if s in eligible:
-            seen = silent = 0
-            for u in tids:
-                n2 = min(len(mask), len(scores[u]))
-                m2 = mask[:n2] & ~np.isnan(scores[u][:n2])
-                if m2.sum() >= min_valid_frames:
-                    seen += 1
-                    if float(np.mean(scores[u][:n2][m2])) < silent_thr:
-                        silent += 1
-            if seen > 0 and seen == silent:
-                vis, note = "outside_view", "stream active while all visible tracks silent"
+            why = outside_view_reason(
+                mask, tids, scores, {u: corr[(s, u)] for u in tids},
+                min_valid_frames, silent_thr, min_corr, active_face_offscreen,
+                (tdoa_outside or {}).get(s))
+            if why:
+                vis, note = "outside_view", why
         best = max((c for (ss, _), c in corr.items() if ss == s and c is not None),
                    default=None)
         comps.append(ComponentScore(name="best_track_corr", value=best,

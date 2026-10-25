@@ -277,6 +277,58 @@ def build_cases(sessions: Path = SESSIONS, *, include=None) -> list[Case]:
             except AssetMissing:
                 pass
     try:
+        # Three simultaneous talkers, three side-by-side tiles (1440x270, layout "side": downscaled like "side").
+        # The third tile is the A video rolled by half the clip in time: its lips are NOT synchronised with
+        # V3's audio (no recording of a third on-camera talker exists), so this tests masks/layout/separation
+        # with three tracks, not lip-sync identity for the third talker.
+        v3 = _scale_to(_fit(load_demo_stem("voice1", sessions), n), _rms(A))
+        T = min(s["A_tile"].shape[0], round(n / RATE * s["fps"]))
+        tileC = torch.roll(s["A_tile"][:T], shifts=T // 2, dims=0)
+        fr3 = torch.cat([s["A_tile"][:T], s["B_tile"][:T], tileC], dim=3)
+        masks3 = {}
+        for i, k in enumerate(("A", "B", "C")):
+            m = torch.zeros(T, TILE_H, 3 * TILE_W, dtype=torch.bool)
+            m[:, :, i * TILE_W:(i + 1) * TILE_W] = True
+            masks3[k] = m
+        spc = M.active_spans(v3, RATE)
+        add(Case("overlap3_side_ABC", "SYNTHETIC 3 talkers: A (woman) + B (man, derived ref) + C (synthetic voice1, "
+                 "audio only; its tile is A's video time-rolled, lips NOT synced to C); 3 tiles left to right A,B,C; "
+                 "refs RMS-matched", "side", A + B + v3, fr3, {"A": A, "B": B, "C": v3},
+                 {"A": sp["A"], "B": sp["B"], "C": spc}, masks3,
+                 [Target("A", "A", "A", "B"), Target("B", "B", "B", "A"), Target("C", "C", "C", "A")],
+                 {"overlap_s": M.spans_overlap_s(sp["A"], sp["B"]), "tiles": 3, "tier": "SYNTHETIC",
+                  "third_tile": "A video rolled by half clip; not lip-synced"}))
+    except AssetMissing:
+        pass
+    try:
+        # Second speaker pair: demo stems voice1/voice2 (mockclient stems), audio only, no video.
+        v1, v2 = load_demo_stem("voice1", sessions), load_demo_stem("voice2", sessions)
+        n2 = min(len(v1), len(v2))
+        v1, v2 = _scale_to(v1[:n2], _rms(A)), _scale_to(v2[:n2], _rms(A))
+        T2 = round(n2 / RATE * 25)
+        fr2 = torch.zeros(T2, 3, 36, 64, dtype=torch.uint8)                  # placeholder: no video exists
+        m1 = torch.zeros(T2, 36, 64, dtype=torch.bool)
+        m1[:, :, :32] = True
+        m2 = torch.zeros_like(m1)
+        m2[:, :, 32:] = True
+        mk2 = {"V1": m1, "V2": m2}
+        sp2 = {"V1": M.active_spans(v1, RATE), "V2": M.active_spans(v2, RATE)}
+        z2 = np.zeros(n2, np.float32)
+        tier2 = {"tier": "SYNTHETIC audio-only (simulated demo stems); placeholder video, no real visuals", "video": False}
+        add(Case("pair2_overlap", "SYNTHETIC AUDIO-ONLY second pair: demo voice1 + voice2 simultaneously; "
+                 "placeholder blank video (masks are left/right halves)", "audio_only", v1 + v2, fr2,
+                 {"V1": v1, "V2": v2}, sp2, mk2,
+                 [Target("V1", "V1", "V1", "V2"), Target("V2", "V2", "V2", "V1")],
+                 {**tier2, "overlap_s": M.spans_overlap_s(sp2["V1"], sp2["V2"])}))
+        add(Case("pair2_V1_alone", "AUDIO-ONLY: only voice1 speaks", "audio_only", v1.copy(), fr2,
+                 {"V1": v1, "V2": z2}, {"V1": sp2["V1"], "V2": []}, mk2,
+                 [Target("V1", "V1", "V1", None), Target("V2", "V2", None, "V1")], tier2))
+        add(Case("pair2_V2_alone", "AUDIO-ONLY: only voice2 speaks", "audio_only", v2.copy(), fr2,
+                 {"V1": z2, "V2": v2}, {"V1": [], "V2": sp2["V2"]}, mk2,
+                 [Target("V1", "V1", None, "V2"), Target("V2", "V2", "V2", None)], tier2))
+    except AssetMissing:
+        pass
+    try:
         ffr, fmasks, frefs = _fixture_case(sessions)
         k = int(round(ffr.shape[0] / 25 * RATE))
         cat, knock = _fit(frefs["cat_chirp"], k), _fit(frefs["knock_offscreen"], k)

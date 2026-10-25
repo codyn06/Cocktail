@@ -138,8 +138,32 @@ def _expand(alpha: np.ndarray, edges: np.ndarray, n_bins: int) -> np.ndarray:
     return out
 
 
+def _hf_gate(sm: list[np.ndarray], limits: list[float | None] | None, rate: int, cfg: ResidualConfig,
+             n_bins: int, n_frames: int) -> np.ndarray | None:
+    """Boolean (bins, frames) gate: True where a band-limited stem is ACTIVE and the bin lies at or above
+    its Nyquist. Such bins cannot be explained or contradicted by that stem (e.g. a 16 kHz speech stem
+    upsampled to a 48 kHz master has nothing above 8 kHz), so they are excluded from the residual while
+    the stem is active. Full-band stems and frames with no active band-limited stem keep the full band."""
+    if not limits:
+        return None
+    if len(limits) != len(sm):
+        raise ValueError("stem_nyquist_hz must have one entry per stem (None = full band)")
+    freqs = np.arange(n_bins) * rate / cfg.n_fft
+    gate = np.zeros((n_bins, n_frames), bool)
+    for s, lim in zip(sm, limits):
+        if lim is None or lim >= rate / 2:
+            continue
+        S = np.abs(stft(s, cfg)[freqs < lim])
+        e = (S ** 2).sum(axis=0)
+        act = e > max(float(e.max()), 1e-30) * 1e-4              # within 40 dB of the stem's loudest frame
+        act = uniform_filter(act.astype(float), 5, mode="nearest") > 0
+        gate |= (freqs >= lim)[:, None] & act[None, :n_frames]
+    return gate
+
+
 def project_remainder(x: np.ndarray, stems: list[np.ndarray], rate: int,
-                      cfg: ResidualConfig | None = None) -> Projection:
+                      cfg: ResidualConfig | None = None,
+                      stem_nyquist_hz: list[float | None] | None = None) -> Projection:
     """Phase-projected STFT remainder and non-negative unexplained power for mono stems.
 
     Generalised Wiener masks  M_k = alpha_k |S_k|^e / max(|X|^e, sum_j alpha_j |S_j|^e)  so that
@@ -169,16 +193,21 @@ def project_remainder(x: np.ndarray, stems: list[np.ndarray], rate: int,
     total = explained.sum(axis=0)
     M = explained / (np.maximum(Ax ** e, total) + cfg.floor_power)
     R = X * (1.0 - M.sum(axis=0))
+    gate = _hf_gate(sm, stem_nyquist_hz, rate, cfg, Ax.shape[0], Ax.shape[1])
+    if gate is not None:
+        R = np.where(gate, 0.0, R)
     # Power subtraction: shared-bin cross terms of overlapping sources have zero mean, so compare
     # neighbourhood averages rather than single bins.
     alpha_p, edges_p = fit_gains(Ax ** 2, As ** 2, cfg)
     p_un = np.maximum(0.0, smooth(Ax ** 2) - smooth((_expand(alpha_p, edges_p, Ax.shape[0]) * As ** 2).sum(axis=0)))
+    if gate is not None:
+        p_un = np.where(gate, 0.0, p_un)
     err = 10 * np.log10((np.abs(R) ** 2).sum() / ((Ax ** 2).sum() + cfg.floor_power) + 1e-30)
     return Projection(p_un, R, float(M.sum(axis=0).max()), alpha, float(err), istft(R, cfg, len(xm)), rate,
                       {"kind": "phase_projected_stft", "stems": len(sm), "n_fft": cfg.n_fft, "hop": cfg.hop,
                        "alpha_max": cfg.alpha_max, "block_frames": cfg.block_frames, "n_bands": cfg.n_bands,
                        "mask_exponent": e, "power_smooth": list(cfg.power_smooth),
-                       "downmix": "mean_over_channels", "proxy_waveform": "istft(R) projection proxy"},
+                       "downmix": "mean_over_channels", "stem_nyquist_hz": stem_nyquist_hz, "proxy_waveform": "istft(R) projection proxy"},
                       smooth(np.abs(R) ** 2))
 
 
@@ -212,13 +241,20 @@ def _spans(e_un: np.ndarray, mixture_peak: float, cfg: ResidualConfig, rate: int
 
 
 def find_unexplained_events(x: np.ndarray, stems: list[np.ndarray], rate: int, cfg: ResidualConfig | None = None,
-                            basis: str = "projection") -> tuple[list[dict], Projection]:
+                            basis: str = "projection",
+                            stem_nyquist_hz: list[float | None] | None = None) -> tuple[list[dict], Projection]:
     """Project, then detect events against the loudest mixture frame.
 
     basis 'projection' uses the mask-consistent remainder |R|^2 (coherence-safe); 'power_subtraction'
-    uses max(0, |X|^2 - sum alpha |S|^2). Both are spectral, never the raw waveform difference."""
+    uses max(0, |X|^2 - sum alpha |S|^2). Both are spectral, never the raw waveform difference.
+
+    stem_nyquist_hz: per-stem Nyquist (e.g. 8000.0 for a 16 kHz speech stem upsampled to the master
+    rate, None for full-band stems). Above that frequency, while that stem is active, the residual is
+    not evaluated (its harmonics there are not unexplained events). Full-band stems still count over
+    the whole band. Limitation: a genuine HF source concurrent with active band-limited speech is not
+    reported; it is reported once the speech stem is inactive."""
     cfg = cfg or ResidualConfig()
-    p = project_remainder(x, stems, rate, cfg)
+    p = project_remainder(x, stems, rate, cfg, stem_nyquist_hz)
     X = stft(downmix(x), cfg)
     peak = float((np.abs(X) ** 2).sum(axis=0).max())
     p.meta["mixture_frame_peak"] = peak
