@@ -79,7 +79,8 @@ if not a.no_speakers:
 from vision.person_box import PersonBox  # noqa: E402
 
 person_box = PersonBox(state, events_state.selection, camera_flipped=a.camera_flipped,
-                       enabled=not a.no_person_box)
+                       enabled=not a.no_person_box,
+                       recorder_fn=lambda: getattr(app.state, "speakers", None))
 events_state.source_overlays.append(person_box.overlay)
 person_box.start()
 
@@ -87,6 +88,11 @@ person_box.start()
 @app.get("/person-box/status")
 def person_box_status():
     return person_box.status()
+
+
+@app.get("/person-box/debug")
+def person_box_debug():
+    return person_box.debug()
 
 
 @app.get("/sources")
