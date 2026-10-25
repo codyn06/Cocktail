@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 using Cocktail.Audio;
+using Cocktail.Dev;
 using Cocktail.Protocol;
 using Cocktail.Stream;
 using Cocktail.UserInput;
@@ -80,14 +81,14 @@ namespace Cocktail.Ui
         string _hoverId; float _hoverTime;
         string _pendingId; float _pendingLeft;
         // the real hub does not send state.changed yet, so the wearer's own choice is kept here until it does (then the hub wins)
-        string _localChosen; bool _hubStateSeen, _wasFake = true;
+        string _localChosen; bool _hubStateSeen, _wasFake = true, _devChordWas;
         long _latestTs;
         OVRHand[] _hands = new OVRHand[0]; bool[] _pinchWas = new bool[0]; float _nextHandScan;
 
         // ------------------------------------------------------------------ public API (also used by the self test)
         public UiTheme Theme => theme;
         public HudMode HudMode { get => hudMode; set => hudMode = value; }
-        public bool UsingFake => useFake && (hub == null || _time - _realAt > realDataTimeout);
+        public bool UsingFake => useFake && DevMode.On && (hub == null || _time - _realAt > realDataTimeout);   // fake data is a developer aid: never shown outside DevMode
         public Transform Head
         {
             get
@@ -140,6 +141,7 @@ namespace Cocktail.Ui
                 _init = true;
                 if (theme == null) theme = Resources.Load<UiTheme>("CocktailUiTheme");
                 if (theme == null) { theme = ScriptableObject.CreateInstance<UiTheme>(); theme.name = "CocktailUiTheme (runtime default)"; }
+                DevMode.Init(theme.devMode);
                 if (hub == null) hub = HubClient.Instance != null ? HubClient.Instance : FindFirstObjectByType<HubClient>();
                 if (input == null) input = FindFirstObjectByType<InputSender>();
                 if (input != null) input.autoSelect = false;   // this class sends every select, by source id; InputSender's own head-ray select never fires
@@ -235,7 +237,13 @@ namespace Cocktail.Ui
         }
 
         void OnRealSources(SourcesUpdated e) { _realAt = _time; ApplySources(e, false); }
-        void OnRealState(StateChanged e) { _realAt = _time; if (e != null && e.State != HubState.Listening) _hubStateSeen = true; ApplyState(e, false); }
+        void OnRealState(StateChanged e)
+        {
+            _realAt = _time;
+            if (e != null && e.State != HubState.Listening) _hubStateSeen = true;
+            if (e != null) DevLog.Add("hub", "state " + e.State + " target " + (e.TargetId ?? "-"));
+            ApplyState(e, false);
+        }
         void OnRealTarget(TargetUpdated e) { ApplyTarget(e, false); }
         void OnRealAlert(AlertFired e) { ShowAlert(e); }
         void OnRealReplay(ReplayReady e) { _replaySeconds = e.DurationS; }
@@ -261,7 +269,7 @@ namespace Cocktail.Ui
                 bool isSel = s.SourceId == selId;
                 if (kept >= theme.maxSources && !isSel) continue;
                 if (!isSel) kept++;
-                if (!_entries.TryGetValue(s.SourceId, out var en)) { en = new Entry(); _entries[s.SourceId] = en; }
+                if (!_entries.TryGetValue(s.SourceId, out var en)) { en = new Entry(); _entries[s.SourceId] = en; DevLog.Add("src", "+" + s.SourceId + " " + s.Label + (s.BearingDeg.HasValue ? " " + s.BearingDeg.Value.ToString("0") + "deg" : " no-dir")); }
                 en.src = s; en.lastUpdate = _time;
             }
         }
@@ -320,6 +328,7 @@ namespace Cocktail.Ui
             _time += dt;
             bool fakeNow = UsingFake;
             if (fakeNow != _wasFake) { _wasFake = fakeNow; ResetForNewSource(); }
+            if (_demo != null && _demo.gameObject.activeSelf != DevMode.On) _demo.gameObject.SetActive(DevMode.On);
             if (rig == null && _time >= _nextRigScan) { _nextRigScan = _time + 1f; rig = FindFirstObjectByType<OVRCameraRig>(); }
             ReparentRoots();
             Vector3 headPosL = _worldRoot.InverseTransformPoint(Head.position);
@@ -618,7 +627,7 @@ namespace Cocktail.Ui
 
         void TickDemo(float dt)
         {
-            if (_demo == null) return;
+            if (_demo == null || !DevMode.On) return;
             _demo.Tick(Pointer(), dt);
             if (_demo.TryGetHoverWorld(out var demoAt)) NoteTarget(Vector3.Dot(demoAt - Pointer().position, Pointer().forward));
             if (_time < _nextReadout) return;
@@ -645,6 +654,7 @@ namespace Cocktail.Ui
                   .Append(s.DistanceM.HasValue ? s.DistanceM.Value.ToString("0.0") + "m " : "")
                   .Append(s.State).Append('\n');
             }
+            sb.Append("--- LOG\n").Append(DevLog.Recent(6));
             _demo.SetReadout(sb.ToString());
         }
 
@@ -827,6 +837,7 @@ namespace Cocktail.Ui
             if (en.arrow != null) UiObjects.Kill(en.arrow.gameObject);
             if (en.speaker != null) UiObjects.Kill(en.speaker.gameObject);
             _entries.Remove(id);
+            DevLog.Add("src", "-" + id);
             if (_hoverId == id) _hoverId = null;
             if (_localChosen == id) _localChosen = null;   // the hub forgets a vanished source too, and never reuses its id
         }
@@ -851,6 +862,7 @@ namespace Cocktail.Ui
         void ResetForNewSource()
         {
             // fake and real sources never mix: start clean (numbers and colours too) when the data source changes
+            DevLog.Add("data", UsingFake ? "fake" : "real");
             string keep = _localChosen;
             _remove.Clear(); _remove.AddRange(_entries.Keys);
             foreach (var id in _remove) DestroyEntry(id);
@@ -863,6 +875,7 @@ namespace Cocktail.Ui
         // stop / next / prev can also come from InputSender's buttons: keep the local choice in step with what the hub does
         void OnInputSent(ProtoAction a, string sourceId)
         {
+            DevLog.Add("in", a + (sourceId != null ? " " + sourceId : ""));
             if (UsingFake || _hubStateSeen) return;
             if (a == ProtoAction.Stop) _localChosen = null;
             else if (a == ProtoAction.Next || a == ProtoAction.Prev) _localChosen = StepLocal(a == ProtoAction.Next ? 1 : -1);
@@ -956,6 +969,7 @@ namespace Cocktail.Ui
 
         bool TrySelectId(string id, string modality)
         {
+            DevLog.Add("ui", (id == ResolveSelectedSourceId() ? "stop " : "choose ") + id + " (" + modality + ")");
             // choosing the speaker who is already chosen switches the focus off
             if (id == ResolveSelectedSourceId())
             {
@@ -987,14 +1001,18 @@ namespace Cocktail.Ui
             {
                 var h = _hands[i];
                 bool pinching = h != null && h.IsTracked && h.GetFingerIsPinching(OVRHand.HandFinger.Index);
-                if (pinching && !_pinchWas[i] && !select) { select = true; modality = "hand"; }
+                if (pinching && !_pinchWas[i] && !select) { select = true; modality = "hand"; DevLog.Add("pinch", h.name + " at " + (_hoverId ?? (_hoverRowNow >= 0 ? "row " + _hoverRowNow : "nothing"))); }
                 _pinchWas[i] = pinching;
             }
-            if (select && _demo != null && _demo.Press()) { }   // a pinch on a demo-panel button
+            if (select && DevMode.On && _demo != null && _demo.Press()) { }   // a pinch on a demo-panel button
             else if (select && !TrySelectGazed("head")) TrySelectListRow(modality);
             // testing fallback when hand tracking is not working: right thumbstick up/down scrolls the picker
             if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstickUp, OVRInput.Controller.RTouch)) ScrollList(-1);
             if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstickDown, OVRInput.Controller.RTouch)) ScrollList(1);
+            // B + Y together toggle DevMode (InputSender skips Stop / Next while the other button is held)
+            bool chord = OVRInput.Get(OVRInput.Button.Two, OVRInput.Controller.RTouch) && OVRInput.Get(OVRInput.Button.Four, OVRInput.Controller.LTouch);
+            if (chord && !_devChordWas) DevMode.Toggle();
+            _devChordWas = chord;
             if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch)) ToggleHudMode();
             if (UsingFake && fake != null)
             {

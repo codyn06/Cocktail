@@ -73,11 +73,13 @@ namespace Cocktail.UserInput
             // Right controller only (one controller is enough):
             //   front trigger = select, side trigger (grip) or B = stop, A = replay,
             //   joystick flick right/left = next/prev. Left X/Y/stick-click still work if present.
+            // B + Y pressed together is the DevMode shortcut: neither sends Stop / Next while the other is held
+            bool bHeld = OVRInput.Get(OVRInput.Button.Two, OVRInput.Controller.RTouch), yHeld = OVRInput.Get(OVRInput.Button.Four, OVRInput.Controller.LTouch);
             if (OVRInput.GetDown(OVRInput.Button.PrimaryHandTrigger, OVRInput.Controller.RTouch)
-                || OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch)) Send(ProtoAction.Stop);
+                || (OVRInput.GetDown(OVRInput.Button.Two, OVRInput.Controller.RTouch) && !yHeld)) Send(ProtoAction.Stop);
             if (OVRInput.GetDown(OVRInput.Button.One, OVRInput.Controller.RTouch)
                 || OVRInput.GetDown(OVRInput.Button.Three, OVRInput.Controller.LTouch)) Send(ProtoAction.Replay);
-            if (OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch)) Send(ProtoAction.Next);
+            if (OVRInput.GetDown(OVRInput.Button.Four, OVRInput.Controller.LTouch) && !bHeld) Send(ProtoAction.Next);
             if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick, OVRInput.Controller.LTouch)) Send(ProtoAction.Prev);
 
             float sx = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick, OVRInput.Controller.RTouch).x;
