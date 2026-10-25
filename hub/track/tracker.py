@@ -43,6 +43,9 @@ class TrackConfig:
     # Speech with no direction (the live Quest withholds unfit bearings) can confirm sooner: None = off, else the
     # hop count for a speech-labelled direction-less source. Identity then rests on slot continuity + voice memory.
     bearingless_speech_hits: int | None = None
+    # With bearingless_speech_hits on: a speech source on ANOTHER separator slot is a different voice (the separator
+    # emits one voice per slot), so another tracking speech source no longer blocks its announcement.
+    bearingless_speech_per_slot: bool = False
     hold_s: float = 1.5              # unheard this long: tracking -> last_seen
     lost_s: float = 8.0              # unheard this long: last_seen -> lost
     forget_s: float = 60.0           # unheard this long: dropped (the id is never reused)
@@ -294,7 +297,9 @@ class Tracker:
                 t.confirmed = True  # a distinct voice, direction unsure: announce it without a bearing
             elif t.hits >= (c.bearingless_speech_hits if c.bearingless_speech_hits is not None and t.label == "speech"
                             else c.bearingless_hits) and not any(
-                    o is not t and o.label == t.label and o.state == p.TrackState.tracking for o in self.tracks.values()):
+                    o is not t and o.label == t.label and o.state == p.TrackState.tracking
+                    and not (c.bearingless_speech_per_slot and t.label == "speech" and o.stream != t.stream)
+                    for o in self.tracks.values()):
                 t.confirmed = True
 
     def _observe(self, t: _Track, o: p.Source, now_us: int, has_b: bool) -> None:

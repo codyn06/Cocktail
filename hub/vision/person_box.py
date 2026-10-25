@@ -42,7 +42,7 @@ POLL_S = 0.04
 ASSOC_PERIOD_S = 0.25
 PRELEARN_S = 10.0
 MIN_FACE_H = 0.05
-MIN_CONF = 0.8
+MIN_CONF = 0.5   # S3FD scores a sideways face only ~0.8 (real headset frame); the mouth-motion match guards false faces
 MAX_W = 640
 GRAY_W = 320
 
@@ -263,7 +263,7 @@ class PersonBox:
             if img is None:
                 return "bad_frame"
             ih, iw = img.shape[:2]
-            dets = self.detector.detect(img)
+            dets = self.detector.detect(img, conf_th=MIN_CONF)
             faces = [d for d in dets if d[4] >= MIN_CONF and (d[3] - d[1]) / ih >= MIN_FACE_H]
             boxes = [(float(d[0]) / iw, float(d[1]) / ih, float(d[2]) / iw, float(d[3]) / ih) for d in faces]
             self._last_faces = len(boxes)

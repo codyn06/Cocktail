@@ -67,7 +67,7 @@ except ImportError:
 worker.start()
 app = create_app(state)
 # Direction is usually unknown on the Quest (gated locator), so speech must be announced without a bearing.
-events_state = install_events(app, locator, Tracker(TrackConfig(bearingless_speech_hits=3)))
+events_state = install_events(app, locator, Tracker(TrackConfig(bearingless_speech_hits=3, bearingless_speech_per_slot=True)))
 audio_out = install_audio_out(app, events_state, AudioOutConfig(
     settle_s=a.out_settle_s, apply_gains_in_layers=a.out_gains_in_layers))
 worker.listeners.append(audio_out.on_chunks)
