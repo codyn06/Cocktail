@@ -11,6 +11,9 @@ each way, three beeps = stop. Then it scores the take (PASS/FAIL per check).
 Run from the repo root:
     powershell -ExecutionPolicy Bypass -File quest/tools/run_locate_take.ps1
 Options: -Truths 0,90,180,-90   -Quiet (no spoken prompts; just wait)   -Seconds 28
+Coverage-grid labels (stored in meta.json for eval/dataset_check.py; all optional):
+    -Distance 1.0 (source distance in meters)   -Motion small|normal|large   -Stimulus pink|speech
+    -Stimulus speech needs -StimulusWav <PCM .wav> (the script itself only generates pink noise).
 Angles: 0 = laptop straight ahead, 90 = directly on your right, 180 = behind you, -90 = on your left.
 #>
 param(
@@ -21,7 +24,11 @@ param(
     [int]$GoAt = 8,
     [int]$StopAt = 28,
     [string]$Adb = "C:\Program Files\Unity\Hub\Editor\6000.0.80f1\Editor\Data\PlaybackEngines\AndroidPlayer\SDK\platform-tools\adb.exe",
-    [int]$Port = 8765
+    [int]$Port = 8765,
+    [double]$Distance = [double]::NaN,                      # meters; NaN = not labeled
+    [ValidateSet("", "small", "normal", "large")][string]$Motion = "",
+    [ValidateSet("", "pink", "speech")][string]$Stimulus = "",
+    [string]$StimulusWav = ""                                # PCM wav to loop instead of the generated pink noise
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,7 +54,13 @@ with wave.open(sys.argv[1], "wb") as o:
 '@
 $gen | Set-Content -Encoding ascii "$env:TEMP\gen_pink.py"
 uv run --project hub python "$env:TEMP\gen_pink.py" $noiseWav
+if ($Stimulus -eq "speech" -and -not $StimulusWav) { throw "-Stimulus speech needs -StimulusWav <PCM .wav>: this script only generates pink noise." }
+if ($StimulusWav) { $noiseWav = (Resolve-Path $StimulusWav).Path }
 $player = New-Object System.Media.SoundPlayer $noiseWav
+$labelArgs = @()
+if (-not [double]::IsNaN($Distance)) { $labelArgs += @("--distance-m", $Distance) }
+if ($Motion) { $labelArgs += @("--motion", $Motion) }
+if ($Stimulus) { $labelArgs += @("--stimulus", $Stimulus) }
 
 # adb can hang when two adb servers fight over port 5037; run it with a timeout and restart the server once.
 function AdbRun([string[]]$a, [int]$timeoutSec = 15) {
@@ -82,7 +95,8 @@ foreach ($truth in $Truths) {
     Start-Sleep -Seconds 5
     Say "Sit still, face front. Recording starts now. Wait for two beeps, then turn only your head slowly left and right. Three beeps means stop."
 
-    $rec = Start-Process uv -ArgumentList "run","--project","hub","python","quest/tools/record_session.py","--out",$out,"--truth",$truth,"--noise-until",$NoiseUntil,"--go-at",$GoAt,"--stop-at",$StopAt -WindowStyle Hidden -PassThru
+    $recArgs = @("run","--project","hub","python","quest/tools/record_session.py","--out",$out,"--truth",$truth,"--noise-until",$NoiseUntil,"--go-at",$GoAt,"--stop-at",$StopAt) + $labelArgs
+    $rec = Start-Process uv -ArgumentList $recArgs -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds 5
     # start the headset app if it is not running (if it is, it reconnects to the recorder by itself;
     # restarting it would reset its clock mid-recording)
