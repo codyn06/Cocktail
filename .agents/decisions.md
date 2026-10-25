@@ -43,6 +43,14 @@ status does not belong here (see `AGENTS.md` > Continuity).
 - `assign` statuses are per source (matched/ambiguous/unmatched); `rejected` is a per-candidate label. MP4 output is optional
   and needs an ffmpeg found via config, `COCKTAIL_FFMPEG`/`FFMPEG_BINARY`, PATH or `imageio_ffmpeg`. Deferred to later phases:
   off-axis DRR widening, cache-hit stage skipping, viewer FrameTransform/output-latency handling, real models.
+- Recorded camera frames (`quest/tools/record_session.py`, `mockclient`, PR #44): layout `video/<device_ts_us>.jpg` plus
+  `video/frames.jsonl` (one VideoFrame header per line); `Session.load` reads it into `Session.frame_meta` and also loads recorder
+  takes (`meta.json` + `pose.csv`, rotation only so `pos = 0`), and `mockclient.replay` sends the recorded header fields. The
+  camera vertical-flip flag is not on the wire (protocol is frozen), so it is the recorder flag `--camera-flipped` stored in
+  `meta.json`. Frames are buffered in memory and written at save (a headset clock restart discards the earlier session); limits
+  `--no-video`, `--video-fps`, `--max-frames`; h264 frames are skipped. Talker ground truth is `talkers.csv`
+  (`start_s,end_s,talker_id,bearing_deg,note`, seconds since the first audio sample) mapped to frames by `mockclient.talkers`.
+  Untested on a real headset: frame orientation/colour, real header values and disk use.
 - Chosen-voice measurement (`separate.measure_chosen`, PR #43): SIR-style on the separator's streams, not the `/audio/out` route.
   Each 250 ms window of the chosen stream is least-squares projected on the session's ground-truth stems; margin = target vs
   the sum of the other stems, and sound matching no stem is reported as `unexplained_db`. The chosen stream is picked by oracle
