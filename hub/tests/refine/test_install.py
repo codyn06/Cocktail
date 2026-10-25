@@ -42,6 +42,11 @@ def fake_cut(live, job_id):
                      mix_16k=None, slot_audio={}, frames=[])
 
 
+def refine_snapshot(events):
+    """aux_snapshot without the events publisher's own `hub.*` keys (selection state, not refinement)."""
+    return {k: v for k, v in events.aux_snapshot.items() if not k.startswith("hub.")}
+
+
 class Rig:
     def __init__(self, runner=None, models="ready"):
         self.ingest = IngestState()
@@ -77,7 +82,9 @@ class Rig:
     def targets(self):
         out = []
         while not self.aux.empty():
-            out.append(json.loads(self.aux.get_nowait()))
+            msg = json.loads(self.aux.get_nowait())
+            if msg.get("type") == "target.updated" and "kind" in msg:   # hub.state / hub.target are the events publisher's
+                out.append(msg)
         return out
 
 
@@ -179,7 +186,7 @@ def test_deselect_drops_snapshot_so_new_client_gets_no_old_person():
         assert json.loads(rig.events.aux_snapshot[f"t_{sid}"])["kind"] == "person"
         rig.events.selection.clear()
         await rig.observe()
-        assert rig.events.aux_snapshot == {}
+        assert refine_snapshot(rig.events) == {}
     run(go())
 
 
@@ -191,9 +198,9 @@ def test_snapshot_holds_only_the_live_target():
         return RefineStatus(1, RefineKey(sid, 0, ver, 0), RefineState.pending, "x")
     b._notify(status("t1", 1))
     b._notify(status("t2", 2))
-    assert list(rig.events.aux_snapshot) == ["t_t2"]
+    assert list(refine_snapshot(rig.events)) == ["t_t2"]
     b._notify(None, force=True)
-    assert rig.events.aux_snapshot == {}
+    assert refine_snapshot(rig.events) == {}
 
 
 def test_result_after_shutdown_is_dropped():
@@ -208,7 +215,7 @@ def test_result_after_shutdown_is_dropped():
         rig.st.loop = None  # loop cleared, never inline once it has been set
         rig.st.post(lambda: calls.append(2))
         await asyncio.sleep(0.05)
-        assert calls == [] and rig.events.aux_snapshot == {}
+        assert calls == [] and refine_snapshot(rig.events) == {}
         rig.st._loop_seen = False
         rig.st.post(lambda: calls.append(3))   # inline only when no loop was ever set
         assert calls == [3]
