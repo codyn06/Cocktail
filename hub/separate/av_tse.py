@@ -18,8 +18,8 @@ import numpy as np
 
 from vision.talknet import VIDEO_FPS, build_face_stack
 
-DEFAULT_CKPT = (r"C:\Users\nguye\repos\Cocktail\hub\checkpoints\AV_MossFormer2_TSE_16K"
-                r"\last_best_checkpoint.pt")
+DEFAULT_CKPT = str(Path(__file__).resolve().parents[1] / "checkpoints" / "AV_MossFormer2_TSE_16K"
+                   / "last_best_checkpoint.pt")
 SAMPLE_RATE = 16000
 VIS_MEAN, VIS_STD = 0.4161, 0.1688
 

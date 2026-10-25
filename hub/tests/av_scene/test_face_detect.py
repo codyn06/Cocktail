@@ -40,3 +40,13 @@ def test_boxes_by_track_per_frame():
     m = _mask(50, 100, 0, 50)
     out = face_boxes_by_track(Det(), frames, {"L": [m, m, None]})
     assert out["L"] == [None, (10.0, 10.0, 30.0, 30.0), None]
+
+
+def test_overlapping_masks_give_face_to_mask_covering_it():
+    near = np.zeros((50, 100), bool)
+    near[5:35, 5:35] = True                               # small, covers the face box
+    far = np.ones((50, 100), bool)                        # large background person also contains the centre
+    faces = np.array([[10, 10, 30, 30, 0.9]])
+    for order in ({"far": far, "near": near}, {"near": near, "far": far}):
+        a = assign_faces(faces, order)
+        assert a["near"] == (10, 10, 30, 30) and a["far"] is None

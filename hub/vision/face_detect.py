@@ -46,7 +46,7 @@ class FaceDetector:
         self.device = device
         self.net = nets.S3FDNet(device=device).to(device).eval()
         w = weights or os.environ.get("COCKTAIL_S3FD_WEIGHTS") or str(_DEFAULT_WEIGHTS)
-        self.net.load_state_dict(torch.load(w, map_location=device))
+        self.net.load_state_dict(torch.load(w, map_location=device, weights_only=True))
 
     def detect(self, rgb: np.ndarray, conf_th: float = 0.8, scale: float = 0.5) -> np.ndarray:
         """rgb uint8 [H,W,3] -> [k,5] boxes (x0,y0,x1,y1,score) in pixels."""
@@ -87,18 +87,23 @@ def _nms(b: np.ndarray, thr: float) -> np.ndarray:
 
 
 def assign_faces(faces: np.ndarray, masks: dict[str, np.ndarray | None]) -> dict[str, tuple | None]:
-    """Give each track the highest-scoring face whose centre is inside its mask; a face goes to one track."""
+    """Give each track the highest-scoring face whose centre is inside its mask; a face goes to one track.
+    When overlapping masks both contain the centre, the face goes to the mask covering more of the face
+    box (ties: the smaller mask, usually the nearer person)."""
     out: dict[str, tuple | None] = {t: None for t in masks}
-    used: set[int] = set()
     for k in np.argsort(-faces[:, 4]) if len(faces) else []:
-        cx, cy = (faces[k, 0] + faces[k, 2]) / 2, (faces[k, 1] + faces[k, 3]) / 2
+        x0, y0, x1, y1 = faces[k, :4]
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        cands = []
         for t, m in masks.items():
-            if out[t] is not None or m is None or k in used:
+            if out[t] is not None or m is None:
                 continue
             yi, xi = int(np.clip(cy, 0, m.shape[0] - 1)), int(np.clip(cx, 0, m.shape[1] - 1))
             if m[yi, xi]:
-                out[t] = tuple(float(v) for v in faces[k, :4])
-                used.add(k)
+                box = m[max(0, int(y0)):max(int(y0) + 1, int(y1)), max(0, int(x0)):max(int(x0) + 1, int(x1))]
+                cands.append((-float(box.mean()) if box.size else 0.0, int(m.sum()), t))
+        if cands:
+            out[min(cands)[2]] = tuple(float(v) for v in faces[k, :4])
     return out
 
 

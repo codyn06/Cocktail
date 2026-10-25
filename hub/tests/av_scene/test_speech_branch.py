@@ -111,12 +111,24 @@ def test_tse_path_selects_each_person_and_gates_silent_and_conflicts():
     assert (sa, sb) == ("tse:tA", "tse:tB") and ea.status == eb.status == "ok"
     assert {x.track_id for x in r.associations if x.status == "matched"} == {"tA", "tB"}
 
-    # A is briefly (falsely) "active" and its TSE leaks B's voice: both claim B -> the less active is refused
-    r = run_speech_branch(b, FRAMES, 25.0, boxes, separator=FakeSep(np.zeros_like(b), b),
-                          scorer=FakeScorer({BOX_A: _speaking([(0, 1.2)]), BOX_B: _speaking(B_ON)}),
-                          tse=FakeTSE({BOX_A: b, BOX_B: b}))
+    def leak(a_on):
+        # silent A is (falsely) "active" and its TSE output is B's voice
+        return run_speech_branch(b, FRAMES, 25.0, boxes, separator=FakeSep(np.zeros_like(b), b),
+                                 scorer=FakeScorer({BOX_A: _speaking(a_on), BOX_B: _speaking(B_ON)}),
+                                 tse=FakeTSE({BOX_A: b, BOX_B: b}))
+
+    # false activity while B's voice is silent: the voice doesn't agree with A's face
+    r = leak([(0, 1.2)])
+    assert r.selection["tA"][0] is None and "inactive while face speaks" in r.selection["tA"][1].reason
+    assert r.selection["tB"][0] == "tse:tB"
+    # false activity overlapping B's speech, B clearly more active (3.0 s vs 1.3 s): B keeps it, A refused
+    r = leak([(1.5, 2.8)])
     assert r.selection["tA"][0] is None and "same voice as tB" in r.selection["tA"][1].reason
     assert r.selection["tB"][0] == "tse:tB"
+    # comparable activity (2.5 s vs 3.0 s): nobody gets the voice
+    r = leak([(1.5, 3.0), (4.5, 5.5)])
+    assert r.selection["tA"][0] is None and r.selection["tB"][0] is None
+    assert any(x.status == "ambiguous" for x in r.associations)
 
 
 def test_tse_path_offscreen_voice_is_outside_view():

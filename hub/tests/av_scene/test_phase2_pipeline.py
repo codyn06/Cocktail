@@ -188,16 +188,15 @@ def test_mossformer2_backend_attributes_and_refuses(clip, fakes, tmp_path, monke
     assert phase2.run(clip, out, run_id="t", device="cpu") is None
     m = phase2.run(clip, out, run_id="t", speaker_xy=(0.2, 0.5), reuse_tracks=True, device="cpu",
                    speech_backend="mossformer2")
+    # the synthetic clip is 1 s, below the 1 s-of-speech minimum: every person is refused, and the selected
+    # person's stem is silence rather than the separated voice
     metrics = json.loads((out / "metrics.json").read_text())
     sel = metrics["speech"]["selection"]
-    left = m.associations[0].track_id
-    right = next(t.track_id for t in m.tracks if t.track_id != left)
-    assert sel[left]["stream"] == "voice_1" and sel[left]["status"] == "ok"
-    assert sel[right]["stream"] is None and sel[right]["status"] == "unavailable"
+    assert set(sel) == {t.track_id for t in m.tracks}
+    assert all(v["stream"] is None and v["status"] == "unavailable" for v in sel.values())
+    assert any("no stream" in e for e in m.stems[0].errors)
+    assert metrics["speaker"]["stem_rms_dbfs"] < -100
     assert fakes.calls == []                                      # SAM Audio not used for speech selection
-
-    m2 = phase2.run(clip, out, run_id="t", speaker_xy=(0.8, 0.5), reuse_tracks=True, device="cpu",
-                    speech_backend="mossformer2")
-    assert any("no stream" in e for e in m2.stems[0].errors)
-    stem = json.loads((out / "metrics.json").read_text())["speaker"]["stem_rms_dbfs"]
-    assert stem < -100                                            # silence, not the other person's voice
+    srcs = {s.source_id: s for s in m.sources}
+    assert {"voice_0", "voice_1"} <= set(srcs) and all(f"track:{t.track_id}" in srcs for t in m.tracks)
+    assert all(srcs[f"track:{t.track_id}"].extraction.status == "unavailable" for t in m.tracks)

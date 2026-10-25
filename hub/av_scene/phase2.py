@@ -465,13 +465,20 @@ def _add_speech_to_manifest(manifest: RunManifest, sp: SpeechResult) -> None:
     from .schemas import Extraction
 
     for a in sp.associations:
-        chosen = [t for t, (s, _) in sp.selection.items() if s == a.source_id]
         manifest.associations.append(a.model_copy(update={"association_id": f"assoc_{a.source_id}"}))
         manifest.sources.append(SceneSource(
             source_id=a.source_id, kind="speech", label="speech", visibility=a.visibility,
             current_association_id=f"assoc_{a.source_id}",
             extraction=Extraction(status="ok", method="mossformer2_ss", stem_source_id=a.source_id,
-                                  reason=f"selected for {chosen}" if chosen else f"not attributed ({a.status})")))
+                                  reason=f"attributed to {a.track_id}" if a.status == "matched"
+                                  else f"not attributed ({a.status})")))
+    for tid in sp.tse:
+        ext = sp.selection[tid][1]
+        manifest.sources.append(SceneSource(
+            source_id=f"tse:{tid}", kind="speech", label="speech", visibility="visible",
+            extraction=Extraction(status="ok" if ext.status == "ok" else "unavailable", method="av_tse",
+                                  stem_source_id=f"tse:{tid}", reason="AV-TSE output for this face; "
+                                  + ("selected" if ext.status == "ok" else f"not used: {ext.reason}"))))
     for tid, (_, ext) in sp.selection.items():
         manifest.sources.append(SceneSource(source_id=f"track:{tid}", kind="unknown", label="visible person",
                                             visibility="visible", activity_us=sp.activity_us.get(tid, []),

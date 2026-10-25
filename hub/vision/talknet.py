@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+from pathlib import Path
 from typing import Sequence
 
 import numpy as np
@@ -23,8 +24,9 @@ import numpy as np
 CROP_SCALE = 0.40
 VIDEO_FPS = 25.0
 PAD_VALUE = 110
-DEFAULT_SRC = r"C:\Users\nguye\repos\Cocktail\hub\checkpoints\talknet\src"
-DEFAULT_WEIGHTS = r"C:\Users\nguye\repos\Cocktail\hub\checkpoints\talknet\pretrain_TalkSet.model"
+_CKPT = Path(__file__).resolve().parents[1] / "checkpoints"
+DEFAULT_SRC = str(_CKPT / "talknet" / "src")
+DEFAULT_WEIGHTS = str(_CKPT / "talknet" / "pretrain_TalkSet.model")
 DURATIONS = (1, 2, 3, 4, 5, 6)
 
 
