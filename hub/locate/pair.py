@@ -41,6 +41,8 @@ class PairCalibration:
     device: str = "quest3s"
     max_tau_s: float = 0.3e-3
     takes: list = field(default_factory=list)
+    delay_method: str = "gcc"   # how frame delays are measured: "gcc" (frame_delays) or "phase"
+    model_s: float | None = None  # phase only: model error added to each frame's own sigma
 
     def save(self, path: str | Path) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -57,6 +59,13 @@ class PairCalibration:
     def predict(self, theta_deg, yaw_deg):
         return self.delay_amp_s * np.sin(np.radians(theta_deg - self.axis_deg - yaw_deg)) + self.offset_s
 
+    def frame_sigma(self, sigma_s):
+        """Delay uncertainty of one frame for the likelihood: the fixed residual spread for "gcc",
+        the frame's own sigma plus the fitted model error for "phase"."""
+        if sigma_s is None or self.model_s is None:
+            return self.noise_s
+        return float(np.hypot(sigma_s, self.model_s))
+
 
 def frame_delays(x: np.ndarray, rate: int, win: int, hop: int, max_tau_s: float = 0.3e-3, interp: int = 32):
     """x: (n, 2). Returns frame-centre times (s), delays tau (s, + = channel 0 later), and peak
@@ -71,20 +80,81 @@ def frame_delays(x: np.ndarray, rate: int, win: int, hop: int, max_tau_s: float 
     return np.array(t), np.array(tau), np.array(sharp)
 
 
+def frame_delay_phase(x2: np.ndarray, rate: int, sub: int = 512, fmin: float = 200.0,
+                      fmax: float = 8000.0) -> tuple[float, float]:
+    """Inter-mic delay of one frame (s, + = channel 0 later) and its standard error, from the
+    slope of the cross-spectrum phase: phase(f) = -2 pi f tau.
+
+    The phase must not wrap inside the band: |tau| < 1 / (2 fmax), 62 us for the default 8 kHz,
+    which also covers the ~2-sample (42 us) lag once seen between the 3S mics; the line is then
+    fitted directly. The cross-spectrum and coherence come from Welch averaging
+    over sub-blocks of the frame; each frequency is weighted by its phase precision
+    2K g2 / (1 - g2) (K blocks, g2 coherence), which is the maximum-likelihood delay for a
+    single source in uncorrelated noise (Hannan & Thomson 1973; Carter 1987). Coherent
+    zero-delay sound (diffuse reverb and room noise at closely spaced mics) still biases it
+    toward 0; the calibration's model error covers that. Sample coherence is biased up by
+    ~1/K where there is no signal, so it is debiased before weighting."""
+    hop = sub // 2
+    n = (len(x2) - sub) // hop + 1
+    if n < 2:
+        return 0.0, float("inf")
+    w = np.hanning(sub)
+    idx = np.arange(sub)[None, :] + hop * np.arange(n)[:, None]
+    X0 = np.fft.rfft(x2[idx, 0] * w, axis=1)
+    X1 = np.fft.rfft(x2[idx, 1] * w, axis=1)
+    sxy = (X0 * np.conj(X1)).mean(0)
+    sxx, syy = (np.abs(X0) ** 2).mean(0), (np.abs(X1) ** 2).mean(0)
+    f = np.fft.rfftfreq(sub, 1 / rate)
+    m = (f >= fmin) & (f <= min(fmax, 0.45 * rate))
+    k_eff = n * 0.5  # 50%-overlapped Hann blocks are not independent
+    g2 = np.abs(sxy[m]) ** 2 / (sxx[m] * syy[m] + 1e-30)
+    g2 = np.clip((g2 - 1 / k_eff) / (1 - 1 / k_eff), 0.0, 0.99)
+    wt = 2 * k_eff * g2 / (1 - g2)
+    om = 2 * np.pi * f[m]
+    den = float((wt * om * om).sum())
+    if den <= 0:
+        return 0.0, float("inf")
+    return float(-(wt * om * np.angle(sxy[m])).sum() / den), float(1 / np.sqrt(den))
+
+
 def fit_calibration(takes, device: str = "quest3s", names=None) -> PairCalibration:
-    """takes: list of (yaw_deg array, tau_s array, truth_deg) for labeled takes."""
-    A, b = [], []
-    for y, tau, truth in takes:
+    """takes: list of (yaw_deg array, tau_s array, truth_deg) for labeled takes, or
+    (yaw, tau, truth, sigma_s array) for phase delays: then the fit is weighted by each frame's
+    sigma plus a model error model_s, chosen so normalised residuals have unit robust spread."""
+    A, b, sig = [], [], []
+    for y, tau, truth, *rest in takes:
         rel = np.radians(truth - np.asarray(y))
         A.append(np.stack([np.sin(rel), np.cos(rel), np.ones_like(rel)], 1))
         b.append(np.asarray(tau))
-    A, b = np.concatenate(A), np.concatenate(b)
-    (u, v, c), *_ = np.linalg.lstsq(A, b, rcond=None)
-    # D sin(rel - phi) = D cos(phi) sin(rel) - D sin(phi) cos(rel)
-    res = b - A @ np.array([u, v, c])
+        sig.append(np.asarray(rest[0]) if rest else np.full(len(tau), np.nan))
+    A, b, sig = np.concatenate(A), np.concatenate(b), np.concatenate(sig)
+    phase = not np.isnan(sig).any()
+    wt = np.ones_like(b)
+    model = None
+    for _ in range(4 if phase else 1):
+        sw = np.sqrt(wt)
+        (u, v, c), *_ = np.linalg.lstsq(A * sw[:, None], b * sw, rcond=None)
+        # D sin(rel - phi) = D cos(phi) sin(rel) - D sin(phi) cos(rel)
+        res = b - A @ np.array([u, v, c])
+        if phase:
+            model = _model_error(res, sig)
+            wt = 1 / (sig ** 2 + model ** 2)
     noise = 1.4826 * float(np.median(np.abs(res - np.median(res))))
     return PairCalibration(float(np.hypot(u, v)), float(np.degrees(np.arctan2(-v, u))), float(c),
-                           max(noise, 1e-6), device, takes=list(names or []))
+                           max(noise, 1e-6), device, takes=list(names or []),
+                           delay_method="phase" if phase else "gcc", model_s=model)
+
+
+def _model_error(res, sig) -> float:
+    """Smallest m >= 0 with median(|res| / sqrt(sig^2 + m^2)) <= 0.6745 (unit normal spread)."""
+    z = lambda m: np.median(np.abs(res) / np.sqrt(sig ** 2 + m * m))
+    lo, hi = 0.0, 1e-3
+    if z(lo) <= 0.6745:
+        return 0.0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if z(mid) > 0.6745 else (lo, mid)
+    return float(hi)
 
 
 @dataclass
@@ -127,7 +197,8 @@ class PairLocator:
         ys = np.fromiter((p[1] for p in self._poses), float, len(self._poses))
         return float(np.interp(t, ts, ys))
 
-    def add_delay(self, source_id, t, tau_s, weight=1.0):
+    def add_delay(self, source_id, t, tau_s, weight=1.0, sigma_s=None):
+        """sigma_s: this frame's own delay uncertainty (phase delays); None = calibration noise."""
         if not self._poses or weight <= 0:
             return
         s = self._src.setdefault(source_id, _Src(self.cfg.n_az))
@@ -139,7 +210,7 @@ class PairLocator:
         yaw = self._yaw_at(t)
         c = self.calib
         r = tau_s - c.predict(self.az, yaw)
-        sig = c.noise_s
+        sig = c.frame_sigma(sigma_s)
         inl = self.cfg.p_inlier * np.exp(-0.5 * (r / sig) ** 2) / (sig * np.sqrt(2 * np.pi))
         out = (1 - self.cfg.p_inlier) / (2 * c.max_tau_s)
         s.loglik += weight * self.cfg.neff_ratio * np.log(inl + out)

@@ -10,8 +10,8 @@ real_eval.run, so a take that real_eval calls INVALID (no head motion, source lo
 room) is listed but left out of the summary.
 
 Methods: `level` (head-shadow levels, estimator.py), `tdoa` (inter-mic delay with the stored
-calibration, pair.py) and `tdoa-loo` (delay, calibration refitted without the take being
-scored). Takes inside the stored calibration are marked `*`: their `tdoa` score is
+calibration, pair.py), `tdoa-loo` (GCC-PHAT delays, calibration refitted without the take
+being scored) and `phase-loo` (phase-slope delays with per-frame sigma, same refit). Takes inside the stored calibration are marked `*`: their `tdoa` score is
 in-sample and flatters the method; `tdoa-loo` is the honest number.
 
 Per method it prints:
@@ -20,7 +20,8 @@ Per method it prints:
   (side takes, within 15 deg of +-90, are not counted);
 * seconds to lock: from the first estimate in the turn phase (real_eval drops the ~4 s of cue
   beeps and voice after the turn cue, so the clock starts when sound reaches the locator with
-  the head moving) until the bearing comes within 25 deg of the truth and stays there;
+  the head moving) until the bearing is within 25 deg of the truth with the locator committed
+  (state tracking or locked, not ambiguous) and stays so, final estimate included;
 * honest confidence: confidence is the posterior mass within 20 deg of the peak, so among
   estimates that say c, a share c should be within 20 deg of the truth. Reported per
   confidence bin over the timeline (consecutive estimates are correlated, so read the counts
@@ -36,9 +37,10 @@ from pathlib import Path
 import numpy as np
 
 from .pair import PairCalibration, fit_calibration
-from .real_eval import circ_diff, delay_observations, run
+from .real_eval import circ_diff, is_valid, observations, run
 
-METHODS = ("level", "tdoa", "tdoa-loo")
+METHODS = ("level", "tdoa", "tdoa-loo", "phase-loo")
+LOO = {"tdoa-loo": "gcc", "phase-loo": "phase"}
 LOCK_TOL_DEG = 25.0
 HIT_DEG = 20.0          # matches the +-20 deg window that defines BearingEstimate.confidence
 SIDE_BAND_DEG = 15.0
@@ -70,10 +72,12 @@ def front_back_right(est: float, truth: float) -> bool | None:
 
 
 def seconds_to_lock(timeline, truth: float, t0: float, tol: float = LOCK_TOL_DEG) -> float | None:
-    """Time from t0 until the bearing is within tol of truth and stays there; None if never."""
-    pts = [(t, abs(circ_diff(w, truth))) for t, w, *_ in timeline if t >= t0]
+    """Time from t0 until the bearing is within tol of truth in a committed state (tracking or
+    locked) and stays so; None if never. timeline: (t, world deg, conf, state)."""
+    pts = [(t, abs(circ_diff(w, truth)) <= tol and s in ("tracking", "locked"))
+           for t, w, _, s in timeline if t >= t0]
     k = len(pts)
-    while k > 0 and pts[k - 1][1] <= tol:
+    while k > 0 and pts[k - 1][1]:
         k -= 1
     if k == len(pts):
         return None
@@ -97,33 +101,37 @@ def calibration_table(points) -> tuple[list[tuple[float, float, float, int]], fl
 def score_take(take: Path, method: str, calib: PairCalibration | None) -> dict:
     meta = json.loads((take / "meta.json").read_text())
     truth = float(meta["truth_deg"])
-    r = run(take, truth, 12.0, verbose=False, method="tdoa" if method.startswith("tdoa") else "level",
+    r = run(take, truth, 12.0, verbose=False, method="level" if method == "level" else "tdoa",
             calib=calib, timeline_s=TIMELINE_S)
     tl = [(t, w, c, s) for t, w, c, s in r["timeline"] if r["go"] is None or t >= r["go"]]
     t0 = tl[0][0] if tl else 0.0
+    final = (tl[-1][0] + 1e-3 if tl else t0, r["world_deg"], r["confidence"], r["state"])
     return {
         "take": take.name, "method": method, "truth": truth, "region": region(truth),
         "est": r["world_deg"], "err": abs(circ_diff(r["world_deg"], truth)), "conf": r["confidence"],
         "state": r["state"], "valid": r["valid"], "snr_db": r["snr_db"], "yaw_std": r["yaw_std"],
         "fb_right": front_back_right(r["world_deg"], truth),
-        "lock_s": seconds_to_lock(r["timeline"], truth, t0),
-        "conf_points": [(c, abs(circ_diff(w, truth)) <= HIT_DEG) for _, w, c, _ in tl],
+        "lock_s": seconds_to_lock(tl + [final], truth, t0),
+        "conf_points": [(c, abs(circ_diff(w, truth)) <= HIT_DEG) for _, w, c, s in tl if s != "unobserved"],
         "in_calib": method == "tdoa" and calib is not None and take.name in calib.takes,
     }
 
 
-def loo_calibrations(takes: list[Path], device: str) -> dict[str, PairCalibration]:
-    """For each take, the delay calibration fitted on all the other labeled takes."""
+def loo_calibrations(takes: list[Path], device: str, delay: str = "gcc",
+                     valid: set[Path] | None = None) -> dict[Path, PairCalibration]:
+    """For each take, the delay calibration fitted on all the other valid labeled takes."""
     obs = {}
     for tk in takes:
-        _, y, tau, meta = delay_observations(tk)
+        if valid is not None and tk not in valid:
+            continue  # no head motion or source lost in the room: not calibration data
+        (y, tau, *sig), meta = observations(tk, delay)
         if len(tau) >= 20:
-            obs[tk.name] = (y, tau, float(meta["truth_deg"]))
+            obs[tk] = (y, tau, float(meta["truth_deg"]), *sig)
     out = {}
     for tk in takes:
-        others = [o for name, o in obs.items() if name != tk.name]
+        others = {k: o for k, o in obs.items() if k != tk}
         if len(others) >= 2:
-            out[tk.name] = fit_calibration(others, device, [n for n in obs if n != tk.name])
+            out[tk] = fit_calibration(list(others.values()), device, [k.name for k in others])
     return out
 
 
@@ -139,7 +147,7 @@ def summarize(rows: list[dict]) -> dict:
     table, ece = calibration_table([p for r in ok for p in r["conf_points"]])
     sure = [h for r in ok for c, h in r["conf_points"] if c >= 0.9]
     return {
-        "n": len(ok), "n_invalid": len(rows) - len(ok),
+        "n": len(ok), "n_invalid": len(rows) - len(ok), "n_in_calib": sum(r["in_calib"] for r in ok),
         "median_err": float(np.median(errs)) if errs else None,
         "p90_err": float(np.percentile(errs, 90)) if errs else None,
         "by_region": {g: [r["err"] for r in ok if r["region"] == g] for g in ("front", "side", "behind")},
@@ -164,7 +172,9 @@ def print_report(rows: list[dict], summaries: dict[str, dict]) -> None:
               f"{r['conf']:5.2f} {r['state']:19s} {lock:>6s}  {note}")
     print(f"\n{TARGETS}")
     for m, s in summaries.items():
-        print(f"\n== {m}: {s['n']} valid takes" + (f" ({s['n_invalid']} invalid, not scored)" if s["n_invalid"] else ""))
+        print(f"\n== {m}: {s['n']} valid takes" + (f" ({s['n_invalid']} invalid, not scored)" if s["n_invalid"] else "")
+              + (f"; {s['n_in_calib']} inside the stored calibration, so in-sample (see tdoa-loo)"
+                 if s["n_in_calib"] else ""))
         if not s["n"]:
             continue
         print(f"  error (deg)          median {s['median_err']:5.1f}   p90 {s['p90_err']:5.1f}")
@@ -187,13 +197,14 @@ def print_report(rows: list[dict], summaries: dict[str, dict]) -> None:
 
 def bench(takes: list[Path], methods=METHODS, calib: PairCalibration | None = None):
     calib = calib or PairCalibration.default()
-    loo = loo_calibrations(takes, calib.device) if "tdoa-loo" in methods else {}
+    valid = {tk for tk in takes if is_valid(tk)} if any(m in LOO for m in methods) else None
+    loo = {m: loo_calibrations(takes, calib.device, LOO[m], valid) for m in methods if m in LOO}
     rows = []
     for tk in takes:
         for m in methods:
-            if m == "tdoa-loo" and tk.name not in loo:
+            if m in loo and tk not in loo[m]:
                 continue
-            rows.append(score_take(tk, m, loo.get(tk.name) if m == "tdoa-loo" else calib))
+            rows.append(score_take(tk, m, loo[m][tk] if m in loo else calib))
     summaries = {m: summarize([r for r in rows if r["method"] == m]) for m in methods}
     return rows, summaries
 

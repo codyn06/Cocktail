@@ -42,6 +42,9 @@ class LiveLocator:
         assert method in ("level", "tdoa")
         self.ingest, self.cfg, self.method = ingest, cfg or LocateConfig(), method
         self.calib = (calib or PairCalibration.default()) if method == "tdoa" else None
+        if self.calib is not None and self.calib.delay_method != "gcc":
+            raise ValueError("live tdoa measures GCC-PHAT delays; this calibration was fitted on "
+                             f"{self.calib.delay_method!r} delays")
         self.lock = threading.Lock()
         self._reset()
 
