@@ -1,6 +1,6 @@
 # feat/locate-delay-ml
 Status: in progress (2026-10-25). Stacked on feat/locate-bench.
-Owner: Sadie / Claude Code   PR: not opened (GitHub CLI not installed on this machine yet)
+Owner: Sadie / Claude Code   PR: https://github.com/codyn06/Cocktail/pull/47 (draft, base feat/locate-bench / #46)
 
 Plan step 3 (delay method), done without real takes: none are on this machine
 (`hub/recordings/` is gitignored; Cody and Lalitha have them).
