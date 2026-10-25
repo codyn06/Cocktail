@@ -49,8 +49,13 @@ def cmd_preflight(args) -> int:
         "notes": [] if ff.ffmpeg else ["ffmpeg not found: bundles use PNG frame sequences; set COCKTAIL_FFMPEG "
                                        "or --ffmpeg to enable annotated.mp4/source_video.mp4"],
     }
+    if args.av:
+        from av_scene import preflight
+
+        report["evidence_tier"] = "hardware-tested (this laptop) when checks pass"
+        report["av"] = preflight.run_av_checks(args.media)
     print(json.dumps(report, indent=2))
-    return 0
+    return 0 if report.get("av", {"ok": True})["ok"] else 1
 
 
 def cmd_inspect(args) -> int:
@@ -126,6 +131,8 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("preflight", help="report Phase 1 capabilities (no models)")
     p.add_argument("--ffmpeg", default=None, help="explicit ffmpeg path (else COCKTAIL_FFMPEG / PATH)")
+    p.add_argument("--av", action="store_true", help="also check Phase 2: CUDA, torchcodec decode, HF gated access")
+    p.add_argument("--media", default=None, help="media file for the --av decode check (else a synthetic clip)")
     p.set_defaults(fn=cmd_preflight)
     p = sub.add_parser("inspect", help="summarise a manifest.json or bundle folder")
     p.add_argument("path")
