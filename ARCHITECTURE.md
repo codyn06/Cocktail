@@ -17,7 +17,8 @@ Each decision has a status:
 - **Open**: not decided.
 
 Evidence labels follow the team convention: hardware-tested, mocked, replayed, simulated,
-untested. Last updated 2026-10-24 (after PRs #20, #21, #28, #30, #32).
+untested. Last updated 2026-10-25 (after PRs #37-#51). Anything about direction accuracy is
+simulated unless it says "real 3S".
 
 ## System overview
 
@@ -35,16 +36,19 @@ untested. Last updated 2026-10-24 (after PRs #20, #21, #28, #30, #32).
                                                  locate: bearing from head movement      [C4]
                                                                │ GET /sources (slots s1, s2, ...)
                                                                ▼
-                                                 track: stable ids t1, t2, ... [D1, not wired yet]
+                                                 track: stable ids t1, t2, ... (runs inside events)  [D1]
                                                                │
- labels, arrows ◀── /events (JSON: sources, state) ◀──── sources (label + bearing + state)
- 3D playback    ◀── /audio/out (binary, 48 kHz)    ◀──── chosen sound (E1, not built)
+ labels, arrows ◀── /events (JSON, every 100 ms) ◀──── events: tracker + /tracks              [D1, #37]
+ 3D playback    ◀── /audio/out (binary, 48 kHz)    ◀──── out: chosen voice + room                [M2, #42]
+ select / stop  ── InputEvent on /ingest/pose ────▶ events/selection: choice = a tracker id
 ```
 
 The mock headset (`hub/mockclient`) replaces the left column for testing without a headset.
-The Quest side (left column) is merged (PRs #18, #28) and hardware-tested for streaming; the
-hub currently answers it with ingest, separation and `/sources`, and does not yet push
-`sources.updated` events or `/audio/out`.
+The Quest side (left column) is merged (PRs #18, #28, #38) and hardware-tested for streaming.
+The whole hub loop is now merged and runs on simulated and replayed sessions: the tracker sits
+after `LiveLocator` inside `hub/events` and feeds `/events`; `hub/out` sends the chosen voice back.
+What has **not** been done: the chosen-voice audio heard on the headset, camera outlines (SAM 3,
+C5), and any of it on real 3S recordings.
 
 ## Decisions
 
@@ -56,9 +60,12 @@ hub currently answers it with ingest, separation and `/sources`, and does not ye
   private hotspot.
 
 ### D2. Hub stack: Python 3.12, one uv project in `hub/`, one folder per task
-**Merged** (PRs #10, #15, #11, #21, #30). Packages: `protocol/` (A2), `ingest/` (B3),
-`mockclient/` (B4), `separate/` (A6/C3), `locate/` (A8/C4), `track/` (D1). The separation
-benchmark harness from PR #20 lives in `eval/` with its own `bench` dependency group.
+**Merged** (PRs #10, #15, #11, #21, #30, #37, #42, #46-#51). Packages: `protocol/` (A2),
+`ingest/` (B3), `mockclient/` (B4), `separate/` (A6/C3), `locate/` (A8/C4), `track/` (D1),
+`events/` (live tracker and `/events`), `out/` (`/audio/out`). Early phases without models:
+`vision/` (mask store), `who/` (audio-visual matcher), `replay/` (residual math), `render/`
+(viewer bundle) and `av_scene/` (D17). The separation benchmark harness from PR #20 and the
+real-data tools (D16) live in `eval/`, the former with its own `bench` dependency group.
 - **Why:** the ML ecosystem is Python. One project with one lockfile avoids version drift.
   One owner per folder keeps parallel work from conflicting (PRD section 14).
 - **GPU dependencies are an opt-in group** (`uv sync --group gpu`): PyTorch built for CUDA
@@ -202,12 +209,49 @@ benchmark harness from PR #20 lives in `eval/` with its own `bench` dependency g
   - **Caveat:** the headset may apply some processing in hardware even on the UNPROCESSED
     mic source (the processed sources clearly do: mono, heavy noise suppression). Per-channel
     processing would blur exactly the sub-sample delays this mode relies on.
+- **Since then (PRs #46, #50, #51; all simulated, nothing re-measured on a real 3S):**
+  - **Tools.** `locate.bench` scores `level`, `tdoa`, and leave-one-out `tdoa-loo` / `phase-loo` /
+    `adapt-loo` on the same labeled takes (median and p90 error by front / side / behind, front/back,
+    seconds to lock, and whether the confidence is honest). Use `tdoa-loo` for any baseline: the stored
+    calibration was fitted on 6 takes, so plain `tdoa` is graded on its own training data.
+    `locate.diagnose` checks a take against what the delay model assumes (own fit, audio-vs-pose timing
+    shift, clock span, channel coherence). `locate.pairsim` writes simulated 3S takes and two-talker
+    scenes; `locate.scenes` and `locate.score_live --oracle` score locating each separated stream with
+    the true stems standing in for the separation model.
+  - **What limits the delay method on the real 3S is not yet known.** The real calibration leaves a
+    delay residual of 13.7 us against a swing of only 14.6 us. In simulation, per-frame delay noise is
+    about 1 us (known delay, even at 0 dB SNR) and a very reverberant room leaves about 2 us. So
+    something the model leaves out dominates on the real headset: timing between audio and head pose,
+    headset-side processing of the "UNPROCESSED" mics, or constants that change between takes.
+    `locate.diagnose` on real takes decides this; it has not been run on any.
+  - **A calibration depends on the rate it was fitted at.** In simulation the channel offset reads about
+    5 us higher at 16 kHz than at 48 kHz, which put a talker 49 deg off on the live path. Calibration
+    files now record `rate_hz` and `win`; the stored `quest3s.json` is a 48 kHz fit and the live hub
+    (which measures at 16 kHz) warns about it. Refit with `real_eval calibrate --rate 16000`.
+  - **Delay estimators.** GCC-PHAT stays the default. A phase-slope estimate with a per-frame error
+    bar (`--delay phase`) and a per-source swing/offset model (`PairConfig.adapt`) are opt-in because
+    neither beat it on 16 simulated takes (median 7.0 vs 8.5 deg but p90 23 vs 18.5) or 12 simulated
+    two-talker scenes (median 8.5 vs 10.0 deg, both talkers within 25 deg in 10 vs 11 scenes).
+  - **Confidence.** The posterior is blurred by 16 deg (`sys_sd_deg`) before confidence is read, so
+    confidence can only go down and tops out near 0.8; the bearing still comes from the sharp peak.
+    That does not stop a confidently wrong bearing (the 79 deg miss "locked" at 0.80), so "when it says
+    90% it is right 90% of the time" is **not** shown. Settings that match the hit rate on the simulation
+    (`pair.sim_tuned()`, less tempering and a looser ambiguity rule) are opt-in, because the simulation
+    is underconfident while the real 3S was overconfident. Held-out simulated two-talker scenes: median
+    10.5 deg, p90 27.0, front/back right 95.2%, both talkers within 25 deg in 8 of 12; default confidence
+    ECE 0.44 (says 0.43, right 0.79), `sim_tuned` ECE 0.16 (says 0.69, right 0.79).
+  - **The live default is still `level`** (`python -m separate --locate-method tdoa` opts in), and
+    `level` fails on the real 3S. Switching the default needs real takes.
+  - **Design only:** `hub/locate/FUSION.md` describes combining delay, level and head-motion history in
+    one posterior and lists the real measurements that would justify building it.
 - **Open:**
-  - more labeled takes (especially behind, and with a louder source) to firm up the
-    calibration and the confidence;
+  - labeled real takes at every angle and distance, scored with `locate.bench` (the data plan is D16);
+  - `locate.diagnose` on those takes, then fix what it points at;
+  - a goodness-of-fit gate for the `locked` state and a per-device confidence floor, both needing real data;
   - camera bearings (SAM 3) for people in view are likely the more reliable route on the 3S;
   - audio channel order (left/right) is still unconfirmed on the headset;
-  - the level estimator's male-voice bias and overconfidence (A8).
+  - the level estimator's male-voice bias and overconfidence (A8);
+  - per-headset calibration needs a headset id in the protocol `Hello` (today it only says `quest3s`).
 
 ### D9. Vision: the SAM 3 image model per frame, not the SAM 3.1 tracker
 **Proposed** (from A3 measurements, hardware-tested; C5 not built).
@@ -219,6 +263,10 @@ benchmark harness from PR #20 lives in `eval/` with its own `bench` dependency g
 - **Prompt wording matters:** "child" scored 0.96, "person" only 0.27 on the same photo. C5
   should try several prompts or lower the threshold.
 - **Expect ~2.5 frames per second.** Outlines will lag behind moving people.
+- **Camera frames can now be recorded and replayed** (PR #44, replayed): `record_session.py` saves
+  `video/<device_ts_us>.jpg` with a per-frame header in `video/frames.jsonl`, `mockclient.Session.load` and
+  `mockclient.replay` read that layout, and a take can carry `talkers.csv` (who talks when, at what
+  bearing) to score "box on the real talker". `hub/vision` holds only the model-free mask store so far.
 
 ### D10. Clean replay: replay MossFormer2's stream; SAM Audio is an optional cleaner
 **Proposed** (from A3 measurements and a listening test; D3 task not built).
@@ -274,7 +322,7 @@ benchmark harness from PR #20 lives in `eval/` with its own `bench` dependency g
   correct size.
 
 ### D14. Tracking: stable source ids from world bearing and label
-**Merged, not wired into the live hub** (PR #30, D1, by Lalitha; simulated).
+**Merged and wired into the live hub** (PR #30 tracker, PR #37 events; simulated and replayed).
 - `hub/track` turns the separator slots plus their world bearings into stable sources `t1`,
   `t2`, ... with a state (`tracking`, `last_seen`, `lost`) and an `in_view` flag. Input and
   output are protocol `Source` objects, so it slots in after `LiveLocator`.
@@ -282,22 +330,87 @@ benchmark harness from PR #20 lives in `eval/` with its own `bench` dependency g
   different slot keeps their id (the case the separator leaves open, D7). Ids are never reused.
 - `update()` must run on every tick (~10 Hz), even when nothing is heard; that's where
   `last_seen` and `lost` happen.
-- **Next:** call it from the hub after `LiveLocator` and push `sources.updated` to the headset.
-  It inherits D8's accuracy: a 30–45° male-voice bias can split one person into two tracks.
+- **Now:** `hub/events` owns the Tracker, calls `update()` every 100 ms and publishes `/tracks` and
+  `/events`; the headset's choice is a tracker id (D15). Bearing smoothing is a time constant now
+  (`smooth_tau_s` 0.6 s, `follow_tau_s` 0.3 s, PR #50) instead of a per-tick gain. Simulated, on the
+  live locator's output: tick-to-tick step p95 0.32 -> 0.20 deg, but a 20 deg jump takes 0.85 s instead
+  of 0.45 s to cover 80%. `python -m track.jitter` measures that. It inherits D8's accuracy: a 30–45°
+  male-voice bias can split one person into two tracks.
+
+### D15. The chosen voice goes back on `/audio/out`: inner = the voice, outer = the room
+**Merged** (PR #42, M2; replayed and mocked, **not yet heard on a headset**). Details in
+[`hub/out/README.md`](hub/out/README.md).
+- **Choice = a tracker id.** The headset's select / stop / next / prev arrive as `InputEvent` on
+  `/ingest/pose`; selecting by ray picks the non-lost source nearest the ray within 30 deg. Per audio
+  frame the Tracker says which separator slot carries the chosen id, so a slot swap or a pause does not
+  change who you hear. Voice memory (D7) only helps the two voice slots stay consistent.
+- **Wire format** matches `AudioOutPlayer.cs`: 960 frames, 48 kHz, 2 channels, s16le, every 20 ms.
+  `layers` (what the Quest uses): channel 0 inner, channel 1 outer, `target_bearing_deg` for the 3D
+  position. `stereo` is for simple clients.
+- **Volumes are applied on the headset** for `layers`, so the hub only stores them; applying them
+  twice would double the change.
+- **Delay:** audio waits 0.3 s so the Tracker has seen the same hop, plus 0.2 s of jitter margin after
+  idle; the queue is bounded at 1.8 s. This comes on top of D7's 1–2 s.
+- **Measuring the margin (PR #43, simulated):** `python -m separate.measure_chosen` reports how many dB
+  louder the chosen voice is than the others, and how soon after selecting. It needs ground-truth stems,
+  so it refuses real recordings.
+
+### D16. Real-data plan: labeled takes, a data check, a round-trip delay test, alerts rules
+**Merged** (PR #49; synthetic and mocked only: nothing was run on a Quest or on real recordings).
+- **Takes.** `run_locate_take.ps1` records pink noise or speech at a known angle, now labeled with
+  distance, head-movement size (small / normal / large) and stimulus, plus `audio_chunks.csv` with every
+  chunk's device timestamp. The grid to fill is 12 angles (every 30 deg) x 0.5 / 1 / 2 m.
+- **Data check** (`eval/dataset_check.py`): a take passes if the source is at least 6 dB over the room,
+  the head turned enough, the angle is labeled and the clocks look sane (pose gaps, audio-vs-pose span,
+  chunk timestamps measured against their median offset so one noisy chunk does not fail a take,
+  recorder restarts). A grid cell counts only with a passing take; exit 0 needs a full grid and 90%
+  passing. Takes recorded before the labels existed show up in an "unlabeled" column and are warned about,
+  not failed. The tolerances are guesses until real takes exist.
+- **Round-trip delay** (`eval/delay_test.py`): a chirp is sent on `/audio/out`, played by the headset,
+  heard by its mic and timed when it returns on the mic stream, so no clock sync or app change is
+  needed. At least 30 trials, median / p90 / worst. The pass budget (150 ms median, 300 ms worst) is an
+  assumption. A mic-to-hub-to-headset echo would need a hub change that does not exist. Only the mock
+  mode has been run.
+- **Alerts** (`eval/alerts_rules.json`, `eval/alerts_check.py`): smoke alarm, siren and the wearer's name,
+  checked offline. The live pipeline only carries coarse labels, so a smoke alarm can fire only as a
+  non-critical "alarm sound" until the fine AudioSet classes are exposed; the name rule needs speech
+  recognition the repo does not have.
+- **Results** (`eval/results_table.py`): one table from `locate.bench --json` and the delay JSON against
+  the location targets.
+
+### D17. Autonomous audio-visual sound discovery: specified, phase 1 only (no models)
+**Merged** (PRs #45 spec, #48 phase 1; deterministic code and fixtures only). The spec
+([`docs/AV_SOUND_DISCOVERY_SPEC.md`](docs/AV_SOUND_DISCOVERY_SPEC.md)) turns a recorded scene into
+persistent sound sources: events, acoustic sources, visual tracks and time-bounded associations kept
+distinct, with bounded refinement. Phase 1 ships contracts, a cache, spatial pair-delay and aliasing
+checks (`hub/locate/av_spatial.py`), residual math, envelopes, the matcher and a viewer bundle
+(`hub/av_scene`, `hub/who`, `hub/replay`, `hub/render`, `hub/vision`, `eval/av_scene`), run with
+`python -m av_scene preflight | inspect | serve | fixture`. It needs no weights or GPU and is not in the
+live path; the model phases (SAM 3 masks, SAM Audio stems) are not built. It does not change the live
+defaults.
 
 ## Open items
 
 - **Integration owner:** unassigned. `.agents/decisions.md` is out of date ("no app stack
   chosen") and should be updated by whoever takes the role. Its decisions on agent tooling and
   Gemma still stand.
+- **Real data is the bottleneck.** Nothing about direction accuracy, the data-check tolerances, the
+  alerts thresholds or the round-trip delay is measured on a real 3S yet. Needs people: tape marks
+  every 30 deg at 0.5 / 1 / 2 m, the shared recordings folder, a headset build, the recording sessions
+  (D16), the two-person test scene. Then run `eval/dataset_check.py`, `locate.diagnose` and
+  `locate.bench`, and record the baseline.
+- **Chosen voice heard on the headset:** `/audio/out` (D15) is tested against mocks only; playback of
+  real hub audio has not been checked by ear (B6).
 - **Low-latency modes (F1) need a different separator:** D7's ~1 s delay is too slow for
   Fast/Balanced listening. PR #20's benchmark (`eval/`) found no candidate real-time in Fast
   mode yet; reconcile with D7.
-- **Wire the live loop end to end:** tracker (D14) after `LiveLocator`, `sources.updated` to the
-  headset UI (PR #28), then `/audio/out` (E1).
+- **Camera outlines (C5/M4):** SAM 3 per frame (D9) is measured but not wired; frames can be recorded
+  and replayed (PR #44).
 - **Headset checks:** mic channel order (left/right), tracking-origin yaw (D8), real delay
-  over Wi-Fi vs USB. Mic count and raw access are confirmed (D3).
-- **Locating accuracy on real takes** (PR #32 tooling) and the estimator's male-voice bias and
-  overconfidence (A8).
+  over Wi-Fi vs USB (the delay test, D16). Mic count and raw access are confirmed (D3).
+- **Locating:** see D8. The live default is still the `level` method.
+- **A flaky test:** `tests/test_events.py::test_simulated_two_voice_music_replay_events` asserts
+  timing from a real-time replay and fails about half the time, also on `main`; it makes every
+  branch's suite look red.
 - **Direction gate threshold** (D7) is tuned on simulated ear-level mics; calibrate per device.
 - **3+ voices** (D7): parked in PR #27.

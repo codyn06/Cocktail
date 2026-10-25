@@ -9,11 +9,16 @@ Live progress: [`docs/STATUS.md`](docs/STATUS.md).
 Research and implementation proposal for autonomous audio-visual discovery:
 [`docs/AV_SOUND_DISCOVERY_SPEC.md`](docs/AV_SOUND_DISCOVERY_SPEC.md).
 
-> **Status (2026-10-24):** the hub runs end to end on simulated data: ingest, a mock
-> headset, live separation with labels, and direction finding (`GET /sources`). The Quest
-> app streams mic audio (2 raw channels, 48 kHz), head pose and camera to the hub
-> (hardware-tested) and has a headset UI. Not yet: the tracker (`hub/track`) in the live
-> loop, sources pushed to the headset, sound sent back, and a passing real-world test.
+> **Status (2026-10-25):** the whole hub loop exists and runs on simulated and replayed data:
+> ingest, live separation with labels, direction finding, the tracker (stable ids), `/events`
+> pushed to the headset every 100 ms, and the chosen voice plus the room sent back on `/audio/out`.
+> The Quest app streams mic audio (2 raw channels, 48 kHz), head pose and camera to the hub
+> (hardware-tested) and has a speaker HUD. Tools to record, check and score real takes are in
+> place. **Not yet:** a passing real-world direction test (no labeled real takes have been
+> scored on the new tools), the chosen-voice audio heard on the headset, camera-based
+> outlines (SAM 3), and the full acceptance test. Nothing about accuracy on the real headset
+> is measured yet: every direction number in this repo is from simulation unless it says
+> "real 3S".
 
 ## Repository layout
 
@@ -25,11 +30,11 @@ Research and implementation proposal for autonomous audio-visual discovery:
 | `.agents/` | Canonical roles, skills, sync script, decisions, and branch handoffs |
 | `.claude/`, `.codex/`, `.pi/`, `.agent/` | Per-tool copies generated from `.agents/` |
 | `graphify-out/` | Local code knowledge graph (gitignored, rebuilt per clone) |
-| `hub/` | Laptop hub (Python 3.12): `protocol/` wire format, `ingest/` server, `mockclient/` fake headset, `separate/` live separation, `locate/` direction finding, `track/` stable source ids |
-| `quest/` | Unity project for the Quest headset ([setup](quest/README.md)); `quest/tools/` has the mock hub, headset validation and the real-world recorder |
-| `eval/` | Streaming separation benchmark ([README](eval/README.md)) |
+| `hub/` | Laptop hub (Python 3.12), one package per task: `protocol/` wire format, `ingest/` server, `mockclient/` fake headset and recorded-session replay, `separate/` live separation and labels, `locate/` direction finding and its scoreboards, `track/` stable source ids, `events/` the tracker and `/events` feed ([README](hub/events/README.md)), `out/` the chosen voice on `/audio/out` ([README](hub/out/README.md)). Early phases only (no models yet): `vision/` mask store, `who/` audio-visual matcher, `replay/` residual math, `render/` viewer bundle, `av_scene/` autonomous sound discovery |
+| `quest/` | Unity project for the Quest headset ([setup](quest/README.md)); `quest/tools/` has the mock hub, headset validation, the take recorder (`record_session.py`) and the real-world take script (`run_locate_take.ps1`) |
+| `eval/` | Streaming separation benchmark, plus the real-data tools: `dataset_check.py`, `delay_test.py`, `alerts_check.py`, `results_table.py` ([README](eval/README.md)) |
 | `ARCHITECTURE.md` | System overview and architectural decisions, with their status and evidence |
-| `docs/` | Plan (`QUEST_PRD.txt`) and status board (`STATUS.md`) |
+| `docs/` | Plan (`QUEST_PRD.txt`), status board (`STATUS.md`), audio-visual discovery spec (`AV_SOUND_DISCOVERY_SPEC.md`) |
 
 ## Requirements at a glance
 
@@ -119,7 +124,8 @@ the headset (or the mock client) and runs all processing. Run every command from
 ```sh
 cd hub
 uv sync             # creates hub/.venv with the hub dependencies
-uv run pytest       # all tests should pass
+uv run pytest       # all tests should pass, except test_events.py::test_simulated_two_voice_music_replay_events,
+                    # a real-time timing test that fails about half the time (also on main)
 ```
 
 ### GPU environment
@@ -224,6 +230,34 @@ The suite writes each scene's mix and output streams as WAVs to `hub/sessions/su
 for listening. `--voice-memory` adds identity similarity traces and per-hop compute timing to
 `results.json`, with CUDA memory in `cuda_memory.json`.
 
+### The live loop: tracked sources, events and sound back
+
+The same `python -m separate` entry point serves the whole loop. Nothing extra to start.
+
+| Endpoint | What |
+|---|---|
+| `GET /sources` | The locator's raw view: one entry per separator slot (`s1`, `s2`, ...) |
+| `GET /tracks` | The tracker's view: stable ids `t1`, `t2`, ... with label, world bearing, confidence and state |
+| `WS /events` | The same tracked sources pushed to the headset every 100 ms (also empty updates, and state changes after audio stops). Details: [`hub/events/README.md`](hub/events/README.md) |
+| `WS /audio/out` | The chosen voice (inner layer) plus the rest of the room (outer layer), 48 kHz, one frame every 20 ms. `GET /audio/out/status` shows the choice, queue, drops and underruns. Details: [`hub/out/README.md`](hub/out/README.md) |
+
+The headset's select / stop / next / prev arrive as `InputEvent` on `/ingest/pose`. A selection is
+a tracker id, so it follows the same talker through separator slot swaps and pauses. Delay: the
+hub holds audio about 0.3 s so the tracker has seen the same hop, plus up to 0.2 s of jitter margin
+after idle; the separator adds its own 1 to 2 s (see `ARCHITECTURE.md`, D7 and D15).
+
+Headset-free checks: `uv run pytest tests/test_events.py tests/test_audio_out.py` (no GPU needed). The
+events test uses a scripted replay with mocked perception, so it checks transport, ids and timing, not
+acoustic accuracy. `tests/test_events.py::test_simulated_two_voice_music_replay_events` asserts an
+8 to 12 Hz event rate from a real-time replay and is known to fail about half the time (also on `main`).
+
+How much louder is the chosen voice than the rest, and how soon? (simulated sessions with ground
+truth; refuses real recordings):
+
+```sh
+uv run --group gpu python -m separate.measure_chosen sessions/suite/scene01/session
+```
+
 ### Real-world direction test (Quest 3S)
 
 Records a take on the headset with a sound source at a known angle and scores the direction
@@ -248,9 +282,60 @@ SAM 3. Frames take about 0.5 MB/s; use `--video-fps N`, `--max-frames N` or `--n
 (`start_s,end_s,talker_id,bearing_deg,note`, seconds since the first audio sample; format and helpers in
 `hub/mockclient/talkers.py`).
 
-To compare every direction method on all labeled takes at once (median / 90th-percentile
-error, front/back, seconds to lock, whether the confidence is honest), from `hub/`:
-`uv run python -m locate.bench recordings` (`--json out.json` saves the numbers).
+Label every take so the coverage grid can be checked: `run_locate_take.ps1 -Distance 1 -Motion normal
+-Stimulus pink` (`-Motion` small / normal / large, `-Stimulus` pink / speech; speech needs
+`-StimulusWav <file.wav>`). The recorder also writes `audio_chunks.csv` (per-chunk device timestamps)
+so dropped audio and clock drift can be detected.
+
+### Checking and scoring real takes
+
+All of these take a folder of takes (`hub/recordings/`, gitignored; recordings go in the team's
+shared folder, never in git).
+
+```sh
+# from the repo root: coverage grid (12 angles x 0.5 / 1 / 2 m) and PASS/FAIL per take
+uv run --project hub python eval/dataset_check.py hub/recordings
+
+# from hub/: every direction method on all labeled takes (median / p90 error by region,
+# front/back right, seconds to lock, whether the confidence is honest); --json saves it
+uv run python -m locate.bench recordings
+# why does the delay method miss? (fit residual, audio-vs-pose timing shift, clock span, channel coherence)
+uv run python -m locate.diagnose recordings/<take> ...
+# fit a delay calibration at the rate the live hub measures at (16 kHz)
+uv run python -m locate.real_eval calibrate recordings/<take> ... --rate 16000 --out my-calib.json
+```
+
+`locate.bench` reports `tdoa-loo` (calibration refitted without the take being scored); use that, not
+plain `tdoa`, for any baseline, because the stored calibration was fitted on a handful of takes. A
+calibration records the sample rate it was fitted at; the stored `locate/calib/quest3s.json` is a 48 kHz
+one, and the live hub (which measures at 16 kHz) warns about that. The live entry point has no
+`--calib` option: it loads `locate/calib/quest3s.json`, so swapping in a 16 kHz fit means replacing that
+file, which is a team decision (open a PR).
+
+No headset? `python -m locate.pairsim` writes simulated Quest 3S takes in the recorder's format (and,
+with `--scene`, a two-talker session), and `locate.scenes` / `locate.score_live --oracle` score locating
+each separated stream with the true stems standing in for the separation model (no GPU). These are
+simulations: they test the method and the plumbing, not the real headset.
+
+```sh
+cd hub
+uv run python -m locate.pairsim sessions/pairsim --angles 0,90,180,-90,45,135,-45,-135 --seeds 2
+uv run python -m locate.real_eval calibrate sessions/pairsim/sim-* --rate 16000 --out sessions/pairsim-calib16.json
+uv run python -m locate.scenes sessions/scenes --calib sessions/pairsim-calib16.json
+```
+
+Round-trip delay (headset to hub and back, 30 or more trials) and the alerts rules:
+
+```sh
+uv run --project hub python eval/delay_test.py --mock          # on the laptop, mocked headset
+uv run --project hub python eval/alerts_check.py --help       # rules in eval/alerts_rules.json
+uv run --project hub python eval/results_table.py --help      # one markdown table against the targets
+```
+
+The delay test has only run against the mock; running it on a Quest needs `adb reverse` and the app
+(see the top of `eval/delay_test.py`). Targets for locating: 15 degrees or less in front, 25 behind,
+front/back right 95% of the time, locked within 3 s, two speakers within 25 degrees, and a confidence
+that is right about as often as it says.
 
 ### Quest app
 
