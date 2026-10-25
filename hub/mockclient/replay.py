@@ -78,8 +78,11 @@ async def replay(s: Session, url: str, speed: float = 1.0, epoch: int = 0, fake_
                 await wp.send(m.model_dump_json())
             else:
                 data = FAKE_JPEG if x is None else Path(x).read_bytes()
-                h = p.VideoFrame(seq=nxt("video"), device_ts_us=ts, epoch=epoch, width=1280, height=960,
-                                 hfov_deg=s.meta.get("camera_hfov_deg"))
+                fm = {} if x is None else s.frame_meta.get(int(Path(x).stem), {})  # recorded header, if any
+                h = p.VideoFrame(seq=nxt("video"), device_ts_us=ts, epoch=epoch,
+                                 width=fm.get("width", 1280), height=fm.get("height", 960),
+                                 cam_pos=fm.get("cam_pos"), cam_rot_xyzw=fm.get("cam_rot_xyzw"),
+                                 hfov_deg=fm.get("hfov_deg", s.meta.get("camera_hfov_deg")))
                 await wv.send(p.pack(h, data))
             sent[kind] += 1
     return sent
