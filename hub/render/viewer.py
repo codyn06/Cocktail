@@ -79,7 +79,7 @@ def build_bundle(b: BundleInput):
     for tid, recs in b.tracks.items():
         write_track_jsonl(out / "masks" / f"{tid}.jsonl", recs)
         (out / "activity" / f"track_{tid}.json").write_text(
-            json.dumps({"track_id": tid, "state": b.track_states[tid], "evidence_tier": "mocked/synthetic"}))
+            json.dumps({"track_id": tid, "state": b.track_states[tid], "evidence_tier": b.manifest.evidence_tier}))
         assets[f"masks:{tid}"] = f"masks/{tid}.jsonl"
         assets[f"track_state:{tid}"] = f"activity/track_{tid}.json"
     for sid, act in b.activity.items():

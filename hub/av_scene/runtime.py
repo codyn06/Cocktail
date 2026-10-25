@@ -161,22 +161,34 @@ class Fallback:
     note: str = ""
 
 
+def _run_under(mgr: ModelLifecycleManager, fn: Callable[[ModelLifecycleManager, Any], Any]) -> Any:
+    """Enter, call, drop our reference to the model, THEN measure and release, so the post-release
+    memory figure is not inflated by this frame still holding the model."""
+    model = mgr.__enter__()
+    try:
+        result = fn(mgr, model)
+    except BaseException as e:
+        del model
+        mgr._finish(e)
+        raise
+    del model
+    mgr._finish(None)
+    return result
+
+
 def run_stage(name: str, loader: Callable[[], Any], fn: Callable[[ModelLifecycleManager, Any], Any], *,
               reports: list[StageReport], device: str = "cuda", workload: dict | None = None,
               fallback: Fallback | None = None, cleanup: Callable[[Any], None] | None = None) -> Any:
     """Run `fn(manager, model)` under a lease. On OOM, discard the stage and try `fallback` once."""
     mgr = ModelLifecycleManager(name, loader, device=device, workload=workload, reports=reports, cleanup=cleanup)
     try:
-        with mgr as model:
-            return fn(mgr, model)
+        return _run_under(mgr, fn)
     except torch.cuda.OutOfMemoryError:
         if fallback is None:
             raise
-    fb_name = f"{name}:fallback"
-    mgr = ModelLifecycleManager(fb_name, fallback.loader or loader, device=device, workload=fallback.workload,
-                                reports=reports, cleanup=cleanup)
+    mgr = ModelLifecycleManager(f"{name}:fallback", fallback.loader or loader, device=device,
+                                workload=fallback.workload, reports=reports, cleanup=cleanup)
     mgr.report.fallback_of = name
     if fallback.note:
         mgr.report.workload = {**mgr.report.workload, "note": fallback.note}
-    with mgr as model:
-        return fallback.fn(mgr, model)
+    return _run_under(mgr, fallback.fn)

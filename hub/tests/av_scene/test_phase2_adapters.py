@@ -18,65 +18,92 @@ from vision import sam3_tracker as tr  # noqa: E402
 from vision.mask_store import FrameTransform, encode_mask, read_track_jsonl  # noqa: E402
 
 
-# ----------------------------------------------------------------------------- SAM 3
-class FakePredictor:
-    """Mimics Sam3VideoPredictor's request protocol: two objects over 3 frames."""
-
-    def __init__(self, fail_in_propagation=False):
-        self.calls, self.fail = [], fail_in_propagation
-
-    def handle_request(self, req):
-        self.calls.append(req["type"])
-        if req["type"] == "start_session":
-            return {"session_id": "abcdef1234567890"}
-        return {"is_success": True}
-
-    def handle_stream_request(self, req):
-        assert req["type"] == "propagate_in_video"
-        for f in range(3):
-            if self.fail and f == 1:
-                raise RuntimeError("propagation blew up")
-            m = np.zeros((2, 8, 12), bool)
-            m[0, 2:5, 2:5] = True
-            m[1, 4:7, 6:10] = f > 0  # obj 8 absent-looking (empty) on frame 0
-            yield {"frame_index": f, "outputs": {"out_obj_ids": np.array([7, 8]), "out_binary_masks": m,
-                                                 "out_probs": np.array([0.9, 0.5])}}
+# ----------------------------------------------------------------------------- SAM 3 (image + IoU)
+H3, W3 = 40, 60
 
 
-def test_tracker_exports_rle_masklets_and_closes_session(tmp_path):
-    p = FakePredictor()
-    res = tr.track_concept(p, "clip.mp4", "person", out_dir=tmp_path, fps=25.0)
-    assert p.calls == ["start_session", "add_prompt", "close_session"]
-    assert {t.track_id for t in res.tracks} == {"sam3_video:abcdef12:7", "sam3_video:abcdef12:8"}
-    t7 = next(t for t in res.tracks if t.track_id.endswith(":7"))
-    assert isinstance(t7, MaskletTrack) and t7.concept == "person" and t7.n_frames == 3
-    assert (t7.image_height, t7.image_width) == (8, 12) and t7.first_pts_us == 0 and t7.last_pts_us == 80_000
-    assert t7.mean_confidence == pytest.approx(0.9)
-    recs = read_track_jsonl(tmp_path / t7.mask_file)
-    assert [r.frame_idx for r in recs] == [0, 1, 2]
-    assert recs[0].rle.decode()[3, 3] and not recs[0].rle.decode()[0, 0]
-    assert ":" not in t7.mask_file.split("/")[-1]  # Windows-safe filename
+def _blob(y0, y1, x0, x1):
+    m = np.zeros((H3, W3), bool)
+    m[y0:y1, x0:x1] = True
+    return m
 
 
-def test_tracker_closes_session_even_when_propagation_fails(tmp_path):
-    p = FakePredictor(fail_in_propagation=True)
-    with pytest.raises(RuntimeError, match="blew up"):
-        tr.track_concept(p, "clip.mp4", out_dir=tmp_path, fps=25.0)
-    assert p.calls[-1] == "close_session"
+def _scene(n=6):
+    """Two people moving slowly; person B is missed on frame 2 (occlusion/detector miss)."""
+    frames, per_frame = [], []
+    for f in range(n):
+        dets = [(_blob(5, 25, 4 + f, 20 + f), 0.9)]
+        if f != 2:
+            dets.append((_blob(10, 35, 36, 52), 0.6))
+        per_frame.append(dets)
+        frames.append(np.full((H3, W3, 3), f, np.uint8))
+    return frames, per_frame
 
 
-def test_tracker_uses_supplied_pts_and_confidence_floor(tmp_path):
-    res = tr.track_concept(FakePredictor(), "clip.mp4", out_dir=tmp_path, frame_pts_us=[10, 20, 35],
-                           min_confidence=0.6)
-    assert [t.track_id.split(":")[-1] for t in res.tracks] == ["7"]  # obj 8 (p=0.5) dropped
-    assert (res.tracks[0].first_pts_us, res.tracks[0].last_pts_us) == (10, 35)
+def _segmenter(per_frame):
+    it = iter(per_frame)
+    return lambda rgb: next(it)
 
 
-def test_windows_guard_blocks_predictor_build(monkeypatch):
-    monkeypatch.setattr(tr.sys, "platform", "win32")
-    monkeypatch.delenv("COCKTAIL_ALLOW_SAM3_VIDEO", raising=False)
-    with pytest.raises(RuntimeError, match="crashed"):
-        tr.load_sam3_video_predictor()
+def test_iou_tracker_keeps_identity_across_motion_and_a_missed_frame(tmp_path):
+    frames, per_frame = _scene()
+    res = tr.track_concept_images(_segmenter(per_frame), frames, "person", out_dir=tmp_path,
+                                  frame_pts_us=[i * 40_000 for i in range(6)], run_tag="t")
+    assert res.frames_seen == 6 and len(res.tracks) == 2                      # no identity switch / fragmentation
+    by_len = sorted(res.tracks, key=lambda t: t.n_frames)
+    assert [t.n_frames for t in by_len] == [5, 6]
+    a = by_len[1]
+    assert isinstance(a, MaskletTrack) and a.track_id.startswith("sam3_image.t.") and a.concept == "person"
+    assert (a.image_height, a.image_width) == (H3, W3) and a.first_pts_us == 0 and a.last_pts_us == 200_000
+    recs = read_track_jsonl(tmp_path / a.mask_file)
+    assert [r.frame_idx for r in recs] == list(range(6)) and recs[0].rle.decode()[10, 10]
+    assert ":" not in a.track_id and a.mask_file == f"masks/{a.track_id}.jsonl"   # Windows-safe
+
+
+def test_tracker_does_not_merge_disjoint_people(tmp_path):
+    frames, per_frame = _scene()
+    res = tr.track_concept_images(_segmenter(per_frame), frames, out_dir=tmp_path, frame_pts_us=list(range(6)))
+    masks = [read_track_jsonl(tmp_path / t.mask_file)[0].rle.decode() for t in res.tracks]
+    assert not np.logical_and(masks[0], masks[1]).any()
+
+
+def test_tracker_drops_duplicates_flicker_and_low_confidence(tmp_path):
+    base = _blob(5, 25, 4, 20)
+    per_frame = [[(base, 0.9), (base.copy(), 0.8), (_blob(30, 38, 50, 58), 0.2)], [(base, 0.9)], [(base, 0.9)]]
+    res = tr.track_concept_images(_segmenter(per_frame), [np.zeros((H3, W3, 3), np.uint8)] * 3, out_dir=tmp_path,
+                                  frame_pts_us=[0, 1, 2], min_confidence=0.3)
+    assert len(res.tracks) == 1 and res.tracks[0].n_frames == 3               # duplicate merged, p=0.2 dropped
+    res2 = tr.track_concept_images(_segmenter([[(base, 0.9)], [], []]), [np.zeros((H3, W3, 3), np.uint8)] * 3,
+                                   out_dir=tmp_path / "b", frame_pts_us=[0, 1, 2], min_track_frames=2)
+    assert res2.tracks == []                                                   # single-frame flicker removed
+
+
+def test_tracker_handles_no_detections(tmp_path):
+    res = tr.track_concept_images(lambda rgb: [], [np.zeros((H3, W3, 3), np.uint8)] * 2, out_dir=tmp_path,
+                                  frame_pts_us=[0, 1])
+    assert res.tracks == [] and res.frames_seen == 2
+
+
+def test_sam3_image_wrapper_converts_state_to_numpy_masks():
+    class P:
+        def set_image(self, img):
+            return {}
+
+        def set_text_prompt(self, prompt, state):
+            assert prompt == "person"
+            m = torch.zeros(2, 1, H3, W3, dtype=torch.bool)
+            m[0, 0, 5:9, 5:9] = True
+            return {"masks": m, "scores": torch.tensor([0.8, 0.4])}
+
+    model = torch.nn.Linear(1, 1)
+    dets = tr.Sam3Image(model, P(), "person")(np.zeros((H3, W3, 3), np.uint8))
+    assert [round(s, 1) for _, s in dets] == [0.8, 0.4] and dets[0][0].dtype == bool and dets[0][0].shape == (H3, W3)
+
+    class Empty(P):
+        def set_text_prompt(self, prompt, state):
+            return {"masks": torch.zeros(0, 1, H3, W3, dtype=torch.bool), "scores": torch.zeros(0)}
+
+    assert tr.Sam3Image(model, Empty(), "person")(np.zeros((H3, W3, 3), np.uint8)) == []
 
 
 # ----------------------------------------------------------------------------- SAM Audio

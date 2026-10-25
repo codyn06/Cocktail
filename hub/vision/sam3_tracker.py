@@ -1,126 +1,160 @@
-"""SAM 3 video-predictor adapter: text concept -> `MaskletTrack`s with RLE masks.
+"""SAM 3 image-model adapter with mask-IoU tracking: text concept -> `MaskletTrack`s with RLE masks.
 
-Uses the stateful API (`build_sam3_video_predictor`; `handle_request` start/add_prompt/close;
-`handle_stream_request` propagate). Memory rule: every propagated frame is converted to RLE
-immediately and the session is closed in `finally`, before control returns to the orchestrator.
+Backend `sam3_image`: the SAM 3 *image* model runs on every frame and a small tracker stitches
+the per-frame detections into tracklets by mask IoU. This is the laptop baseline of spec 4.1.
+The SAM 3 video predictor is deliberately not used: ARCHITECTURE.md D9 records that the video
+tracker crashed this Windows machine twice (bugcheck 0x00020001, ~15.5 s/frame).
 
-SAFETY: ARCHITECTURE.md D9 records that the SAM 3.1 video tracker crashed this Windows laptop
-twice (bugcheck 0x00020001, ~15.5 s/frame). `load_sam3_video_predictor` therefore refuses to
-build on win32 unless COCKTAIL_ALLOW_SAM3_VIDEO=1 is set. The tracker logic itself is exercised
-by unit tests against a fake predictor; it has NOT been run on hardware.
+Memory rule: tensors never outlive a frame. Each detection is converted to a numpy mask and then
+to RLE straight away; the GPU model itself is released by `ModelLifecycleManager`.
+D9: the model runs with full-precision weights under bf16 autocast, as upstream does (converting
+the weights to bf16 breaks it). "person" can score low on a single prompt (0.27 vs 0.96 for
+"child" in D9), so the default confidence threshold is lowered.
 """
 
 from __future__ import annotations
 
-import os
 import re
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Callable, Iterable, Sequence
 
 import numpy as np
+import torch
+from scipy.optimize import linear_sum_assignment
 
 from av_scene.schemas import MaskletTrack
-from vision.mask_store import FrameTransform, MaskRecord, RleMask, encode_mask, write_track_jsonl
+from vision.mask_store import FrameTransform, MaskRecord, encode_mask, write_track_jsonl
 
-BACKEND = "sam3_video"
+BACKEND = "sam3_image"
+Detection = tuple[np.ndarray, float]          # (H, W) bool mask, confidence
+Segmenter = Callable[[np.ndarray], list[Detection]]
 
 
 @dataclass
 class TrackingResult:
-    session_id: str
+    run_tag: str
     concept: str
     tracks: list[MaskletTrack] = field(default_factory=list)
-    records: dict[str, list[MaskRecord]] = field(default_factory=dict)  # track_id -> per-frame records
+    records: dict[str, list[MaskRecord]] = field(default_factory=dict)   # track_id -> per-frame records
     frames_seen: int = 0
 
 
-def load_sam3_video_predictor(**kwargs):
-    """Build the predictor (loads weights; expect `facebook/sam3` access). Windows needs an opt-in."""
-    if sys.platform == "win32" and os.environ.get("COCKTAIL_ALLOW_SAM3_VIDEO") != "1":
-        raise RuntimeError("SAM 3 video predictor crashed this Windows laptop twice (ARCHITECTURE.md D9). "
-                           "Set COCKTAIL_ALLOW_SAM3_VIDEO=1 to build it anyway.")
-    from sam3.model_builder import build_sam3_video_predictor
+# --------------------------------------------------------------------------- model
+class Sam3Image:
+    """SAM 3 image model + processor behind a `(rgb) -> detections` call. `.to` lets the lifecycle
+    manager move the model off the GPU."""
 
-    kwargs.setdefault("gpus_to_use", [0])
-    return build_sam3_video_predictor(**kwargs)
+    def __init__(self, model, processor, concept: str):
+        self.model, self.processor, self.concept = model, processor, concept
+
+    def to(self, device):
+        self.model.to(device)
+        return self
+
+    def __call__(self, rgb: np.ndarray) -> list[Detection]:
+        from PIL import Image
+
+        cuda = next(self.model.parameters()).is_cuda
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=cuda):
+            state = self.processor.set_image(Image.fromarray(rgb))
+            state = self.processor.set_text_prompt(prompt=self.concept, state=state)
+        masks = state["masks"].detach().cpu().numpy()
+        scores = state["scores"].detach().float().cpu().numpy()
+        del state                                                    # free this frame's GPU tensors now
+        if masks.size == 0:
+            return []
+        masks = masks.reshape(-1, *masks.shape[-2:]).astype(bool)
+        return [(m, float(s)) for m, s in zip(masks, scores.reshape(-1))]
 
 
-def shutdown_predictor(predictor) -> None:
-    """Lifecycle cleanup hook: terminate workers if the predictor exposes a shutdown."""
-    for name in ("shutdown", "close"):
-        fn = getattr(predictor, name, None)
-        if callable(fn):
-            fn()
-            return
+def load_sam3_image(concept: str = "person", *, device: str = "cuda", confidence_threshold: float = 0.25) -> Sam3Image:
+    """Build the image model (downloads `facebook/sam3` on first use: gated, explicit action)."""
+    from sam3.model.sam3_image_processor import Sam3Processor
+    from sam3.model_builder import build_sam3_image_model
+
+    model = build_sam3_image_model(device=device)
+    return Sam3Image(model, Sam3Processor(model, device=device, confidence_threshold=confidence_threshold), concept)
 
 
-def _np(x) -> np.ndarray:
-    return x.detach().cpu().numpy() if hasattr(x, "detach") else np.asarray(x)
+# --------------------------------------------------------------------------- tracking
+def mask_iou(a: np.ndarray, b: np.ndarray) -> float:
+    inter = np.logical_and(a, b).sum()
+    union = np.logical_or(a, b).sum()
+    return float(inter / union) if union else 0.0
+
+
+def dedupe(dets: list[Detection], thresh: float = 0.8) -> list[Detection]:
+    """Drop near-duplicate masks of the same object within one frame (keep the higher score)."""
+    kept: list[Detection] = []
+    for m, s in sorted(dets, key=lambda d: -d[1]):
+        if m.any() and all(mask_iou(m, k) < thresh for k, _ in kept):
+            kept.append((m, s))
+    return kept
+
+
+class MaskIouTracker:
+    """Greedy-optimal frame-to-frame association by mask IoU. A track survives `max_gap` missed
+    frames (occlusion / dropped detection) and is matched against its last seen mask."""
+
+    def __init__(self, iou_thresh: float = 0.3, max_gap: int = 5):
+        self.iou_thresh, self.max_gap = iou_thresh, max_gap
+        self.last: dict[int, tuple[int, np.ndarray]] = {}    # local id -> (last frame, last mask)
+        self._next = 0
+
+    def update(self, frame_idx: int, dets: list[Detection]) -> list[tuple[int, np.ndarray, float]]:
+        live = [t for t, (f, _) in self.last.items() if frame_idx - f <= self.max_gap + 1]
+        assigned: dict[int, int] = {}
+        if live and dets:
+            iou = np.array([[mask_iou(dets[d][0], self.last[t][1]) for t in live] for d in range(len(dets))])
+            rows, cols = linear_sum_assignment(-iou)
+            assigned = {int(r): live[c] for r, c in zip(rows, cols) if iou[r, c] >= self.iou_thresh}
+        out = []
+        for d, (m, s) in enumerate(dets):
+            tid = assigned.get(d)
+            if tid is None:
+                tid, self._next = self._next, self._next + 1
+            self.last[tid] = (frame_idx, m)
+            out.append((tid, m, s))
+        return out
 
 
 def _file_stem(track_id: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", track_id)  # ':' is not a legal Windows filename character
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", track_id)
 
 
-def track_concept(predictor, video_path: str | Path, concept: str = "person", *, out_dir: str | Path,
-                  frame_pts_us: Sequence[int] | None = None, fps: float | None = None,
-                  prompt_frame: int = 0, min_confidence: float = 0.0) -> TrackingResult:
-    """Prompt `concept` on `prompt_frame`, propagate, and export each masklet to RLE.
+def track_concept_images(segment: Segmenter, frames: Iterable[np.ndarray], concept: str = "person", *,
+                         out_dir: str | Path, frame_pts_us: Sequence[int], run_tag: str = "run",
+                         iou_thresh: float = 0.3, max_gap: int = 5, min_confidence: float = 0.0,
+                         min_track_frames: int = 1) -> TrackingResult:
+    """Segment every frame, stitch detections into tracklets by mask IoU, export RLE `MaskletTrack`s.
 
-    Object ids are namespaced `sam3_video:<session8>:<obj>`. Frames are matched to timestamps
-    via `frame_pts_us` (preferred) or `fps`. Masks are stored at the predictor's output size with an
-    identity transform; the caller attaches a different `FrameTransform` if it resized.
+    `frames` yields (H, W, 3) uint8 RGB in the same order as `frame_pts_us`. Masks are stored at
+    frame size with an identity transform (the caller attaches another `FrameTransform` if it resized).
+    Track ids are namespaced `sam3_image.<run_tag>.<n>` (no ':' so they are valid Windows file names).
     """
     out_dir = Path(out_dir)
-    pts_of = (lambda i: int(frame_pts_us[i])) if frame_pts_us is not None else (
-        (lambda i: int(round(i * 1e6 / fps))) if fps else (lambda i: i))
-    session_id = predictor.handle_request({"type": "start_session", "resource_path": str(video_path)})["session_id"]
-    result = TrackingResult(session_id=session_id, concept=concept)
-    shape: dict[str, tuple[int, int]] = {}
-    try:
-        predictor.handle_request({"type": "add_prompt", "session_id": session_id,
-                                  "frame_index": prompt_frame, "text": concept})
-        for item in predictor.handle_stream_request({"type": "propagate_in_video", "session_id": session_id,
-                                                     "propagation_direction": "both"}):
-            result.frames_seen += 1
-            _export_frame(result, session_id, item["frame_index"], item["outputs"], pts_of, shape, min_confidence)
-    finally:
-        predictor.handle_request({"type": "close_session", "session_id": session_id})  # free VRAM first
+    tracker = MaskIouTracker(iou_thresh, max_gap)
+    result = TrackingResult(run_tag=run_tag, concept=concept)
+    shapes: dict[str, tuple[int, int]] = {}
+    for i, rgb in enumerate(frames):
+        dets = dedupe([d for d in segment(rgb) if d[1] >= min_confidence])
+        for local, m, conf in tracker.update(i, dets):
+            track_id = f"{BACKEND}.{run_tag}.{local}"
+            shapes[track_id] = m.shape
+            result.records.setdefault(track_id, []).append(MaskRecord(
+                pts_us=int(frame_pts_us[i]), frame_idx=i, rle=encode_mask(m, FrameTransform.identity(*m.shape)),
+                confidence=conf, visibility="visible", provenance="native"))
+        result.frames_seen += 1
 
+    for track_id in [t for t, r in result.records.items() if len(r) < min_track_frames]:
+        del result.records[track_id]                                  # flicker, not a person
     for track_id, recs in result.records.items():
-        recs.sort(key=lambda r: r.frame_idx)
         rel = f"masks/{_file_stem(track_id)}.jsonl"
         write_track_jsonl(out_dir / rel, recs)
-        h, w = shape[track_id]
-        vis: dict[str, int] = {}
-        for r in recs:
-            vis[r.visibility] = vis.get(r.visibility, 0) + 1
+        h, w = shapes[track_id]
         result.tracks.append(MaskletTrack(
             track_id=track_id, concept=concept, mask_file=rel, image_height=h, image_width=w, n_frames=len(recs),
             first_pts_us=recs[0].pts_us, last_pts_us=recs[-1].pts_us,
-            mean_confidence=float(np.mean([r.confidence for r in recs])), visibility_summary=vis))
+            mean_confidence=float(np.mean([r.confidence for r in recs])), visibility_summary={"visible": len(recs)}))
     return result
-
-
-def _export_frame(result: TrackingResult, session_id: str, frame_idx: int, outputs: dict, pts_of, shape: dict,
-                  min_confidence: float) -> None:
-    obj_ids = _np(outputs.get("out_obj_ids", []))
-    if obj_ids.size == 0:
-        return
-    masks = _np(outputs["out_binary_masks"]).astype(bool)
-    probs = _np(outputs["out_probs"]) if outputs.get("out_probs") is not None else np.ones(len(obj_ids))
-    for i, obj in enumerate(obj_ids):
-        conf = float(probs[i])
-        if conf < min_confidence:
-            continue
-        m = masks[i]
-        if m.ndim == 3:
-            m = m[0]
-        track_id = f"{BACKEND}:{session_id[:8]}:{int(obj)}"
-        shape[track_id] = m.shape
-        rle: RleMask = encode_mask(m, FrameTransform.identity(*m.shape))
-        result.records.setdefault(track_id, []).append(
-            MaskRecord(pts_us=pts_of(frame_idx), frame_idx=int(frame_idx), rle=rle, confidence=conf,
-                       visibility="visible" if m.any() else "unknown", provenance="native"))
